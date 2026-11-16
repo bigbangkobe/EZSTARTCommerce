@@ -2696,11 +2696,13 @@ paths:
       tags: [Audit]
       operationId: listAuditLogs
       summary: Search immutable audit records
+      description: Newest first. Read-only by design; there is no update or delete endpoint for audit records.
       security: [{ AdminSession: [] }]
       x-permission: audit.read
       parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/AdminAuditLogListSuccess' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -3262,6 +3264,20 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/AdminRoleEnvelope'
+    AdminAuditLogListSuccess:
+      description: AdminAuditLogListSuccess
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+          description: Do not cache audit records.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AdminAuditLogListEnvelope'
     AdminRoleListSuccess:
       description: AdminRoleListSuccess
       headers:
@@ -4050,6 +4066,79 @@ components:
         revokedAt:
           type: string
           format: date-time
+    AdminAuditLog:
+      type: object
+      additionalProperties: false
+      description: Append-only record. Application code never edits or deletes audit rows.
+      required:
+      - id
+      - actorId
+      - action
+      - objectId
+      - result
+      - requestId
+      - reason
+      - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        actorId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: Null for unauthenticated attempts such as a denied login.
+        action:
+          type: string
+          maxLength: 100
+        objectId:
+          type:
+          - string
+          - 'null'
+          maxLength: 100
+        result:
+          type: string
+          maxLength: 32
+        requestId:
+          type: string
+          maxLength: 100
+        reason:
+          type:
+          - string
+          - 'null'
+          maxLength: 1000
+        occurredAt:
+          type: string
+          format: date-time
+    AdminAuditLogListEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required:
+          - items
+          - nextCursor
+          - hasMore
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/AdminAuditLog'
+            nextCursor:
+              type:
+              - string
+              - 'null'
+              maxLength: 2048
+            hasMore:
+              type: boolean
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
     AdminRole:
       type: object
       additionalProperties: false

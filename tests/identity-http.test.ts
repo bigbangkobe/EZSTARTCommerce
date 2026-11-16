@@ -344,6 +344,33 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
         { 'X-CSRF-Token': managerSession.body.data.csrfToken })).status, 403);
       await db.identityRateLimit.deleteMany();
     });
+    await t.test('audit records are read-only, permission scoped and free of credentials', async () => {
+      await db.identityRateLimit.deleteMany();
+      assert.equal((await call('admin/audit-logs', undefined, new Map())).status, 401);
+      const readerRole = await db.adminRole.create({ data: { name: 'Staff reader', kind: 'custom', permissionCodes: ['staff.read'] } });
+      const reader = await db.adminUser.create({ data: { email: 'audit-denied@example.test', displayName: 'No audit', locale: 'en', passwordHash: 'unused',
+        mfaRequired: false, roles: { create: { roleId: readerRole.id } } } });
+      const readerSecret = randomBytes(32).toString('base64url');
+      await db.adminSession.create({ data: { userId: reader.id, tokenDigest: digest(readerSecret), mfaVerified: false, lastSeenAt: new Date(),
+        idleExpiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 120_000) } });
+      assert.equal((await call('admin/audit-logs', undefined, new Map([['ez_admin_session', readerSecret]]))).status, 403);
+      const first = await call('admin/audit-logs?limit=1', undefined, jar, {}, 'AdminAuditLogListEnvelope');
+      assert.equal(first.status, 200); assert.equal(first.body.data.items.length, 1); assert.equal(first.body.data.hasMore, true);
+      const entry = first.body.data.items[0];
+      assert.ok(entry.action.startsWith('admin.'), 'audit rows must be appended by the identity service');
+      assert.match(entry.occurredAt, /^\d{4}-\d{2}-\d{2}T/);
+      const second = await call(`admin/audit-logs?limit=1&cursor=${first.body.data.nextCursor}`, undefined, jar, {}, 'AdminAuditLogListEnvelope');
+      assert.equal(second.status, 200); assert.notEqual(second.body.data.items[0].id, entry.id);
+      assert.equal((await call(`admin/audit-logs?cursor=${randomUUID()}`)).status, 422);
+      assert.equal((await call('admin/audit-logs?limit=101')).status, 422);
+      // 审计为追加写入：不存在修改或删除路由，直接调用只会 404。
+      assert.equal((await call(`admin/audit-logs/${entry.id}`, { result: 'rewritten' }, jar, { 'X-CSRF-Token': csrf }, undefined, base, 'PATCH')).status, 404);
+      assert.equal((await call(`admin/audit-logs/${entry.id}`, undefined, jar, {}, undefined, base, 'DELETE')).status, 404);
+      assert.equal((await db.auditLog.findUniqueOrThrow({ where: { id: entry.id } })).result, entry.result);
+      const rows = JSON.stringify(await db.auditLog.findMany());
+      assert.ok(!rows.includes('A-long-test-password-1') && !rows.includes('Staff-password-123456'), 'audit rows must never contain passwords');
+      await db.identityRateLimit.deleteMany();
+    });
     await t.test('password reset is uniformly accepted, single-use, revokes sessions and keeps MFA', async () => {
       await db.identityRateLimit.deleteMany();
       const staffHeaders = { 'X-CSRF-Token': csrf };

@@ -2071,7 +2071,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Search immutable audit records */
+        /**
+         * Search immutable audit records
+         * @description Newest first. Read-only by design; there is no update or delete endpoint for audit records.
+         */
         get: operations["listAuditLogs"];
         put?: never;
         post?: never;
@@ -2467,6 +2470,31 @@ export interface components {
             revokedCount: number;
             /** Format: date-time */
             revokedAt: string;
+        };
+        /** @description Append-only record. Application code never edits or deletes audit rows. */
+        AdminAuditLog: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Null for unauthenticated attempts such as a denied login.
+             */
+            actorId: string | null;
+            action: string;
+            objectId: string | null;
+            result: string;
+            requestId: string;
+            reason: string | null;
+            /** Format: date-time */
+            occurredAt: string;
+        };
+        AdminAuditLogListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminAuditLog"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
         };
         AdminRole: {
             /** Format: uuid */
@@ -3737,6 +3765,18 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["AdminRoleEnvelope"];
+            };
+        };
+        /** @description AdminAuditLogListSuccess */
+        AdminAuditLogListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                /** @description Do not cache audit records. */
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AdminAuditLogListEnvelope"];
             };
         };
         /** @description AdminRoleListSuccess */
@@ -7150,9 +7190,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["AdminAuditLogListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };

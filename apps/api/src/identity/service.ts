@@ -617,6 +617,22 @@ export class IdentityService {
       return { userId: id, revokedCount: result.count, revokedAt: now.toISOString() };
     }, true);
   }
+  /**
+   * 审计只读：不提供写入、修改或删除入口，读取本身也不需要 CSRF（无副作用）。
+   * 返回字段刻意不含任何请求体或凭据，摘要只保留既有的 reason。
+   */
+  async listAuditLogs(supplied: string, limit: number, cursor: string | null) {
+    return this.authenticated(supplied, null, async (tx, actor) => {
+      this.requirePermission(actor, 'audit.read');
+      if (cursor && !await tx.auditLog.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
+      const rows = await tx.auditLog.findMany({ orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
+      const items = rows.slice(0, limit); const hasMore = rows.length > limit;
+      return { items: items.map(row => ({ id: row.id, actorId: row.actorId, action: row.action, objectId: row.objectId,
+        result: row.result, requestId: row.requestId, reason: row.reason, occurredAt: row.occurredAt.toISOString() })),
+        hasMore, nextCursor: hasMore ? items.at(-1)!.id : null };
+    });
+  }
   async listRoles(supplied: string, limit: number, cursor: string | null) {
     return this.authenticated(supplied, null, async (tx, actor) => {
       this.requirePermission(actor, 'roles.manage');

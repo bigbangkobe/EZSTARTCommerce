@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ArgumentsHost, Catch, Controller, Get, HttpException, Inject, Module, Req, ServiceUnavailableException } from '@nestjs/common';
 import type { ExceptionFilter } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { AuditController } from './identity/audit-controller.js';
 import { RolesController } from './identity/roles-controller.js';
 import { StaffController } from './identity/staff-controller.js';
 import { IdentityController } from './identity/controller.js';
@@ -57,7 +58,7 @@ class ApiExceptionFilter implements ExceptionFilter {
 }
 
 export async function createApp(identity: IdentityService | null = null) {
-  @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController], providers: [{ provide: 'IDENTITY', useValue: identity }] })
+  @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController], providers: [{ provide: 'IDENTITY', useValue: identity }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');
