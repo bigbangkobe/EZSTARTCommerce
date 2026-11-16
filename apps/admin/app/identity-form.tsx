@@ -68,5 +68,6 @@ export function IdentityForm({ initialMode }: { initialMode: 'invite' | 'login' 
     </form>
     {mode === 'done' && <><a href="/admin/access">进入员工与角色管理</a>{codes.length > 0 ? <><p>请立即离线保存恢复码。每个恢复码只能使用一次，离开后无法再次查看。</p><ul className="codes">{codes.map(code => <li key={code}><code>{code}</code></li>)}</ul><label className="check"><input type="checkbox" checked={saved} onChange={event => setSaved(event.target.checked)} />我已离线保存恢复码</label>{saved && <button onClick={() => { setCodes([]); setSaved(false); }}>隐藏恢复码</button>}</> : <p>身份会话已建立。您可以进入员工与角色管理。</p>}</>}
     {(mode === 'invite' || mode === 'enroll' || mode === 'verify') && <a href="/admin/login">已设置密码？重新登录</a>}
+    {(mode === 'login' || mode === 'done') && <a href="/admin/reset-password">忘记密码？申请一次性重设链接</a>}
   </section><p className="footer">账号仅用于当前店铺，请勿与其他员工共用。</p></main>;
 }

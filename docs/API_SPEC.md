@@ -91,7 +91,7 @@
 | `POST /admin/auth/mfa/verify` | challenge、TOTP/恢复码 | 一次性 challenge；恢复码只用一次 |
 | `GET /admin/auth/session` | 当前会话 | 返回当前员工、权限摘要、MFA 状态 |
 | `POST /admin/auth/logout` | 当前会话 | 撤销当前会话 |
-| `POST /admin/auth/password-reset` | 一次性重设 token、新密码 | 不泄露账号是否存在 |
+| `POST /admin/auth/password-reset` | 邮箱申请，或一次性重设 token + 新密码 | 两种请求都返回统一 202 `requestAccepted`；30 分钟一次性；完成后撤销旧会话并保留 MFA 要求 |
 | `GET /admin/users` / `POST /admin/users` | 筛选 / 邀请员工 | `staff.read` / `staff.manage` |
 | `GET /admin/users/:id` / `PATCH /admin/users/:id` | 资料、状态、角色；需版本号 | `staff.read` / `staff.manage`；停用同时撤销会话 |
 | `GET /admin/roles` / `POST /admin/roles` / `PATCH /admin/roles/:id` | 角色和权限点 | `roles.manage`；不能移除最后一个店主 |
@@ -147,7 +147,9 @@
 
 审核请求为 decision（approved/rejected/revoked）、evidenceReference、reason、validUntil（UTC 或 null）和 confirmedMarketCode。目标码须与路径一致；审核人 reviewedBy 和 reviewedAt 由服务端赋值，不接受客户端伪造；validUntil 非空时必须晚于当前时间。记录是追加历史，响应包含 id/marketCode/decision/evidenceReference/reason/reviewedBy/reviewedAt/validUntil/storeConfigVersion，ETag 为新配置版本。审核通过不自动启用市场；拒绝/撤销/过期立即使交易资格失效，报价和建单时重验，不能等待清理任务。配置响应新增 revoked 状态。此接口记录客户批准的依据，不自行作市场法规判断。
 
-安全参数以 [identity-v1](IDENTITY_SECURITY_POLICY.md) 为准，全部 MFA 因子遗失的处理见 [恢复流程](ADMIN_RECOVERY_RUNBOOK.md)。M15 运维、邀请/密码重设/员工管理等实现仍待完成；首店主初始化、MFA 登记/替换/验证和本人会话接口已接入 PostgreSQL 18/Prisma 7，并通过真实 HTTP 集成测试，详见 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md)。TypeScript 客户端仍只封装登录操作，后台页面尚未联调。
+重设申请为 email，完成重设为 resetToken + newPassword，两者共用同一路径并按字段选择校验。申请对存在、停用、冷却中和超限的邮箱一律返回 `{requestAccepted:true}`，不发送即不写重置凭据，响应也不能区分账号是否存在；每次有效申请原子轮换 token 摘要、版本和 30 分钟截止，旧链接立即失效。完成时校验一次性凭据、撤销该员工全部会话与未完成挑战、递增员工版本，但保留 TOTP 因子、恢复码和 MFA 要求；成功不建立登录会话。无效、过期、已消费或已被停用/撤权作废的 token 返回 401。重设通知与邀请共用通知队列，任务在发送前复核目标状态与版本。
+
+安全参数以 [identity-v1](IDENTITY_SECURITY_POLICY.md) 为准，全部 MFA 因子遗失的处理见 [恢复流程](ADMIN_RECOVERY_RUNBOOK.md)。M15 运维、默认岗位权限包、身份审计读取界面和其余电商模块仍待完成。首店主初始化、MFA 登记/替换/验证、邀请、员工/角色管理、密码重设和本人会话接口已接入 PostgreSQL 18/Prisma 7，并通过真实 HTTP 集成测试，详见 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md)。TypeScript 客户端仍只封装登录操作。
 
 ### 3.2 商品、媒体、内容和陈列（M02–M04）
 

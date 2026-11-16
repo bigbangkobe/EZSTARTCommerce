@@ -24,6 +24,7 @@ model AdminUser {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   invitation AdminInvitation? @relation("InvitationTarget")
   invitationsSent AdminInvitation[] @relation("InvitationIssuer")
+  passwordReset AdminPasswordReset? @relation("PasswordResetTarget")
   roles AdminUserRole[]
   factor MfaFactor?
   recoveryCodes RecoveryCode[]
@@ -141,17 +142,35 @@ model AdminInvitation {
   notificationJobs IdentityNotificationJob[]
 }
 
+model AdminPasswordReset {
+  id String @id @db.Uuid
+  userId String @unique @db.Uuid
+  user AdminUser @relation("PasswordResetTarget", fields: [userId], references: [id], onDelete: Restrict)
+  version Int @default(1)
+  status String @default("pending")
+  tokenDigest String @unique
+  expiresAt DateTime @db.Timestamptz(3)
+  requestedAt DateTime @db.Timestamptz(3)
+  notificationJobId String? @db.Uuid
+  notificationJobs IdentityNotificationJob[]
+}
+
+// One queue row per deliverable secret. Exactly one target reference is set;
+// the database enforces that pairing with a CHECK constraint in the migration.
 model IdentityNotificationJob {
   id String @id @db.Uuid
-  invitationId String @db.Uuid
-  invitationVersion Int
+  kind String @default("invitation")
+  invitationId String? @db.Uuid
+  passwordResetId String? @db.Uuid
+  targetVersion Int
   attempts Int @default(0)
   availableAt DateTime @default(now()) @db.Timestamptz(3)
   leaseToken String? @db.Uuid
   leaseExpiresAt DateTime? @db.Timestamptz(3)
   lastErrorCode String?
   sentAt DateTime? @db.Timestamptz(3)
-  invitation AdminInvitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  invitation AdminInvitation? @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  passwordReset AdminPasswordReset? @relation(fields: [passwordResetId], references: [id], onDelete: Restrict)
   encryptedPayload String?
   expiresAt DateTime @db.Timestamptz(3)
   status String @default("pending")

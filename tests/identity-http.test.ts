@@ -5,7 +5,7 @@ import type { INestApplication } from '@nestjs/common';
 import { createApp } from '../apps/api/src/app.js';
 import { IdentityContracts } from '../apps/api/src/identity/contracts.js';
 import { IdentityService } from '../apps/api/src/identity/service.js';
-import { decrypt, passwordHash, totp, totpStep } from '../apps/api/src/identity/crypto.js';
+import { decrypt, encrypt, newTotpSecret, passwordHash, totp, totpStep } from '../apps/api/src/identity/crypto.js';
 import { connectDatabase } from '../packages/database/src/client.js';
 import { digest } from '../packages/domain/src/identity.js';
 import { testPostgres } from './helpers/postgres.js';
@@ -56,7 +56,7 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
     app = await createApp(identity); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     await t.test('migration history and dependency readiness are real', async () => {
       const migrated = await db.$queryRaw<{ count: bigint }[]>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
-      assert.equal(Number(migrated[0]!.count), 4);
+      assert.equal(Number(migrated[0]!.count), 5);
       const ready = await call('health/ready', undefined, new Map(), {}, 'ReadinessStatusEnvelope');
       assert.equal(ready.status, 200);
       const zone = await db.$queryRaw<{ zone: string }[]>`SELECT current_setting('TimeZone') AS zone`;
@@ -297,6 +297,64 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
       assert.equal((await call('admin/roles', { name: 'Allowed delegation', permissionCodes: ['catalog.read'] }, delegated, delegatedHeaders)).status, 201);
       const userList = await call('admin/users?limit=1', undefined, jar, {}, 'AdminUserListEnvelope');
       assert.equal(userList.body.data.items.length, 1); assert.equal(userList.body.data.hasMore, true);
+      await db.identityRateLimit.deleteMany();
+    });
+    await t.test('password reset is uniformly accepted, single-use, revokes sessions and keeps MFA', async () => {
+      await db.identityRateLimit.deleteMany();
+      const staffHeaders = { 'X-CSRF-Token': csrf };
+      const resetUser = await db.adminUser.create({ data: { email: 'reset@example.test', displayName: 'Reset target', locale: 'zh-CN',
+        passwordHash: await passwordHash('Old-password-123456'), mfaRequired: true } });
+      const factorSecret = newTotpSecret();
+      await db.mfaFactor.create({ data: { userId: resetUser.id, encryptedSecret: encrypt(factorSecret, resetUser.id, config) } });
+      const oldSession = randomBytes(32).toString('base64url');
+      await db.adminSession.create({ data: { userId: resetUser.id, tokenDigest: digest(oldSession), mfaVerified: true, lastSeenAt: new Date(),
+        idleExpiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 120_000) } });
+      const legacy = new Map([['ez_admin_session', oldSession]]);
+      assert.equal((await call('admin/auth/session', undefined, legacy)).status, 200);
+      const request = (email: string) => call('admin/auth/password-reset', { email }, new Map(), {}, 'PasswordResetAcceptedEnvelope');
+      const accepted = await request('reset@example.test');
+      assert.equal(accepted.status, 202); assert.deepEqual(accepted.body.data, { requestAccepted: true });
+      const unknown = await request('missing@example.test');
+      assert.equal(unknown.status, 202); assert.deepEqual(unknown.body.data, accepted.body.data);
+      assert.equal(await db.adminUser.count({ where: { email: 'missing@example.test' } }), 0);
+      assert.equal(await db.adminPasswordReset.count(), 1, 'an unknown email must not create a reset credential');
+      const cooling = await request('reset@example.test');
+      assert.equal(cooling.status, 202);
+      const record = await db.adminPasswordReset.findUniqueOrThrow({ where: { userId: resetUser.id } });
+      assert.equal(record.status, 'pending'); assert.equal(record.version, 1);
+      assert.equal(await db.identityNotificationJob.count({ where: { passwordResetId: record.id } }), 1, 'cooldown must not queue a second mail');
+      const job = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: record.notificationJobId! } });
+      assert.equal(job.kind, 'password_reset'); assert.equal(job.targetVersion, 1);
+      const resetToken = decrypt(job.encryptedPayload!, resetUser.id, config, `password-reset:${job.id}:1`);
+      assert.throws(() => decrypt(job.encryptedPayload!, userId, config, `password-reset:${job.id}:1`));
+      assert.equal((await call('admin/auth/password-reset', { email: 'reset@example.test', resetToken }, new Map())).status, 422);
+      assert.equal((await call('admin/auth/password-reset', { resetToken, newPassword: 'short' }, new Map())).status, 422);
+      assert.equal((await call('admin/auth/password-reset', {}, new Map())).status, 422);
+      const completed = await call('admin/auth/password-reset', { resetToken, newPassword: 'New-password-1234567' }, new Map(), {}, 'PasswordResetAcceptedEnvelope');
+      assert.equal(completed.status, 202); assert.deepEqual(completed.body.data, { requestAccepted: true });
+      assert.equal((await call('admin/auth/session', undefined, legacy)).status, 401);
+      assert.equal(await db.mfaFactor.count({ where: { userId: resetUser.id } }), 1, 'password reset must keep the factor');
+      assert.equal((await db.adminPasswordReset.findUniqueOrThrow({ where: { id: record.id } })).status, 'completed');
+      assert.equal((await db.identityNotificationJob.findUniqueOrThrow({ where: { id: job.id } })).encryptedPayload, null);
+      assert.equal((await call('admin/auth/password-reset', { resetToken, newPassword: 'Another-password-1234' }, new Map())).status, 401);
+      assert.equal((await call('admin/auth/login', { email: 'reset@example.test', password: 'Old-password-123456' }, new Map())).status, 401);
+      const relogin = await call('admin/auth/login', { email: 'reset@example.test', password: 'New-password-1234567' }, new Map(), {}, 'AdminAuthenticationChallengeEnvelope');
+      assert.equal(relogin.status, 202); assert.equal(relogin.body.data.nextAction, 'verify_mfa');
+      await db.identityRateLimit.deleteMany();
+      assert.equal((await request('reset@example.test')).status, 202);
+      const rotated = await db.adminPasswordReset.findUniqueOrThrow({ where: { userId: resetUser.id } });
+      assert.equal(rotated.version, 2);
+      const rotatedJob = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: rotated.notificationJobId! } });
+      const secondToken = decrypt(rotatedJob.encryptedPayload!, resetUser.id, config, `password-reset:${rotatedJob.id}:2`);
+      const current = await db.adminUser.findUniqueOrThrow({ where: { id: resetUser.id } });
+      const suspended = await call(`admin/users/${resetUser.id}`, { status: 'suspended' }, jar,
+        { ...staffHeaders, 'If-Match': `"${current.version}"` }, 'AdminUserEnvelope', base, 'PATCH');
+      assert.equal(suspended.status, 200);
+      assert.equal((await db.adminPasswordReset.findUniqueOrThrow({ where: { id: rotated.id } })).status, 'revoked');
+      assert.equal((await db.identityNotificationJob.findUniqueOrThrow({ where: { id: rotatedJob.id } })).encryptedPayload, null);
+      assert.equal((await call('admin/auth/password-reset', { resetToken: secondToken, newPassword: 'Another-password-1234' }, new Map())).status, 401);
+      const audit = JSON.stringify(await db.auditLog.findMany());
+      assert.ok(!audit.includes(resetToken) && !audit.includes(secondToken) && !audit.includes('New-password-1234567'));
       await db.identityRateLimit.deleteMany();
     });
     await t.test('sessions require current MFA and state; CSRF is enforced on logout', async () => {

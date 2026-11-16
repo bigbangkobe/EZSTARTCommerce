@@ -80,6 +80,15 @@ export class IdentityController {
     const result = await service.acceptStaffInvitation(body, this.context(request));
     this.send(response, request, result.status, result.data, result.status === 202 ? this.challengeCookies(result) : this.sessionCookies(result.sessionToken));
   }
+  @Post('password-reset')
+  async reset(@Body() body: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    const completing = typeof body === 'object' && body !== null && 'resetToken' in body;
+    const service = await this.write(request, completing ? 'PasswordResetCompleteRequest' : 'PasswordResetRequest', body);
+    const result = completing
+      ? await service.completePasswordReset(body as { resetToken: string; newPassword: string }, this.context(request))
+      : await service.requestPasswordReset(body as { email: string }, this.context(request));
+    this.send(response, request, 202, result);
+  }
   @Post('mfa/enrollments')
   async start(@Body() body: { challengeId: string }, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     const service = await this.write(request, 'StartMfaEnrollmentRequest', body);

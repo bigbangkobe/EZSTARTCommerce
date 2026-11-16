@@ -15,6 +15,8 @@ export const securityPolicy = Object.freeze({
   idleSessionSeconds: 1_800,
   absoluteSessionSeconds: 43_200,
   resetPasswordSeconds: 1_800,
+  resetRequestCooldownSeconds: 60,
+  resetRequestsPerHour: 5,
   secretBytes: 32,
   recoveryCodeCount: 10,
   recoveryCodeCharacters: 20,

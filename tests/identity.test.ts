@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { acceptInvitation, assertChallenge, assertSession, digest, issueInvitation, resendInvitation, revokeInvitation } from '../packages/domain/src/identity.js';
+import { acceptInvitation, assertChallenge, assertSession, completePasswordReset, digest, issueInvitation, issuePasswordReset,
+  resendInvitation, revokeInvitation, rotatePasswordReset } from '../packages/domain/src/identity.js';
 import { marketAllowsTrade } from '../packages/domain/src/market.js';
 import { securityPolicy } from '../packages/config/src/security-policy.js';
 
@@ -42,6 +43,32 @@ test('revoked invites reject the previously valid token', () => {
   const revoked = revokeInvitation(issued.invitation, 1);
   assert.throws(() => acceptInvitation(revoked, 2, issued.token, later(1)), /INVITATION_NOT_PENDING/);
   assert.throws(() => resendInvitation(revoked, 2, later(60)), /INVITATION_NOT_PENDING/);
+});
+
+test('password reset expires exactly at its deadline and completes only once', () => {
+  const issued = issuePasswordReset('reset-1', 'user-1', now);
+  assert.equal(issued.reset.tokenDigest, digest(issued.token));
+  assert.notEqual(issued.reset.tokenDigest, issued.token);
+  assert.equal(issued.reset.expiresAt.getTime(), later(securityPolicy.resetPasswordSeconds).getTime());
+  assert.throws(() => completePasswordReset(issued.reset, 'wrong-token', later(1)), /RESET_INVALID/);
+  assert.throws(() => completePasswordReset(issued.reset, issued.token, issued.reset.expiresAt), /RESET_INVALID/);
+  assert.throws(() => completePasswordReset(issued.reset, issued.token, new Date('invalid')), /RESET_INVALID/);
+  const completed = completePasswordReset(issued.reset, issued.token, later(1));
+  assert.equal(completed.status, 'completed');
+  assert.throws(() => completePasswordReset(completed, issued.token, later(2)), /RESET_INVALID/);
+  assert.throws(() => completePasswordReset({ ...completed, status: 'revoked', version: completed.version }, issued.token, later(2)), /RESET_INVALID/);
+});
+
+test('a repeat reset request rotates the secret and invalidates the previous one', () => {
+  const issued = issuePasswordReset('reset-1', 'user-1', now);
+  const rotated = rotatePasswordReset(issued.reset, later(90));
+  assert.equal(rotated.reset.version, 2);
+  assert.equal(rotated.reset.id, issued.reset.id);
+  assert.notEqual(rotated.reset.tokenDigest, issued.reset.tokenDigest);
+  assert.equal(rotated.reset.expiresAt.getTime(), later(90 + securityPolicy.resetPasswordSeconds).getTime());
+  assert.throws(() => completePasswordReset(rotated.reset, issued.token, later(91)), /RESET_INVALID/);
+  assert.equal(completePasswordReset(rotated.reset, rotated.token, later(91)).status, 'completed');
+  assert.throws(() => rotatePasswordReset({ ...issued.reset, requestedAt: new Date('invalid') }, later(120)), /RESET_INVALID/);
 });
 
 test('challenge guards reject wrong user, browser, purpose, expiry, failures and replay', () => {

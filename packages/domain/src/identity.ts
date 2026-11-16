@@ -79,6 +79,54 @@ export function revokeInvitation(invitation: Invitation, expectedVersion: number
   return { ...invitation, version: invitation.version + 1, status: 'revoked' };
 }
 
+export type PasswordReset = Readonly<{
+  id: string;
+  userId: string;
+  version: number;
+  status: 'pending' | 'completed' | 'revoked';
+  tokenDigest: string;
+  expiresAt: Date;
+  requestedAt: Date;
+}>;
+
+function resetSecret(): string {
+  return randomBytes(securityPolicy.secretBytes).toString('base64url');
+}
+
+/** One-time password reset credential; the caller persists it with its encrypted job in one transaction. */
+export function issuePasswordReset(id: string, userId: string, now: Date): { reset: PasswordReset; token: string } {
+  const secret = resetSecret();
+  return {
+    token: secret,
+    reset: {
+      id, userId, version: 1, status: 'pending', tokenDigest: digest(secret),
+      expiresAt: expiresAt(now, securityPolicy.resetPasswordSeconds), requestedAt: now,
+    },
+  };
+}
+
+/** A repeat request replaces the previous credential; the old secret and its delivery job must be discarded. */
+export function rotatePasswordReset(reset: PasswordReset, now: Date): { reset: PasswordReset; token: string } {
+  if (!validDates(now, reset.expiresAt, reset.requestedAt)) throw new IdentityConflict('RESET_INVALID');
+  const secret = resetSecret();
+  return {
+    token: secret,
+    reset: {
+      ...reset, version: reset.version + 1, status: 'pending', tokenDigest: digest(secret),
+      expiresAt: expiresAt(now, securityPolicy.resetPasswordSeconds), requestedAt: now,
+    },
+  };
+}
+
+/** Consumption never logs the user in; the caller still revokes sessions and keeps every MFA requirement. */
+export function completePasswordReset(reset: PasswordReset, token: string, now: Date): PasswordReset {
+  if (!validDates(now, reset.expiresAt) || reset.status !== 'pending' || now.getTime() >= reset.expiresAt.getTime() ||
+      !sameDigest(reset.tokenDigest, digest(token))) {
+    throw new IdentityConflict('RESET_INVALID');
+  }
+  return { ...reset, version: reset.version + 1, status: 'completed' };
+}
+
 export function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }

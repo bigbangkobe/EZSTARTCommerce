@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { loadMigrationManifest, migrationsMatch, type MigrationRecord } from '../../../../packages/database/src/migrations.js';
 
 import type { Prisma, PrismaClient } from '../../../../packages/database/src/client.js';
-import { issueInvitation, resendInvitation, revokeInvitation, acceptInvitation, IdentityConflict, type Invitation, digest } from '../../../../packages/domain/src/identity.js';
+import { issueInvitation, resendInvitation, revokeInvitation, acceptInvitation, issuePasswordReset, rotatePasswordReset, completePasswordReset,
+  IdentityConflict, type Invitation, type PasswordReset, digest } from '../../../../packages/domain/src/identity.js';
 import { expiresAt, securityPolicy as policy } from '../../../../packages/config/src/security-policy.js';
 import { csrf, decrypt, encrypt, equal, newTotpSecret, passwordHash, passwordMatches, recoveryCodes, token, totp, totpStep } from './crypto.js';
 import type { IdentityConfig } from './config.js';
@@ -334,7 +335,7 @@ export class IdentityService {
   private async queueInvitation(tx: Tx, invitation: Invitation, secret: string) {
     await tx.identityNotificationJob.updateMany({ where: { invitationId: invitation.id, status: { in: ['pending', 'processing', 'failed'] } }, data: { status: 'cancelled', encryptedPayload: null } });
     const id = randomUUID();
-    await tx.identityNotificationJob.create({ data: { id, invitationId: invitation.id, invitationVersion: invitation.version,
+    await tx.identityNotificationJob.create({ data: { id, invitationId: invitation.id, targetVersion: invitation.version,
       encryptedPayload: encrypt(secret, invitation.userId, this.config, `invitation:${id}:${invitation.version}`), expiresAt: invitation.expiresAt } });
     return id;
   }
@@ -423,6 +424,73 @@ export class IdentityService {
     }, { timeout: 10_000 });
   }
 
+  private resetRecord(reset: Prisma.AdminPasswordResetGetPayload<{}>): PasswordReset {
+    return { id: reset.id, userId: reset.userId, version: reset.version, status: reset.status as PasswordReset['status'],
+      tokenDigest: reset.tokenDigest, expiresAt: reset.expiresAt, requestedAt: reset.requestedAt };
+  }
+  private async cancelResetJobs(tx: Tx, resetId: string) {
+    await tx.identityNotificationJob.updateMany({ where: { passwordResetId: resetId, status: { in: ['pending', 'processing', 'failed'] } },
+      data: { status: 'cancelled', encryptedPayload: null, leaseToken: null, leaseExpiresAt: null } });
+  }
+  /**
+   * Uniformly accepted: unknown, suspended, cooling-down and rate-limited accounts all return the same body and
+   * create no reset credential, so the response cannot be used to test whether an email is registered.
+   */
+  async requestPasswordReset(body: { email: string }, ctx: RequestContext) {
+    const email = body.email.trim().toLowerCase();
+    const key = `reset:${digest(email)}`;
+    const accepted = { requestAccepted: true as const };
+    return this.db.$transaction(async tx => {
+      await this.lock(tx, key);
+      const now = await this.now(tx);
+      const row = await tx.identityRateLimit.findUnique({ where: { key } });
+      const windowElapsed = !row || now.getTime() >= row.windowStart.getTime() + 3_600_000;
+      const count = windowElapsed ? 1 : row.count + 1;
+      const coolingDown = row?.blockedUntil ? now.getTime() < row.blockedUntil.getTime() : false;
+      // blockedUntil is reused as "earliest next send" for this key only; the key is never an account lock.
+      await tx.identityRateLimit.upsert({ where: { key }, create: { key, count, windowStart: now, blockedUntil: expiresAt(now, policy.resetRequestCooldownSeconds) },
+        update: { count, windowStart: windowElapsed ? now : row!.windowStart, blockedUntil: expiresAt(now, policy.resetRequestCooldownSeconds) } });
+      if (coolingDown || count > policy.resetRequestsPerHour) return accepted;
+      const user = await tx.adminUser.findUnique({ where: { email } });
+      if (!user || user.status !== 'active') return accepted;
+      await this.lock(tx, `user:${user.id}`);
+      const existing = await tx.adminPasswordReset.findUnique({ where: { userId: user.id } });
+      const issued = existing ? rotatePasswordReset(this.resetRecord(existing), now) : issuePasswordReset(randomUUID(), user.id, now);
+      await this.cancelResetJobs(tx, issued.reset.id);
+      const jobId = randomUUID();
+      const data = { version: issued.reset.version, status: issued.reset.status, tokenDigest: issued.reset.tokenDigest,
+        expiresAt: issued.reset.expiresAt, requestedAt: issued.reset.requestedAt, notificationJobId: jobId };
+      if (existing) await tx.adminPasswordReset.update({ where: { id: existing.id }, data });
+      else await tx.adminPasswordReset.create({ data: { ...data, id: issued.reset.id, userId: user.id } });
+      await tx.identityNotificationJob.create({ data: { id: jobId, kind: 'password_reset', passwordResetId: issued.reset.id,
+        targetVersion: issued.reset.version, expiresAt: issued.reset.expiresAt,
+        encryptedPayload: encrypt(issued.token, user.id, this.config, `password-reset:${jobId}:${issued.reset.version}`) } });
+      await this.audit(tx, ctx, user.id, 'admin.password_reset.requested', user.id);
+      return accepted;
+    }, { timeout: 10_000 });
+  }
+  /** Completion revokes every session and pending challenge but keeps the factor, recovery codes and MFA requirement. */
+  async completePasswordReset(body: { resetToken: string; newPassword: string }, ctx: RequestContext) {
+    const encoded = await passwordHash(body.newPassword);
+    const candidate = await this.db.adminPasswordReset.findUnique({ where: { tokenDigest: digest(body.resetToken) } });
+    if (!candidate) throw new AuthError(401, 'UNAUTHORIZED');
+    return this.db.$transaction(async tx => {
+      await this.lock(tx, 'identity-access');
+      await this.lock(tx, `user:${candidate.userId}`);
+      const now = await this.now(tx);
+      const reset = await tx.adminPasswordReset.findUnique({ where: { id: candidate.id } });
+      const user = await tx.adminUser.findUnique({ where: { id: candidate.userId }, include: includeUser });
+      if (!reset || !user || user.status !== 'active') throw new AuthError(401, 'UNAUTHORIZED');
+      try { completePasswordReset(this.resetRecord(reset), body.resetToken, now); } catch { throw new AuthError(401, 'UNAUTHORIZED'); }
+      await this.cancelResetJobs(tx, reset.id);
+      await tx.adminPasswordReset.update({ where: { id: reset.id }, data: { status: 'completed', version: { increment: 1 }, tokenDigest: digest(token()) } });
+      await tx.adminUser.update({ where: { id: user.id }, data: { passwordHash: encoded, version: { increment: 1 } } });
+      await tx.adminSession.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: now } });
+      await tx.adminChallenge.updateMany({ where: { userId: user.id, consumedAt: null }, data: { consumedAt: now, pendingSecret: null } });
+      await this.audit(tx, ctx, user.id, 'admin.password_reset.completed', user.id);
+      return { requestAccepted: true as const };
+    }, { timeout: 10_000 });
+  }
   private roleSummary(role: Prisma.AdminRoleGetPayload<{}>) {
     return { id: role.id, name: role.name, description: role.description, permissionCodes: role.permissionCodes,
       version: role.version, createdAt: role.createdAt.toISOString(), updatedAt: role.updatedAt.toISOString() };
@@ -448,6 +516,11 @@ export class IdentityService {
       await tx.adminInvitation.update({ where: { id: invitation.id }, data: { version: { increment: 1 }, tokenDigest: digest(token()) } });
       await tx.identityNotificationJob.updateMany({ where: { invitationId: invitation.id, status: { in: ['pending', 'processing', 'failed'] } },
         data: { status: 'cancelled', encryptedPayload: null, leaseToken: null, leaseExpiresAt: null } });
+    }
+    const resets = await tx.adminPasswordReset.findMany({ where: { userId: { in: userIds }, status: 'pending' } });
+    for (const reset of resets) {
+      await tx.adminPasswordReset.update({ where: { id: reset.id }, data: { status: 'revoked', version: { increment: 1 }, tokenDigest: digest(token()) } });
+      await this.cancelResetJobs(tx, reset.id);
     }
   }
   async listStaff(supplied: string, limit: number, cursor: string | null) {

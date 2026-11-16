@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-实现密码重设（凭据、邮件、完成后的会话撤销与 MFA 保留）、预设岗位权限包、身份审计读取界面，再推进店铺配置与商品模块。真实 SMTP 及 HTTPS 链路仍须在实例参数齐备后独立验收。
+实现预设岗位权限包、身份审计读取界面，再推进店铺配置与商品模块。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -100,3 +100,19 @@
 验证：pnpm check 包含 21 项契约测试、41 项 Node 测试及管理端类型检查。pnpm build:admin 生产构建通过；本地 Edge 的 pnpm test:browser 通过 10 项桌面/手机用例（含既有身份入口）。真实数据库用例覆盖授权范围、未知权限、CSRF、重复角色名、并发版本冲突、店主保护、邀请不可直接激活、邀请失效、停用/角色变更/全部会话撤销即时生效、分页及响应契约。手机预览已检查。
 
 边界：页面仍为中文。staff.manage 可直接调用邀请 API，但当前可视化邀请表单还要求 roles.manage 读取角色选项。默认岗位权限包、密码重设、身份审计读取界面和其余电商模块仍待实现；没有生产部署或真实 SMTP/HTTPS 全链路验收，项目仍不可上线。
+
+## 2026-11-16：密码重设
+
+本批程序：
+
+- 第五条迁移新增 AdminPasswordReset（每员工一条、版本、状态、token 摘要、30 分钟截止、通知任务）与通知队列泛化：IdentityNotificationJob 增加 kind、targetVersion、passwordResetId，invitationId 改为可空，并用 CHECK 约束强制“每任务只对应一种目标”。原 invitationVersion 列更名为 targetVersion。
+- POST /api/v1/admin/auth/password-reset 同时承载申请（email）与完成（resetToken + newPassword），两者均返回 202 `{requestAccepted:true}`；申请对未知、停用、冷却中和超限邮箱不做区分，也不写凭据或审计；完成返回 401 表示凭据无效。
+- 领域层新增 issuePasswordReset / rotatePasswordReset / completePasswordReset 纯函数：摘要比对、精确截止、一次性状态机；重复申请原子轮换摘要、版本和截止，旧链接立即失效。
+- 完成重设：撤销该员工全部会话与未完成挑战、清除待 MFA 登记密钥、递增员工版本；保留 TOTP 因子、恢复码和 MFA 要求，不建立登录会话。
+- 员工停用、角色/权限变更与全部会话撤销通过既有 invalidateAuthority 同时作废待用重设凭据并取消其通知任务。
+- Worker 改为 NotificationWorker：按 job.kind 复核邀请或重设的目标状态、版本、摘要与截止，再投递三语邮件；重设链接为 /admin/reset-password#凭据，片段不进入 HTTP 访问日志；每轮额外把过期未用重设标记为 revoked。
+- apps/admin 新增 /admin/reset-password（申请/设置两态，凭据只读入内存后清除），登录页提供入口。
+
+验证：pnpm check 通过，21 项 Python 契约测试、21 项顶层 Node 测试（含真实 PostgreSQL 的身份 HTTP 与 Worker 回归）、管理端类型检查通过。密码重设用例覆盖：未知邮箱不建凭据、冷却不重复发信、凭据不可跨用户解密、字段混用与弱密码 422、一次性消费、完成后旧会话与旧密码失效、MFA 因子保留且重登返回 MFA 挑战、停用后凭据作废、审计不含凭据与密码。Worker 用例覆盖：kind/target CHECK 拒绝错配任务、重设只投递一次、过期/轮换/已完成/停用任务不发送、摘要不符不发送。pnpm build:admin 生产构建通过；本地 Edge 的 pnpm test:browser 通过 16 项桌面/手机用例，其中 3 项为重设页面（统一接受响应、片段清除与凭据不落浏览器存储、失效提示不泄露内部信息），预览截图已人工检查。
+
+边界：仍未连接真实 SMTP，也没有 HTTPS 与浏览器全链路验收；页面仍为中文；默认岗位权限包、身份审计读取界面和全部电商模块仍待实现，项目仍不可上线。已有实例升级前须备份、演练并运行 pnpm db:migrate。

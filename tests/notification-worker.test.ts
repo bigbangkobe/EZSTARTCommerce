@@ -3,10 +3,10 @@ import { test } from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { connectDatabase } from '../packages/database/src/client.js';
 import { testPostgres } from './helpers/postgres.js';
-import { issueInvitation } from '../packages/domain/src/identity.js';
+import { issueInvitation, issuePasswordReset } from '../packages/domain/src/identity.js';
 import { encrypt } from '../apps/api/src/identity/crypto.js';
-import { InvitationWorker } from '../apps/worker/src/invitations.js';
-import { mailConfig, type InvitationMail } from '../apps/worker/src/mail.js';
+import { NotificationWorker } from '../apps/worker/src/notifications.js';
+import { mailConfig, type NotificationMail } from '../apps/worker/src/mail.js';
 
 test('SMTP configuration rejects incomplete credentials and header injection', () => {
   assert.throws(() => mailConfig({}));
@@ -17,13 +17,13 @@ test('SMTP configuration rejects incomplete credentials and header injection', (
   assert.throws(() => mailConfig({ ...env, SMTP_PORT: 'NaN' }));
 });
 
-test('invitation worker leases, retries, expires, cancels and clears secrets in PostgreSQL', { timeout: 120_000 }, async t => {
+test('notification worker leases, retries, expires, cancels and clears secrets in PostgreSQL', { timeout: 120_000 }, async t => {
   const cluster = await testPostgres(); const db = connectDatabase(cluster.url);
   const config = { instanceId: randomUUID(), allowedOrigin: 'https://shop.example.test', encryptionKey: randomBytes(32) };
-  const delivered: InvitationMail[] = [];
-  const sender = { async send(mail: InvitationMail) { delivered.push(mail); } };
-  const worker = new InvitationWorker(db, config, sender);
-  const second = new InvitationWorker(db, config, sender);
+  const delivered: NotificationMail[] = [];
+  const sender = { async send(mail: NotificationMail) { delivered.push(mail); } };
+  const worker = new NotificationWorker(db, config, sender);
+  const second = new NotificationWorker(db, config, sender);
   const role = await db.adminRole.create({ data: { name: 'Manager', kind: 'custom', permissionCodes: ['staff.manage', 'catalog.read'] } });
   const targetRole = await db.adminRole.create({ data: { name: 'Operator', kind: 'custom', permissionCodes: ['catalog.read'] } });
   const actor = await db.adminUser.create({ data: { email: 'manager@example.test', displayName: 'Manager', locale: 'en', passwordHash: 'unused', roles: { create: { roleId: role.id } } } });
@@ -31,24 +31,57 @@ test('invitation worker leases, retries, expires, cancels and clears secrets in 
     const user = await db.adminUser.create({ data: { email: `${randomUUID()}@example.test`, displayName: 'Staff', locale: 'en', status: 'invited', passwordHash: 'unused', roles: { create: { roleId: targetRole.id } } } });
     const issued = issueInvitation(randomUUID(), user.id, new Date()); const jobId = randomUUID();
     await db.adminInvitation.create({ data: { ...issued.invitation, inviterId: actor.id, notificationJobId: jobId } });
-    await db.identityNotificationJob.create({ data: { id: jobId, invitationId: issued.invitation.id, invitationVersion: 1, expiresAt: issued.invitation.expiresAt,
+    await db.identityNotificationJob.create({ data: { id: jobId, kind: 'invitation', invitationId: issued.invitation.id, targetVersion: 1, expiresAt: issued.invitation.expiresAt,
       encryptedPayload: encrypt(issued.token, user.id, config, `invitation:${jobId}:1`) } });
     return { user, issued, jobId };
   }
+  async function queuedReset(locale = 'en') {
+    const user = await db.adminUser.create({ data: { email: `${randomUUID()}@example.test`, displayName: 'Staff', locale, passwordHash: 'unused' } });
+    const resetId = randomUUID(); const issued = issuePasswordReset(resetId, user.id, new Date()); const jobId = randomUUID();
+    await db.adminPasswordReset.create({ data: { id: resetId, userId: user.id, version: 1, tokenDigest: issued.reset.tokenDigest,
+      expiresAt: issued.reset.expiresAt, requestedAt: issued.reset.requestedAt, notificationJobId: jobId } });
+    await db.identityNotificationJob.create({ data: { id: jobId, kind: 'password_reset', passwordResetId: resetId, targetVersion: 1,
+      expiresAt: issued.reset.expiresAt, encryptedPayload: encrypt(issued.token, user.id, config, `password-reset:${jobId}:1`) } });
+    return { user, issued, jobId, resetId };
+  }
   try {
+    await t.test('the queue rejects a job that references the wrong kind of target', async () => {
+      const invitation = await queued(); const reset = await queuedReset();
+      // Both foreign keys are valid here, so only the kind/target CHECK can reject the row.
+      await assert.rejects(db.identityNotificationJob.create({ data: { id: randomUUID(), kind: 'password_reset',
+        invitationId: invitation.issued.invitation.id, passwordResetId: reset.resetId,
+        targetVersion: 1, expiresAt: new Date(Date.now() + 60_000), encryptedPayload: 'x' } }));
+      await assert.rejects(db.identityNotificationJob.create({ data: { id: randomUUID(), kind: 'invitation',
+        targetVersion: 1, expiresAt: new Date(Date.now() + 60_000), encryptedPayload: 'x' } }));
+      assert.equal((await db.identityNotificationJob.findUniqueOrThrow({ where: { id: reset.jobId } })).kind, 'password_reset');
+      await db.identityNotificationJob.updateMany({ where: { id: { in: [invitation.jobId, reset.jobId] } },
+        data: { status: 'cancelled', encryptedPayload: null } });
+    });
     await t.test('two workers send a claimed job once and erase the secret', async () => {
       const fixture = await queued();
       await Promise.all([worker.tick(), second.tick()]);
       assert.equal(delivered.length, 1);
+      assert.equal(delivered[0]!.kind, 'invitation');
       assert.equal(delivered[0]!.link, `${config.allowedOrigin}/admin/accept-invitation#${fixture.issued.token}`);
       assert.equal(new URL(delivered[0]!.link).search, '');
       const job = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: fixture.jobId } });
       assert.equal(job.status, 'sent'); assert.equal(job.attempts, 1); assert.equal(job.encryptedPayload, null); assert.equal(job.leaseToken, null);
       assert.equal(await worker.tick(), false);
     });
+    await t.test('a password reset is delivered once with its own link and locale copy', async () => {
+      const fixture = await queuedReset('zh-CN');
+      await Promise.all([worker.tick(), second.tick()]);
+      const message = delivered.at(-1)!;
+      assert.equal(message.kind, 'password_reset'); assert.equal(message.to, fixture.user.email); assert.equal(message.locale, 'zh-CN');
+      assert.equal(message.link, `${config.allowedOrigin}/admin/reset-password#${fixture.issued.token}`);
+      assert.equal(new URL(message.link).search, '');
+      const job = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: fixture.jobId } });
+      assert.equal(job.status, 'sent'); assert.equal(job.encryptedPayload, null);
+      assert.equal(await worker.tick(), false);
+    });
     await t.test('failure retries the same credential and terminates after five attempts', async () => {
       const fixture = await queued(); const links: string[] = [];
-      const failing = new InvitationWorker(db, config, { async send(mail) { links.push(mail.link); throw new Error(`provider leaked ${mail.link}`); } });
+      const failing = new NotificationWorker(db, config, { async send(mail) { links.push(mail.link); throw new Error(`provider leaked ${mail.link}`); } });
       for (let i = 1; i <= 5; i++) {
         await db.identityNotificationJob.update({ where: { id: fixture.jobId }, data: { availableAt: new Date(0) } });
         await failing.tick();
@@ -90,14 +123,44 @@ test('invitation worker leases, retries, expires, cancels and clears secrets in 
       }
       assert.equal(delivered.length, before);
     });
+    await t.test('superseded, expired and suspended password resets never send', async () => {
+      const before = delivered.length;
+      for (const kind of ['expired-job', 'expired-credential', 'rotated', 'completed', 'suspended']) {
+        const fixture = await queuedReset();
+        if (kind === 'expired-job') await db.identityNotificationJob.update({ where: { id: fixture.jobId }, data: { expiresAt: new Date(0) } });
+        if (kind === 'expired-credential') await db.adminPasswordReset.update({ where: { id: fixture.resetId }, data: { expiresAt: new Date(0) } });
+        if (kind === 'rotated') await db.adminPasswordReset.update({ where: { id: fixture.resetId }, data: { version: 2 } });
+        if (kind === 'completed') await db.adminPasswordReset.update({ where: { id: fixture.resetId }, data: { status: 'completed' } });
+        if (kind === 'suspended') await db.adminUser.update({ where: { id: fixture.user.id }, data: { status: 'suspended' } });
+        await worker.tick();
+        const job = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: fixture.jobId } });
+        assert.equal(job.encryptedPayload, null);
+        assert.ok(['cancelled', 'failed'].includes(job.status), `${kind} left job ${job.status}`);
+      }
+      assert.equal(delivered.length, before);
+      const stale = await queuedReset();
+      await db.adminPasswordReset.update({ where: { id: stale.resetId }, data: { expiresAt: new Date(0) } });
+      await worker.tick();
+      assert.equal((await db.adminPasswordReset.findUniqueOrThrow({ where: { id: stale.resetId } })).status, 'revoked');
+    });
     await t.test('revocation during an in-flight send cannot resurrect a cancelled job', async () => {
       const fixture = await queued();
-      const revoking = new InvitationWorker(db, config, { async send() {
+      const revoking = new NotificationWorker(db, config, { async send() {
         await db.identityNotificationJob.update({ where: { id: fixture.jobId }, data: { status: 'cancelled', encryptedPayload: null } });
       } });
       await revoking.tick();
       const job = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: fixture.jobId } });
       assert.equal(job.status, 'cancelled'); assert.equal(job.encryptedPayload, null);
+    });
+    await t.test('a decrypted payload that does not match its digest is never sent', async () => {
+      const fixture = await queuedReset();
+      await db.identityNotificationJob.update({ where: { id: fixture.jobId }, data: {
+        encryptedPayload: encrypt('wrong-secret', fixture.user.id, config, `password-reset:${fixture.jobId}:1`) } });
+      const before = delivered.length;
+      await worker.tick();
+      assert.equal(delivered.length, before);
+      const job = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: fixture.jobId } });
+      assert.equal(job.lastErrorCode, 'DELIVERY_FAILED'); assert.ok(job.encryptedPayload);
     });
   } finally { await db.$disconnect(); await cluster.stop(); }
 });

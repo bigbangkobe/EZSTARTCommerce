@@ -3,7 +3,7 @@ import { connectDatabase } from '../../../packages/database/src/client.js';
 import { identityConfig } from '../../api/src/identity/config.js';
 import { IdentityContracts } from '../../api/src/identity/contracts.js';
 import { IdentityService } from '../../api/src/identity/service.js';
-import { InvitationWorker } from './invitations.js';
+import { NotificationWorker } from './notifications.js';
 import { mailConfig, SmtpMailSender } from './mail.js';
 
 let stopping = false;
@@ -17,7 +17,7 @@ try {
   db = connectDatabase(process.env['DATABASE_URL']);
   const identity = new IdentityService(db, { ...config, bootstrapToken: '' }, new IdentityContracts().ownerPermissions);
   await identity.initialize();
-  const worker = new InvitationWorker(db, config, new SmtpMailSender(smtp));
+  const worker = new NotificationWorker(db, config, new SmtpMailSender(smtp));
   console.log(JSON.stringify({ event: 'identity_worker.started' }));
   while (!stopping) {
     try { if (!await worker.tick()) await setTimeout(1000); }
