@@ -63,7 +63,12 @@ export class IdentityService {
     const existing = await tx.adminRole.findMany({ where: { presetKey: { in: presets.map(preset => preset.key) } } });
     const present = new Set(existing.map(role => role.presetKey));
     for (const preset of presets) {
-      if (!present.has(preset.key)) await tx.adminRole.createMany({ data: [preset], skipDuplicates: true });
+      // preset.key 是 RolePreset 的稳定标识，写入 AdminRole.presetKey（不是名为 key 的列）
+      if (!present.has(preset.key)) await tx.adminRole.createMany({
+        data: { presetKey: preset.key, name: preset.name, kind: preset.kind,
+          description: preset.description, permissionCodes: preset.permissionCodes },
+        skipDuplicates: true,
+      });
     }
     const owner = await tx.adminRole.findUnique({ where: { presetKey: 'owner' } });
     const ownerCodes = presets.find(preset => preset.key === 'owner')!.permissionCodes;
