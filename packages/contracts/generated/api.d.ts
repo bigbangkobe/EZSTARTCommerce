@@ -3038,20 +3038,37 @@ export interface components {
             shippingMinor?: number;
             taxMinor?: number;
             totalMinor: number;
+            /** @description Current optimistic-concurrency version for order actions. */
+            version: number;
+            locale?: string;
+            marketCode?: string;
+            paymentMethodCode?: string;
+            customerNote?: string | null;
+            /** Format: date-time */
+            placedAt?: string;
             lines: {
                 [key: string]: unknown;
             }[];
             addressSnapshot?: {
                 [key: string]: unknown;
-            };
+            } | null;
             /** @description Contact fields are masked unless customers.read_pii is granted. */
             contact?: {
                 [key: string]: unknown;
             };
+            shippingMethod?: {
+                [key: string]: unknown;
+            };
+            cancellation?: {
+                [key: string]: unknown;
+            } | null;
             shipments: {
                 [key: string]: unknown;
             }[];
             statusHistory: {
+                [key: string]: unknown;
+            }[];
+            notes?: {
                 [key: string]: unknown;
             }[];
             /** Format: date-time */

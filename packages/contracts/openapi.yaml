@@ -5050,7 +5050,7 @@ components:
     AdminOrder:
       type: object
       additionalProperties: false
-      required: [id, publicOrderNumber, orderStatus, paymentStatus, fulfillmentStatus, currency, totalMinor, lines, shipments, statusHistory, createdAt, updatedAt]
+      required: [id, publicOrderNumber, orderStatus, paymentStatus, fulfillmentStatus, currency, totalMinor, version, lines, shipments, statusHistory, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         publicOrderNumber: { type: string, maxLength: 64 }
@@ -5063,11 +5063,20 @@ components:
         shippingMinor: { type: integer, minimum: 0 }
         taxMinor: { type: integer, minimum: 0 }
         totalMinor: { type: integer, minimum: 0 }
+        version: { type: integer, minimum: 1, description: Current optimistic-concurrency version for order actions. }
+        locale: { type: string, maxLength: 16 }
+        marketCode: { type: string, maxLength: 8 }
+        paymentMethodCode: { type: string, maxLength: 40 }
+        customerNote: { type: [string, 'null'], maxLength: 1000 }
+        placedAt: { type: string, format: date-time }
         lines: { type: array, items: { type: object, additionalProperties: true } }
-        addressSnapshot: { type: object, additionalProperties: true }
+        addressSnapshot: { type: [object, 'null'], additionalProperties: true }
         contact: { type: object, additionalProperties: true, description: Contact fields are masked unless customers.read_pii is granted. }
+        shippingMethod: { type: object, additionalProperties: true }
+        cancellation: { type: [object, 'null'], additionalProperties: true }
         shipments: { type: array, items: { type: object, additionalProperties: true } }
         statusHistory: { type: array, items: { type: object, additionalProperties: true } }
+        notes: { type: array, items: { type: object, additionalProperties: true } }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     ErrorEnvelope:

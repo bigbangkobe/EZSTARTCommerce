@@ -240,6 +240,10 @@
 | `POST /admin/after-sales/:id/receive-return` / `POST /admin/after-sales/:id/inspect` | 退货收件和质检处置 | `aftersales.inspect`；只能经库存领域服务入账 |
 | `POST /admin/after-sales/:id/refund` | 已审批金额、原支付引用 | 调用退款领域服务；不直接改付款状态 |
 
+订单读取与订单动作是分开的权限：`GET /admin/orders`、`GET /admin/orders/:id` 只要求 `orders.read`，响应里的联系人按 `customers.read_pii` 决定是否遮蔽（列表恒为遮蔽值）；取消、改址、备注、包裹、发货、签收各自使用 `orders.cancel`、`orders.address_change`、`orders.update`、`shipments.manage`，且都要求 CSRF 与 `Idempotency-Key`（发货另需 `If-Match`）。
+
+取消只释放该订单的库存预留，不改 `onHand`；已收款订单必须走售后退款，接口返回 `409 PAID_ORDER_REQUIRES_REFUND`。改址沿用原配送方式重算运费，费用变化必须带 `customerConfirmationRef`（否则 `422 CUSTOMER_CONFIRMATION_REQUIRED`），任何包裹发出后拒绝（`409 ORDER_ALREADY_SHIPPED`）。发货才扣减 `onHand` 并同步释放 `reserved`；签收只推进履约，不改变付款状态——货到付款订单在收款登记前始终是 `cod_due`。订单预留过期后由清理任务释放，仍处于 `awaiting_confirmation` 的订单会被系统取消（`actorType=system`）。
+
 ### 3.5 会员、优惠、库存、通知、报表、部署（M10–M15）
 
 | 方法与路径 | 用途 / 关键输入 | 权限与关键规则 |

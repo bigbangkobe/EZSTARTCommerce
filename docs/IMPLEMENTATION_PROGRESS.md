@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进订单与支付（M07/M08）：后台订单列表与详情、取消/地址变更、付款渠道配置与 Webhook 验签，以及预留释放。前台展示目前只有只读目录接口，三语参考前台（M02 前台部分）与页面内容（M04）尚未开始。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+推进支付与收款（M08）：付款渠道配置（密钥只写入安全存储、GET 只回脱敏状态）、Webhook 原始 body 验签与事件去重、COD 收款登记。前台展示目前只有只读目录接口，三语参考前台（M02 前台部分）与页面内容（M04）尚未开始。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -222,3 +222,25 @@
 关键对抗用例：无 cookie 读购物袋 401、缺 CSRF 或令牌不符 403、CSRF cookie 可读而会话 cookie 不可读、数量 0/100/非整数 422、客户端价格字段 422、草稿商品变体 422、超库存 409、跨购物袋删行 404、未审核市场 409、非本袋 cartId 422、优惠码只产生警告、报价不回显联系方式、同键重放返回同订单且不重复预留、同键不同备注 409、已消费报价不能再下单、改价后下单 409 `PRICE_CHANGED`、过期报价 409 `QUOTE_EXPIRED`、库存不足回滚且不留半张订单、超过 IP 阈值 429。
 
 边界：没有优惠引擎（折扣恒为 0）、没有税费配置（`ruleVersions.tax = null`）、没有顾客/会员档案与订单查询接口（M07/M10）；预留 30 分钟到期后由 M07 释放任务处理，本批没有后台释放任务；订单只有 `awaiting_confirmation`/`cod_due` 两个初始状态，取消、发货、退款均未实现；配送只支持固定运费与金额门槛免邮，没有重量/体积/阶梯计费；本地实例升级需运行 pnpm db:migrate（第 10 条迁移）。
+
+## 2026-11-16：订单管理与预留释放（M07）
+
+本批程序：
+
+- 第十一条迁移新增 `OrderNote`、`OrderAction`、`Shipment`/`ShipmentItem`、`OrderAddressChange`，并给 `ShopOrder` 增加 `cancelledAt`/`cancelReasonCode`/`cancelReason`/`customerNotified`。同时把第 10 条迁移里只允许两个初始状态的三条 CHECK 放宽到契约枚举全集；`Shipment` 用 CHECK 锁死“状态与时间必须同时成立”（已发货必须有 dispatchedAt、已签收必须有 deliveredAt），`ShopOrder` 锁死“已取消 ⇔ cancelledAt 非空”。
+- `packages/domain/src/orders.ts`：取消/改址/建包裹/发货/签收的状态机、包裹数量累计（含已分配未发货）、联系方式遮蔽（邮箱、电话、姓名）、备注与取消原因规范化、改址金额不变量、顾客确认依据。
+- 后台订单：`GET /admin/orders`（游标分页 + 订单号/顾客备注搜索）、`GET /admin/orders/:id`（行、包裹、状态历史、备注、取消信息）。没有 `customers.read_pii` 的账号看到的是遮蔽后的联系人；列表恒为遮蔽值。
+- `POST /admin/orders/:id/cancel`：`orders.cancel` + CSRF + Idempotency-Key；版本核对后释放全部 active 预留，写取消时间/原因/是否通知顾客与状态事件。已收款订单返回 409 `PAID_ORDER_REQUIRES_REFUND`，已发货/已取消分别拒绝。
+- `POST /admin/orders/:id/address-change`：`orders.address_change` + 幂等；复用配送配置重算运费（沿用原配送方式，不静默换方法），运费变化必须带 `customerConfirmationRef`，否则 422 `CUSTOMER_CONFIRMATION_REQUIRED`；新地址无可用配送方式返回 409 `SHIPPING_UNAVAILABLE`；已有任何包裹离开仓库后拒绝。
+- `POST /admin/orders/:id/notes`：`orders.update`，1–1000 字符、拒绝控制字符；备注只进内部记录。
+- `POST /admin/orders/:id/shipments`：`shipments.manage` + 幂等；同一订单行可拆多个包裹，未取消包裹累计数量不得超过订购量（超出发 409 `SHIPMENT_QUANTITY_EXCEEDED`）。
+- `POST /admin/shipments/:id/dispatch`：`shipments.manage` + If-Match + 幂等；事务内校验该订单的预留仍为 active 且数量足够，`UPDATE ... WHERE onHand >= qty AND reserved >= qty` 同时扣减 `onHand` 与 `reserved`，剩余预留数量归零才标 `committed`；按累计发出来推进订单到 `shipped`/`partially_shipped` 与 `fulfilled`/`partially_fulfilled`。
+- `POST /admin/shipments/:id/deliver`：只能签收已发货包裹；全部行签收后订单转 `completed`/`delivered`。签收不改 `paymentStatus`——COD 仍是 `cod_due`，收款登记属于 M08。
+- 过期预留清理：`OrdersService.releaseExpiredReservations()` 按订单加锁、只释放过期 active 预留；仍停留在 `awaiting_confirmation` 的订单自动取消（`cancelReasonCode=reservation_expired`、`actorType=system`）。`ReservationSweeper` 在 API 进程每 60 秒跑一次（`unref`，不阻塞退出），启动时先跑一轮；已确认/处理中的订单不在自动清理范围内。
+- apps/admin 新增 /admin/orders：列表与搜索、详情、取消、改址、内部备注、拆包裹、发货、登记签收；商品目录、媒体库、配送页给出入口。
+
+验证：pnpm check 通过（Node 测试新增订单域 9 项与真实 PostgreSQL 订单 HTTP 用例；契约测试 24 项含订单权限矩阵与 AdminOrder 版本字段断言），管理端类型检查与生产构建通过（新增 /admin/orders 路由）；本地 Edge 的 pnpm test:browser 46 项桌面/手机用例通过（新增订单页 3 项×2 项目）。
+
+关键对抗用例：无会话 401、只有 orders.read 不能取消/发货/写备注 403、列表与详情在无 PII 权限时遮蔽联系方式、owner 可见完整联系方式、版本过期 409、同幂等键不同原因 409、同键重放不重复释放预留/不重复写事件、已取消订单再取消 409、运费变化无确认依据 422、地址不在配送区 409、包裹数量超订购量 409、未发货直接签收 409、重复发货 409、发货只释放本包裹预留、拆两包裹发货后订单才转 shipped、全部签收后 completed 且 paymentStatus 仍为 cod_due、过期预留释放且订单被系统取消、清理任务重复执行无副作用。
+
+边界：没有支付渠道与 Webhook（M08）、没有 COD 收款登记、退款与售后；没有订单确认/暂停/恢复等中间动作的独立接口，确认与处理中状态目前只由发货推进；已确认但未发货的订单若预留过期不会被自动取消（会保留原状态，需人工处理）；包裹不可取消/合并/改址，发货后地址只能人工记录；多副本部署时清理任务会在每个副本各跑一次（按行条件更新与订单锁保证不重复扣减）；本地实例升级需运行 pnpm db:migrate（第 11 条迁移）。

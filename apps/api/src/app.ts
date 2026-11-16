@@ -18,6 +18,8 @@ import { MediaController, MediaObjectsController } from './media/controller.js';
 import { mediaStorageConfig } from './media/config.js';
 import { MediaService } from './media/service.js';
 import { createMediaStorage, type MediaStorage } from './media/storage.js';
+import { OrdersController } from './orders/controller.js';
+import { OrdersService } from './orders/service.js';
 import { StorefrontController } from './storefront/controller.js';
 import { StorefrontService } from './storefront/service.js';
 import { StaffController } from './identity/staff-controller.js';
@@ -81,15 +83,18 @@ export async function createApp(identity: IdentityService | null = null, options
   const shipping = identity ? new ShippingService(identity) : null;
   const cart = identity ? new CartService(identity) : null;
   const checkout = identity && cart && shipping ? new CheckoutService(identity, cart, shipping) : null;
+  const orders = identity && shipping ? new OrdersService(identity, shipping) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
-    CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController],
+    CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
+    OrdersController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
       { provide: 'STOREFRONT', useValue: identity ? new StorefrontService(identity) : null },
       { provide: 'SHIPPING', useValue: shipping },
       { provide: 'CART', useValue: cart },
-      { provide: 'CHECKOUT', useValue: checkout }] })
+      { provide: 'CHECKOUT', useValue: checkout },
+      { provide: 'ORDERS', useValue: orders }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

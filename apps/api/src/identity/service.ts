@@ -13,7 +13,7 @@ import type { IdentityConfig } from './config.js';
 
 type Tx = Prisma.TransactionClient;
 const includeUser = { roles: { include: { role: true } }, factor: true } as const;
-type User = Prisma.AdminUserGetPayload<{ include: typeof includeUser }>;
+export type User = Prisma.AdminUserGetPayload<{ include: typeof includeUser }>;
 export interface RequestContext { requestId: string; ip: string }
 export class AuthError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
@@ -340,8 +340,15 @@ export class IdentityService {
     });
     return this.finish(result);
   }
+  /**
+   * 字段级权限判定：同一个响应里，拥有 PII 权限的人看完整联系方式，其他人看遮蔽后的值。
+   * 这类判断不该把整个请求拒掉，所以单独暴露为布尔判定，而不是复用 requirePermission。
+   */
+  hasPermission(user: User, permission: string): boolean {
+    return user.roles.some(link => link.role.permissionCodes.includes(permission));
+  }
   private requirePermission(user: User, permission: string) {
-    if (!user.roles.some(link => link.role.permissionCodes.includes(permission))) throw new AuthError(403, 'FORBIDDEN');
+    if (!this.hasPermission(user, permission)) throw new AuthError(403, 'FORBIDDEN');
   }
   private async checkDelegation(tx: Tx, actor: User, roleIds: string[]) {
     this.requirePermission(actor, 'staff.manage');

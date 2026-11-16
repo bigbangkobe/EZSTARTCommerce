@@ -551,6 +551,10 @@ model ShopOrder {
   customerNote String?
   paymentMethodCode String
   policyAcceptances Json
+  cancelledAt DateTime? @db.Timestamptz(3)
+  cancelReasonCode String?
+  cancelReason String?
+  customerNotified Boolean @default(false)
   placedAt DateTime @db.Timestamptz(3)
   version Int @default(1)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -558,6 +562,10 @@ model ShopOrder {
   items OrderItem[]
   events OrderStatusEvent[]
   reservations InventoryReservation[]
+  notes OrderNote[]
+  actions OrderAction[]
+  shipments Shipment[]
+  addressChanges OrderAddressChange[]
   @@index([orderStatus, placedAt])
   @@index([placedAt])
 }
@@ -576,7 +584,80 @@ model OrderItem {
   lineSubtotalMinor Int
   lineDiscountMinor Int
   lineTotalMinor Int
+  shipmentItems ShipmentItem[]
   @@index([orderId])
+}
+
+// ---- 订单履约（M07）----------------------------------------------------------
+// 状态只由显式 action 推进：备注、包裹、发货、签收各写各的记录，不给“直接改状态”的入口。
+// 幂等表把后台写操作的 Idempotency-Key 落库，重放时返回同一结果而不是重复扣库存。
+
+model OrderNote {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  note String
+  authorId String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([orderId, createdAt])
+}
+
+model OrderAction {
+  id String @id @default(uuid()) @db.Uuid
+  idempotencyKey String @unique
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  action String
+  requestDigest String
+  objectId String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([orderId])
+}
+
+model Shipment {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status String @default("created")
+  carrierCode String?
+  carrierName String?
+  trackingNumber String?
+  note String?
+  dispatchedAt DateTime? @db.Timestamptz(3)
+  deliveredAt DateTime? @db.Timestamptz(3)
+  evidenceRef String?
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  items ShipmentItem[]
+  @@index([orderId, createdAt])
+}
+
+model ShipmentItem {
+  id String @id @default(uuid()) @db.Uuid
+  shipmentId String @db.Uuid
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  orderItemId String @db.Uuid
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  quantity Int
+  @@unique([shipmentId, orderItemId])
+  @@index([orderItemId])
+}
+
+model OrderAddressChange {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  previousAddress Json?
+  newAddress Json
+  shippingMinorBefore Int
+  shippingMinorAfter Int
+  totalMinorBefore Int
+  totalMinorAfter Int
+  customerConfirmationRef String?
+  actorId String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([orderId, createdAt])
 }
 
 // 预留与订单同事务写入：库存不足时没有任何一行能落库。

@@ -196,6 +196,56 @@ class ContractTests(unittest.TestCase):
                     self.assertTrue(operation.get("x-permission"), (method, path))
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_order_actions_use_separate_permissions_and_versioned_bodies(self):
+        expected = {
+            ("/admin/orders", "get"): "orders.read",
+            ("/admin/orders/{id}", "get"): "orders.read",
+            ("/admin/orders/{id}/cancel", "post"): "orders.cancel",
+            ("/admin/orders/{id}/address-change", "post"): "orders.address_change",
+            ("/admin/orders/{id}/notes", "post"): "orders.update",
+            ("/admin/orders/{id}/shipments", "post"): "shipments.manage",
+            ("/admin/shipments/{id}/dispatch", "post"): "shipments.manage",
+            ("/admin/shipments/{id}/deliver", "post"): "shipments.manage",
+        }
+        for (path, method), permission in expected.items():
+            operation = SPEC["paths"][path][method]
+            self.assertEqual(permission, operation["x-permission"], path)
+            # 读接口只认会话；写接口还必须带 CSRF，否则跨站请求可以借用户会话下单。
+            security = [{"AdminSession": []}] if method == "get" else [{"AdminSession": [], "CsrfToken": []}]
+            self.assertEqual(security, operation["security"], path)
+        # 取消与改址必须带幂等键；发货必须带 If-Match，否则无法证明改的是哪一版。
+        for path in ("/admin/orders/{id}/cancel", "/admin/orders/{id}/address-change"):
+            self.assertIn({"$ref": "#/components/parameters/IdempotencyKey"},
+                          SPEC["paths"][path]["post"]["parameters"])
+        self.assertIn({"$ref": "#/components/parameters/IfMatch"},
+                      SPEC["paths"]["/admin/shipments/{id}/dispatch"]["post"]["parameters"])
+        # 字段级权限只影响遮蔽，不能成为读写门槛。
+        self.assertEqual(["customers.read_pii"],
+                         SPEC["paths"]["/admin/orders"]["get"]["x-field-permissions"])
+
+    def test_admin_order_requires_version_and_rejects_unknown_actions(self):
+        order = {"id": UUID, "publicOrderNumber": "EZ-20261116-ABC123", "orderStatus": "awaiting_confirmation",
+                 "paymentStatus": "cod_due", "fulfillmentStatus": "unfulfilled", "currency": "HKD", "version": 1,
+                 "totalMinor": 23000, "lines": [], "shipments": [], "statusHistory": [], "notes": [],
+                 "createdAt": NOW, "updatedAt": NOW}
+        self.assertEqual([], errors("AdminOrder", order))
+        # 没有版本号的订单详情无法驱动取消/改址，属于契约缺口。
+        without_version = copy.deepcopy(order)
+        del without_version["version"]
+        self.assertTrue(errors("AdminOrder", without_version))
+        self.assertTrue(errors("AdminOrder", dict(order, orderStatus="refunded")))
+        self.assertTrue(errors("AdminOrder", dict(order, paymentStatus="paid")))
+        cancel = {"reason": "Customer request", "expectedVersion": 1, "customerNotified": False}
+        self.assertEqual([], errors("OrderCancelRequest", cancel))
+        self.assertTrue(errors("OrderCancelRequest", dict(cancel, totalMinor=0)))
+        self.assertTrue(errors("OrderCancelRequest", {"reason": "x"}))
+        address = {"expectedVersion": 1, "address": {"countryCode": "HK", "addressLine1": "1 Queen Road"}}
+        self.assertEqual([], errors("OrderAddressChangeRequest", address))
+        self.assertTrue(errors("OrderAddressChangeRequest", dict(address, expectedVersion=0)))
+        shipment = {"items": [{"orderItemId": UUID, "quantity": 1}]}
+        self.assertEqual([], errors("ShipmentCreateRequest", shipment))
+        self.assertTrue(errors("ShipmentCreateRequest", {"items": []}))
+
     def test_quote_can_be_consumed_by_order_request(self):
         quote = {
             "quoteId": UUID, "version": 1, "expiresAt": "2026-10-19T10:00:00Z",
