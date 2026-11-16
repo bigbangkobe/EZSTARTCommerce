@@ -163,6 +163,7 @@
 | `GET/POST /admin/brands`；`GET/PATCH /admin/brands/:id` | 品牌信息和翻译 | `catalog.manage` |
 | `POST /admin/media/upload-target` | 文件名、MIME、字节数 | `media.manage`；短时上传目标及类型/尺寸限制 |
 | `POST /admin/media/complete` | 上传对象 key、校验摘要 | `media.manage`；服务端确认对象后入库 |
+| `GET /admin/media` / `GET /admin/media/:id` | 媒体库分页与详情 | `media.manage`；只返回本实例媒体与短时读取链接 |
 | `GET /admin/pages` / `POST /admin/pages` | 页面列表/创建草稿 | `content.read/manage` |
 | `GET/PATCH /admin/pages/:id` | 页面区块、内容、SEO、版本 | `content.manage`；仅接受主题注册的区块类型 |
 | `POST /admin/pages/:id/preview-token` | 语言/设备预览参数 | `content.preview`；短时且不可索引 |
@@ -171,6 +172,8 @@
 | `GET/PUT /admin/merchandising/:pageKey` | 获取/保存页面陈列区块、商品选择、排序规则 | `content.manage`；手动优先级限区块作用域 |
 | `GET /storefront/config`、`GET /storefront/products`、`GET /storefront/products/:slug` | 公开已发布配置/目录 | 无登录；市场、语言、可售状态过滤 |
 | `GET /storefront/categories`、`GET /storefront/pages/:slug`、`GET /storefront/collections/:slug` | 公开目录和陈列 | 仅发布版本；不得返回草稿/预览字段 |
+
+媒体字节的收发不经过业务契约：`upload-target` 返回的短时 URL 指向对象存储，或（本地驱动时）指向 `/api/v1/media/objects?key=&expires=&signature=` 这一存储端点。该端点只认 URL 上的单对象、单方法签名，不读后台会话，也不要求 CSRF；签名过期即失效，且只有已确认（`ready`）的媒体才可读取。因此它不属于 OpenAPI 业务接口，也不承担权限判断。
 
 ### 3.3 导入、购物车与结账（M05–M06）
 

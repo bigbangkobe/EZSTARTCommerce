@@ -585,6 +585,40 @@ export interface paths {
         patch: operations["updateBrand"];
         trace?: never;
     };
+    "/admin/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List uploaded media assets */
+        get: operations["listMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/media/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one media asset and its short-lived read URL */
+        get: operations["getMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/media/upload-target": {
         parameters: {
             query?: never;
@@ -2721,6 +2755,37 @@ export interface components {
             };
             meta: components["schemas"]["ResponseMeta"];
         };
+        MediaAsset: {
+            /** Format: uuid */
+            id: string;
+            objectKey: string;
+            /** @enum {string} */
+            contentType: "image/jpeg" | "image/png" | "image/webp";
+            sizeBytes: number;
+            sha256: string | null;
+            width: number | null;
+            height: number | null;
+            originalFileName: string;
+            /** @enum {string} */
+            status: "pending" | "ready";
+            url: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        MediaAssetEnvelope: {
+            data: components["schemas"]["MediaAsset"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        MediaAssetListEnvelope: {
+            data: {
+                items: components["schemas"]["MediaAsset"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
         AdminProduct: {
             /** Format: uuid */
             id: string;
@@ -4012,6 +4077,26 @@ export interface components {
                 "application/json": components["schemas"]["BrandEnvelope"];
             };
         };
+        /** @description Media library page in reverse chronological order; read URLs are short-lived */
+        MediaAssetListSuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["MediaAssetListEnvelope"];
+            };
+        };
+        /** @description Media asset metadata with a short-lived read URL */
+        MediaAssetSuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["MediaAssetEnvelope"];
+            };
+        };
         /** @description Resource created */
         Created: {
             headers: {
@@ -5080,6 +5165,44 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    listMedia: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["MediaAssetListSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["MediaAssetSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };

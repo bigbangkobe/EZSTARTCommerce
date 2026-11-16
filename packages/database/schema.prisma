@@ -191,7 +191,9 @@ model StoreConfig {
   timezone String
   featureFlags Json @default("{}")
   logoMediaId String? @db.Uuid
+  logoMedia MediaAsset? @relation("StoreLogo", fields: [logoMediaId], references: [id], onDelete: Restrict)
   faviconMediaId String? @db.Uuid
+  faviconMedia MediaAsset? @relation("StoreFavicon", fields: [faviconMediaId], references: [id], onDelete: Restrict)
   /// 首次产生真实交易后锁定基础币种，避免历史订单与本位币不一致。
   tradingStartedAt DateTime? @db.Timestamptz(3)
   version Int @default(1)
@@ -232,7 +234,30 @@ model MarketReviewRecord {
 
 // ---- 商品目录（M03）---------------------------------------------------------
 // 多语言按翻译实体管理；金额为整数最小货币单位并带币种；SKU 全店唯一。
-// 图片只保存媒体引用与顺序，媒体对象本身由媒体模块（M02/M03 媒体）管理。
+// 图片只保存媒体引用与顺序，媒体对象本身由媒体模块（M02）管理。
+
+// 媒体（M02）：对象存储保存二进制，这里只保存元数据与校验摘要。
+// status 在确认上传前为 pending，确认并核对摘要后转 ready；前台只读 ready。
+model MediaAsset {
+  id String @id @default(uuid()) @db.Uuid
+  objectKey String @unique
+  contentType String
+  sizeBytes Int
+  /// 摘要与尺寸在确认上传后写入；pending 行允许为空。
+  sha256 String?
+  width Int?
+  height Int?
+  originalFileName String
+  status String @default("pending")
+  uploadedBy String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  productMedia ProductMedia[]
+  brands Brand[]
+  storeLogos StoreConfig[] @relation("StoreLogo")
+  storeFavicons StoreConfig[] @relation("StoreFavicon")
+  @@index([status, createdAt])
+}
 
 model Category {
   id String @id @default(uuid()) @db.Uuid
@@ -263,6 +288,7 @@ model CategoryTranslation {
 model Brand {
   id String @id @default(uuid()) @db.Uuid
   logoMediaId String? @db.Uuid
+  logoMedia MediaAsset? @relation(fields: [logoMediaId], references: [id], onDelete: Restrict)
   enabled Boolean @default(true)
   version Int @default(1)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -339,6 +365,7 @@ model ProductMedia {
   productId String @db.Uuid
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   mediaId String @db.Uuid
+  media MediaAsset @relation(fields: [mediaId], references: [id], onDelete: Restrict)
   position Int
   altByLocale Json @default("{}")
   @@unique([productId, mediaId])

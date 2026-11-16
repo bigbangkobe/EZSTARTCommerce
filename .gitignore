@@ -8,6 +8,8 @@ dist/
 !.env.example
 coverage/
 packages/database/src/generated/
+# 本地媒体驱动的默认落盘目录（生产走对象存储，不入库）
+.data/
 
 .next/
 playwright-report/

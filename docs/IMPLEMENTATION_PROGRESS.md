@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进媒体上传与前台展示（M02），再进入购物车与结账（M06）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+推进购物车与结账（M06），再进入订单与支付（M07/M08）。前台展示目前只有只读目录接口，三语参考前台（M02 前台部分）与页面内容（M04）尚未开始。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -183,3 +183,23 @@
 关键对抗用例：重复 slug 409、分类成环 422、版本过期 409、跨商品重复 SKU 409、非本位币 422、未知分类/市场 422、缺语言发布 422、未审核市场发布 422、过期版本发布 409、下架后重新发布、搜索命中、无权限 403、审计记录 catalog.* 操作。
 
 边界：媒体上传、库存调整、前台展示与导入（M02/M05/M12）尚未实现，商品图片仅有媒体引用；规格编辑 UI 只读，规格增删需经 API；商品状态只用到 draft/active（archived 留给后续归档流程）；`attributes` 目前只写不读。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 8 条迁移）。
+
+## 2026-11-16：媒体上传与前台只读目录（M02）
+
+本批程序：
+
+- 第九条迁移新增 `MediaAsset`：`objectKey` 唯一、只允许 `image/jpeg|png|webp`、单文件 1 B–10 MiB、摘要必须 64 位小写十六进制、尺寸 1–12000；`status='ready'` 的行必须同时具备摘要与宽高（CHECK 约束），pending 行不能伪装成可展示对象。`ProductMedia.mediaId`、`Brand.logoMediaId`、`StoreConfig.logoMediaId/faviconMediaId` 加上外键（`ON DELETE RESTRICT`），“只能引用本实例媒体”由数据库兜底。
+- `packages/domain/src/media.ts`：上传申请校验（MIME 闭集、扩展名同族、文件名不含路径分隔符与控制字符、字节数上限）、服务端生成对象 key（`media/yyyy/mm/<uuid>.<ext>`）、图片头解析（PNG IHDR / JPEG SOF / WebP VP8·VP8L·VP8X，含 12000 边长与 8000 万像素上限）、真实类型判定、摘要与大小比对。
+- 存储抽象 `apps/api/src/media/storage.ts`：本地目录驱动（HMAC 签名 URL、临时文件改名落盘、路径越界双重校验）与 S3 兼容驱动（SigV4 预签名，已用 AWS 官方测试向量校验签名结果）。`MEDIA_DRIVER`/`S3_*`/`MEDIA_LOCAL_ROOT` 决定驱动；上传签名密钥由实例加密密钥派生，轮换实例密钥即作废旧上传链接。
+- `POST /admin/media/upload-target`：`media.manage` + CSRF + Origin；落一条 pending 记录并返回 `mediaId`、`objectKey`、短时 `uploadUrl`（15 分钟，PUT + Content-Type 绑定）与上限。
+- `POST /admin/media/complete`：`media.manage` + CSRF；服务端回读对象、自己算 SHA-256、自己从文件头判断类型与尺寸，任一项与申请不符即 422；`status='pending'` 条件更新保证重复确认返回 409；成功写审计 `media.uploaded`。
+- `GET /admin/media`（游标分页）、`GET /admin/media/:id`：返回元数据与 10 分钟读取链接；pending 行 `url=null`，不给无法兑现的链接。
+- 存储端点 `PUT/GET /api/v1/media/objects?key&expires&signature`：不读会话、不校验 CSRF，只认单对象单方法签名；GET 只服务已确认媒体，响应带 `nosniff`、`private, max-age=300` 与摘要 ETag。它不属于 OpenAPI 业务契约，已在 API_SPEC.md 说明。
+- 前台只读目录：`GET /storefront/config`、`/products`、`/products/:slug`、`/categories`。可售条件全部写成查询条件——`status='active'`、`publishedAt` 为空或已到、`marketCodes` 含当前市场、市场已审核且未过期、市场配置了可售清单时必须在清单内；未指定市场取字典序第一个可售市场，指定了不可售市场则列表为空/详情 404，不静默换市场。语言只允许店铺已启用语言，缺失翻译回退默认语言。
+- apps/admin 新增 /admin/media：上传（浏览器算摘要 → 申请目标 → 直传字节 → 确认）、缩略图列表、复制媒体 ID；商品与店铺设置页给出入口。
+
+验证：pnpm check 通过（43 项顶层 Node 测试：5 项媒体域单测 + S3 签名向量 + 真实 PostgreSQL 媒体 HTTP 用例 + 前台过滤用例 + 既有身份/店铺/目录回归，21 项 Python 契约测试），管理端类型检查与生产构建通过（新增 /admin/media 路由）；本地 Edge 的 pnpm test:browser 34 项桌面/手机用例通过（新增媒体页 2 项×2 项目）。
+
+关键对抗用例：SVG/GIF 与扩展名不同族 422、超过 10 MiB 422、无扩展名按 MIME 放宽、对象 key 不能越出 media 前缀、伪造/过期/无签名 PUT 与 GET 一律 403、错误摘要 422 且记录保持 pending、未知对象 422、重复确认 409、确认后 pending 才转 ready、pending 对象不提供字节、品牌引用不存在的媒体 422、`catalog.read` 不能读媒体库、未审核市场前台为空、未来发布时间与草稿不可见、英文 slug 用中文前台访问按当前语言回退。
+
+边界：本地驱动把字节写在 API 主机磁盘上，多副本部署必须改 S3 驱动；S3 驱动的确认步骤会整对象回读算摘要（单文件 ≤10 MiB），未做分片与 CDN；无媒体删除/替换/裁剪接口，pending 行不会自动清理；前台只输出媒体引用不输出图片地址（契约未定义），三语参考前台与页面内容（M04）未开始；购物车与结账未实现。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 9 条迁移）。

@@ -971,6 +971,41 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/media:
+    get:
+      tags: [Catalog]
+      operationId: listMedia
+      summary: List uploaded media assets
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: media.manage
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { $ref: '#/components/responses/MediaAssetListSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/media/{id}:
+    get:
+      tags: [Catalog]
+      operationId: getMedia
+      summary: Get one media asset and its short-lived read URL
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: media.manage
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { $ref: '#/components/responses/MediaAssetSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/media/upload-target:
     post:
       tags: [Catalog]
@@ -3430,6 +3465,28 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/BrandEnvelope'
+    MediaAssetListSuccess:
+      description: Media library page in reverse chronological order; read URLs are short-lived
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MediaAssetListEnvelope'
+    MediaAssetSuccess:
+      description: Media asset metadata with a short-lived read URL
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MediaAssetEnvelope'
     Created:
       description: Resource created
       headers:
@@ -4704,6 +4761,44 @@ components:
           required: [items]
           properties:
             items: { type: array, items: { $ref: '#/components/schemas/Brand' } }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    MediaAsset:
+      type: object
+      additionalProperties: false
+      required: [id, objectKey, contentType, sizeBytes, sha256, width, height, originalFileName, status, url, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        objectKey: { type: string, minLength: 1, maxLength: 512 }
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        sizeBytes: { type: integer, minimum: 1, maximum: 10485760 }
+        sha256: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$' }
+        width: { type: [integer, 'null'], minimum: 1, maximum: 12000 }
+        height: { type: [integer, 'null'], minimum: 1, maximum: 12000 }
+        originalFileName: { type: string, minLength: 1, maxLength: 255 }
+        status: { type: string, enum: [pending, ready] }
+        url: { type: [string, 'null'], maxLength: 2048 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    MediaAssetEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/MediaAsset' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    MediaAssetListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/MediaAsset' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
     AdminProduct:
       type: object

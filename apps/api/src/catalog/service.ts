@@ -156,7 +156,8 @@ export class CatalogService {
   async createBrand(supplied: string, csrfValue: string, body: BrandBody, ctx: RequestContext) {
     return this.identity.withPermission(supplied, csrfValue, 'catalog.write', async (tx, actor) => {
       const translations = this.rule(() => normalizeLabelTranslations(body.translations ?? [], false));
-      const row = await this.guarded(() => tx.brand.create({ data: { logoMediaId: body.logoMediaId ?? null, enabled: body.enabled ?? true,
+      const logoMediaId = await this.requireLogo(tx, body.logoMediaId ?? null);
+      const row = await this.guarded(() => tx.brand.create({ data: { logoMediaId, enabled: body.enabled ?? true,
         translations: { create: translations } }, include: { translations: true } }));
       await this.identity.recordAudit(tx, ctx, actor.id, 'catalog.brand.created', row.id);
       return this.brandView(row);
@@ -170,8 +171,9 @@ export class CatalogService {
       if (!existing) throw new AuthError(404, 'NOT_FOUND');
       if (existing.version !== version) throw new AuthError(409, 'VERSION_CONFLICT');
       const translations = body.translations ? this.rule(() => normalizeLabelTranslations(body.translations!, false)) : null;
+      const logoMediaId = body.logoMediaId === undefined ? undefined : await this.requireLogo(tx, body.logoMediaId);
       const row = await this.guarded(() => tx.brand.update({ where: { id }, include: { translations: true }, data: {
-        logoMediaId: body.logoMediaId === undefined ? existing.logoMediaId : body.logoMediaId,
+        logoMediaId: logoMediaId === undefined ? existing.logoMediaId : logoMediaId,
         enabled: body.enabled ?? existing.enabled, version: { increment: 1 },
         ...(translations ? { translations: { deleteMany: {}, create: translations } } : {}),
       } }));
@@ -241,6 +243,20 @@ export class CatalogService {
     return brandId;
   }
 
+  /** 只能引用本实例已确认的媒体；pending 对象没有可展示的字节，不能挂到商品或品牌上。 */
+  private async requireMedia(tx: Tx, ids: readonly string[]) {
+    const unique = [...new Set(ids)];
+    if (!unique.length) return;
+    const found = await tx.mediaAsset.count({ where: { id: { in: unique }, status: 'ready' } });
+    if (found !== unique.length) this.rule(() => { throw new CatalogRuleError('media'); });
+  }
+
+  private async requireLogo(tx: Tx, logoMediaId: string | null) {
+    if (!logoMediaId) return null;
+    await this.requireMedia(tx, [logoMediaId]);
+    return logoMediaId;
+  }
+
   private async requireMarkets(tx: Tx, codes: readonly string[]) {
     if (!codes.length) this.rule(() => { throw new CatalogRuleError('marketCodes'); });
     const normalized = codes.map(code => this.rule(() => normalizeMarketCode(code)));
@@ -260,6 +276,7 @@ export class CatalogService {
       const categoryIds = await this.requireCategories(tx, body.categoryIds ?? []);
       const marketCodes = await this.requireMarkets(tx, body.marketCodes ?? []);
       const brandId = await this.requireBrand(tx, body.brandId ?? null);
+      await this.requireMedia(tx, media.map(item => item.mediaId));
       const id = randomUUID();
       const row = await this.guarded(() => tx.product.create({ data: {
         id, status: 'draft', baseSku: body.baseSku?.trim() || null, brandId, taxClassRef: body.taxClassRef?.trim() || null,
@@ -293,6 +310,7 @@ export class CatalogService {
       const categoryIds = body.categoryIds ? await this.requireCategories(tx, body.categoryIds) : null;
       const marketCodes = body.marketCodes ? await this.requireMarkets(tx, body.marketCodes) : null;
       const brandId = body.brandId === undefined ? undefined : await this.requireBrand(tx, body.brandId);
+      if (media) await this.requireMedia(tx, media.map(item => item.mediaId));
 
       if (variants) {
         const incoming = new Set(variants.map(variant => variant.sku));

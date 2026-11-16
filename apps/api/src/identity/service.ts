@@ -751,9 +751,14 @@ export class IdentityService {
         faviconMediaId: body.brandAssets?.faviconMediaId !== undefined ? body.brandAssets.faviconMediaId : row.faviconMediaId,
       }));
 
+      // 品牌资产只能引用已确认的媒体：pending 对象还没有可读字节，指向它等于挂空图。
+      const assets = [...new Set([settings.logoMediaId, settings.faviconMediaId].filter((value): value is string => Boolean(value)))];
+      if (assets.length && await tx.mediaAsset.count({ where: { id: { in: assets }, status: 'ready' } }) !== assets.length) {
+        throw new AuthError(422, 'MEDIA_NOT_FOUND');
+      }
+
       if (body.marketProfiles) {
-        const existing = new Map((await tx.marketProfile.findMany({ where: { storeConfigId: row.id } })).map(market => [market.marketCode, market]));
-        for (const input of body.marketProfiles) {
+        const existing = new Map((await tx.marketProfile.findMany({ where: { storeConfigId: row.id } })).map(market => [market.marketCode, market]));        for (const input of body.marketProfiles) {
           const market = this.rule(() => normalizeMarketInput(input));
           const stored = existing.get(market.marketCode);
           if (market.enabled) {

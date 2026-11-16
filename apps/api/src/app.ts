@@ -9,6 +9,12 @@ import { RolesController } from './identity/roles-controller.js';
 import { StoreController } from './identity/store-controller.js';
 import { CatalogController } from './catalog/controller.js';
 import { CatalogService } from './catalog/service.js';
+import { MediaController, MediaObjectsController } from './media/controller.js';
+import { mediaStorageConfig } from './media/config.js';
+import { MediaService } from './media/service.js';
+import { createMediaStorage, type MediaStorage } from './media/storage.js';
+import { StorefrontController } from './storefront/controller.js';
+import { StorefrontService } from './storefront/service.js';
 import { StaffController } from './identity/staff-controller.js';
 import { IdentityController } from './identity/controller.js';
 import { AuthError, IdentityService } from './identity/service.js';
@@ -47,6 +53,7 @@ class ApiExceptionFilter implements ExceptionFilter {
       403: ['FORBIDDEN', 'Access denied.'],
       404: ['NOT_FOUND', 'Resource not found.'],
       409: ['STATE_CONFLICT', 'State has changed.'],
+      413: ['PAYLOAD_TOO_LARGE', 'Request body is too large.'],
       422: ['VALIDATION_ERROR', 'Invalid request.'],
       429: ['RATE_LIMITED', 'Please retry later.'],
       503: ['SERVICE_NOT_READY', 'Service is not ready.'],
@@ -60,8 +67,17 @@ class ApiExceptionFilter implements ExceptionFilter {
   }
 }
 
-export async function createApp(identity: IdentityService | null = null) {
-  @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController, CatalogController], providers: [{ provide: 'IDENTITY', useValue: identity }, { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null }] })
+export interface AppOptions { mediaStorage?: MediaStorage }
+
+export async function createApp(identity: IdentityService | null = null, options: AppOptions = {}) {
+  // 媒体存储默认按环境配置构造；测试可以注入临时目录，避免把上传文件写进仓库。
+  const mediaStorage = identity ? options.mediaStorage ?? createMediaStorage(mediaStorageConfig(process.env, identity.config.encryptionKey)) : null;
+  @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
+    CatalogController, MediaController, MediaObjectsController, StorefrontController],
+    providers: [{ provide: 'IDENTITY', useValue: identity },
+      { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
+      { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
+      { provide: 'STOREFRONT', useValue: identity ? new StorefrontService(identity) : null }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');
