@@ -1462,8 +1462,28 @@ export interface paths {
         /** List refund ledger entries */
         get: operations["listRefunds"];
         put?: never;
-        /** Request a refund without exceeding the refundable amount */
+        /**
+         * Request a refund without exceeding the refundable amount
+         * @description Money may only be refunded against a payment that actually settled. The amount is capped by the settled balance minus refunds already made or still in flight; the order total is not the limit. Requests carry an Idempotency-Key so a retry cannot book a second refund.
+         */
         post: operations["createRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/refunds/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a refund and its event history */
+        get: operations["getRefund"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1479,8 +1499,28 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve a pending refund */
+        /**
+         * Approve a pending refund
+         * @description The approver must differ from the requester. Approval only moves the ledger state; money is moved by a separate execute step under refund.execute.
+         */
         post: operations["approveRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/refunds/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a pending refund with a reason */
+        post: operations["rejectRefund"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1496,7 +1536,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Execute an approved refund through its original payment adapter */
+        /**
+         * Execute an approved refund through its original payment channel
+         * @description Offline channels (cash on delivery, manual transfer) record a payout that already happened and therefore require a payout reference. Online channels without a configured adapter answer 503 rather than pretending the refund succeeded. An unknown provider state cannot be forced.
+         */
         post: operations["executeRefund"];
         delete?: never;
         options?: never;
@@ -2199,7 +2242,10 @@ export interface paths {
         /** List after-sales cases */
         get: operations["listAfterSalesCases"];
         put?: never;
-        /** Create an after-sales case linked to an order */
+        /**
+         * Create an after-sales case linked to an order
+         * @description The server computes the selectable quantities from the order lines minus quantities already requested by other live cases of the same order; the client cannot ask for more.
+         */
         post: operations["createAfterSalesCase"];
         delete?: never;
         options?: never;
@@ -2233,7 +2279,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve an eligible after-sales case */
+        /**
+         * Approve an eligible after-sales case
+         * @description Approving a cancellation case cancels the order and releases its inventory hold; that is only allowed while the order is unshipped and unpaid. Other case types lock the approved quantities and refundable amount without moving any money.
+         */
         post: operations["approveAfterSalesCase"];
         delete?: never;
         options?: never;
@@ -2258,6 +2307,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/after-sales/{id}/return-shipment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record the carrier and tracking number of a return parcel */
+        post: operations["registerAfterSalesReturnShipment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/after-sales/{id}/receive-return": {
         parameters: {
             query?: never;
@@ -2267,7 +2333,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Record physical receipt of returned items */
+        /**
+         * Record physical receipt of returned items
+         * @description Receiving does not change sellable stock. Quantities are capped by what the case approved and by what has not already been received.
+         */
         post: operations["receiveAfterSalesReturn"];
         delete?: never;
         options?: never;
@@ -2284,7 +2353,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Record item inspection and inventory disposition */
+        /**
+         * Record item inspection and inventory disposition
+         * @description Only sellable quantities return to on-hand stock; damaged, quarantined and scrapped items are recorded as a disposition movement without increasing sellable stock.
+         */
         post: operations["inspectAfterSalesReturn"];
         delete?: never;
         options?: never;
@@ -2301,8 +2373,28 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Request refund for an approved after-sales case */
+        /**
+         * Request refund for an approved after-sales case
+         * @description The payment is chosen by the server from settled payments of the order. The amount is capped by both the case approval and the refundable balance of that payment.
+         */
         post: operations["refundAfterSalesCase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/after-sales/{id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close a case once no refund is still in flight */
+        post: operations["closeAfterSalesCase"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3847,7 +3939,7 @@ export interface components {
                 orderItemId: string;
                 quantity: number;
             }[];
-            reasonCode: string;
+            reasonCode?: string | null;
             reason: string;
             requestedRefundMinor?: number | null;
         };
@@ -3875,8 +3967,247 @@ export interface components {
         AfterSalesRefundRequest: {
             amountMinor: number;
             currency: string;
-            reasonCode: string;
+            reasonCode: string | null;
             reason: string;
+        };
+        /** @enum {string} */
+        AfterSalesCaseType: "cancel" | "refund" | "return" | "exchange";
+        /**
+         * @description Cases only move forward. A cancellation case closes as soon as the order is cancelled because there is nothing left to fulfil; refunds, returns and exchanges keep their own timeline.
+         * @enum {string}
+         */
+        AfterSalesCaseStatus: "submitted" | "under_review" | "approved" | "rejected" | "needs_information" | "return_in_transit" | "received_inspection" | "refund_pending" | "refunded" | "replacement_sent" | "completed" | "closed";
+        /**
+         * @description Unknown means the provider has not answered yet; it can only be resolved by a provider query or webhook, never by an operator forcing a state.
+         * @enum {string}
+         */
+        RefundStatus: "requested" | "approved" | "processing" | "refunded" | "failed" | "rejected" | "cancelled" | "unknown";
+        ReturnShipmentRequest: {
+            carrierCode?: string | null;
+            carrierName?: string | null;
+            trackingNumber: string;
+            /** Format: date-time */
+            shippedAt?: string | null;
+            reference?: string | null;
+            note?: string | null;
+        };
+        RefundExecuteRequest: {
+            reason: string;
+            /** @description Payout proof for offline channels (bank slip, cash receipt); required for them. */
+            reference?: string | null;
+            /** Format: date-time */
+            occurredAt?: string | null;
+        };
+        AdminRefund: {
+            /** Format: uuid */
+            id: string;
+            publicRefundNumber: string;
+            /** Format: uuid */
+            orderId: string;
+            publicOrderNumber: string;
+            /** Format: uuid */
+            paymentId: string;
+            publicPaymentNumber: string;
+            /** Format: uuid */
+            caseId?: string | null;
+            /** @enum {string} */
+            channel: "cod" | "manual" | "online";
+            providerCode: string;
+            /** @enum {string} */
+            environment: "sandbox" | "production";
+            amountMinor: number;
+            currency: string;
+            status: components["schemas"]["RefundStatus"];
+            reasonCode?: string | null;
+            reason: string;
+            /** Format: uuid */
+            requestedBy: string;
+            /** Format: uuid */
+            approvedBy?: string | null;
+            /** Format: uuid */
+            executedBy?: string | null;
+            /** Format: date-time */
+            approvedAt?: string | null;
+            /** Format: date-time */
+            executedAt?: string | null;
+            reference?: string | null;
+            externalRefundId?: string | null;
+            failureCode?: string | null;
+            failureMessage?: string | null;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            events?: {
+                /** Format: uuid */
+                id: string;
+                /** @enum {string} */
+                type: "requested" | "approved" | "rejected" | "executed" | "failed" | "cancelled" | "unknown";
+                fromStatus?: string | null;
+                toStatus: components["schemas"]["RefundStatus"];
+                /** @enum {string} */
+                source: "admin" | "system" | "provider";
+                /** Format: uuid */
+                actorId?: string | null;
+                /** Format: date-time */
+                occurredAt: string;
+            }[];
+        };
+        RefundEnvelope: {
+            data: components["schemas"]["AdminRefund"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        RefundListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminRefund"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        AdminAfterSalesItem: {
+            /** Format: uuid */
+            orderItemId: string;
+            sku: string;
+            productName: string;
+            variantName?: string | null;
+            orderedQuantity: number;
+            requestedQuantity: number;
+            approvedQuantity?: number | null;
+            amountMinor?: number | null;
+            /** @enum {string|null} */
+            disposed?: "sellable" | "damaged" | "quarantine" | "scrap" | null;
+            receivedQuantity: number;
+            inspectedQuantity: number;
+        };
+        AdminAfterSalesCase: {
+            /** Format: uuid */
+            id: string;
+            publicCaseNumber: string;
+            /** Format: uuid */
+            orderId: string;
+            publicOrderNumber: string;
+            caseType: components["schemas"]["AfterSalesCaseType"];
+            status: components["schemas"]["AfterSalesCaseStatus"];
+            reasonCode?: string | null;
+            reason: string;
+            /** @enum {string} */
+            source: "admin" | "customer";
+            requestedRefundMinor: number | null;
+            approvedRefundMinor: number | null;
+            refundedMinor: number;
+            pendingRefundMinor: number;
+            refundableMinor: number;
+            currency: string;
+            /** @enum {string} */
+            orderStatus: "pending_payment" | "awaiting_confirmation" | "confirmed" | "processing" | "partially_shipped" | "shipped" | "completed" | "cancelled" | "on_hold";
+            /** @enum {string} */
+            paymentStatus: "created" | "requires_action" | "processing" | "succeeded" | "failed" | "cancelled" | "unknown" | "cod_due" | "collected" | "rejected" | "returned";
+            orderTotalMinor: number;
+            contactMasked?: string | null;
+            /** Format: uuid */
+            ownerId?: string | null;
+            /** Format: date-time */
+            approvedAt?: string | null;
+            /** Format: uuid */
+            approvedBy?: string | null;
+            /** Format: date-time */
+            rejectedAt?: string | null;
+            rejectReason?: string | null;
+            /** Format: date-time */
+            closedAt?: string | null;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            items: components["schemas"]["AdminAfterSalesItem"][];
+            refunds: {
+                /** Format: uuid */
+                id: string;
+                publicRefundNumber: string;
+                status: components["schemas"]["RefundStatus"];
+                amountMinor: number;
+                currency: string;
+                /** @enum {string} */
+                channel: "cod" | "manual" | "online";
+                /** Format: date-time */
+                createdAt: string;
+                /** Format: date-time */
+                executedAt?: string | null;
+            }[];
+            returns: {
+                /** Format: uuid */
+                id: string;
+                /** @enum {string} */
+                status: "in_transit" | "received";
+                carrierCode?: string | null;
+                carrierName?: string | null;
+                trackingNumber?: string | null;
+                /** Format: date-time */
+                shippedAt?: string | null;
+                /** Format: date-time */
+                receivedAt?: string | null;
+                reference?: string | null;
+            }[];
+            receipts: {
+                /** Format: uuid */
+                id: string;
+                /** Format: date-time */
+                receivedAt: string;
+                reference?: string | null;
+                items: {
+                    /** Format: uuid */
+                    orderItemId: string;
+                    quantity: number;
+                }[];
+            }[];
+            inspections: {
+                /** Format: uuid */
+                id: string;
+                /** Format: uuid */
+                orderItemId: string;
+                quantity: number;
+                /** @enum {string} */
+                disposition: "sellable" | "damaged" | "quarantine" | "scrap";
+                note?: string | null;
+                /** Format: uuid */
+                actorId?: string | null;
+                /** Format: date-time */
+                createdAt: string;
+            }[];
+            events: {
+                /** Format: uuid */
+                id: string;
+                /** @enum {string} */
+                type: "created" | "approved" | "rejected" | "return_registered" | "received" | "inspected" | "refund_requested" | "refunded" | "closed";
+                fromStatus?: string | null;
+                toStatus: components["schemas"]["AfterSalesCaseStatus"];
+                note?: string | null;
+                /** Format: uuid */
+                actorId?: string | null;
+                /** Format: date-time */
+                createdAt: string;
+            }[];
+            /** @description Present only for sessions holding customers.read_pii. */
+            contact?: {
+                email: string | null;
+                phone: string | null;
+                fullName: string | null;
+            };
+        };
+        AfterSalesCaseEnvelope: {
+            data: components["schemas"]["AdminAfterSalesCase"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        AfterSalesCaseListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminAfterSalesCase"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
         };
     };
     responses: {
@@ -4169,6 +4500,74 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["PaymentMethodEnvelope"];
+            };
+        };
+        /** @description After-sales case with its timeline, returns, receipts and refunds */
+        AfterSalesCaseSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                /** @description Case version for the next If-Match */
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AfterSalesCaseEnvelope"];
+            };
+        };
+        /** @description Newly created after-sales case in submitted state */
+        AfterSalesCaseCreated: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AfterSalesCaseEnvelope"];
+            };
+        };
+        /** @description After-sales case page */
+        AfterSalesCaseListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AfterSalesCaseListEnvelope"];
+            };
+        };
+        /** @description Refund ledger entry with its append-only event history */
+        RefundSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RefundEnvelope"];
+            };
+        };
+        /** @description Refund request recorded in requested state; no money has moved yet */
+        RefundCreated: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RefundEnvelope"];
+            };
+        };
+        /** @description Refund ledger page */
+        RefundListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RefundListEnvelope"];
             };
         };
         /** @description Recorded payment outcome together with the projected order payment state */
@@ -6627,6 +7026,10 @@ export interface operations {
             query?: {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
+                status?: components["schemas"]["RefundStatus"];
+                orderId?: string;
+                caseId?: string;
+                paymentId?: string;
             };
             header?: never;
             path?: never;
@@ -6634,9 +7037,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["RefundListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -6656,12 +7060,30 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["RefundCreated"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
-            503: components["responses"]["Unavailable"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getRefund: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RefundSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -6683,15 +7105,16 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["RefundSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
-    executeRefund: {
+    rejectRefund: {
         parameters: {
             query?: never;
             header: {
@@ -6709,11 +7132,39 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["RefundSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    executeRefund: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Same key and same request returns the original result; same key with different request returns IDEMPOTENCY_CONFLICT. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundExecuteRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["RefundSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
             503: components["responses"]["Unavailable"];
             default: components["responses"]["UnexpectedError"];
         };
@@ -7784,6 +8235,10 @@ export interface operations {
             query?: {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
+                status?: components["schemas"]["AfterSalesCaseStatus"];
+                caseType?: components["schemas"]["AfterSalesCaseType"];
+                orderId?: string;
+                q?: string;
             };
             header?: never;
             path?: never;
@@ -7791,9 +8246,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["AfterSalesCaseListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -7813,7 +8269,7 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["AfterSalesCaseCreated"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -7833,7 +8289,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["AfterSalesCaseSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -7844,6 +8300,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
                 /** @description Same key and same request returns the original result; same key with different request returns IDEMPOTENCY_CONFLICT. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
@@ -7858,7 +8316,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["AfterSalesCaseSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -7885,11 +8343,39 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["AfterSalesCaseSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    registerAfterSalesReturnShipment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Same key and same request returns the original result; same key with different request returns IDEMPOTENCY_CONFLICT. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReturnShipmentRequest"];
+            };
+        };
+        responses: {
+            201: components["responses"]["AfterSalesCaseSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -7911,11 +8397,12 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["AfterSalesCaseSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -7937,7 +8424,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["AfterSalesCaseSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -7964,7 +8451,36 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["RefundCreated"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    closeAfterSalesCase: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description Same key and same request returns the original result; same key with different request returns IDEMPOTENCY_CONFLICT. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["AfterSalesCaseSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

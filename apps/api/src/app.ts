@@ -18,6 +18,8 @@ import { MediaController, MediaObjectsController } from './media/controller.js';
 import { mediaStorageConfig } from './media/config.js';
 import { MediaService } from './media/service.js';
 import { createMediaStorage, type MediaStorage } from './media/storage.js';
+import { AfterSalesController } from './aftersales/controller.js';
+import { AfterSalesService } from './aftersales/service.js';
 import { OrdersController } from './orders/controller.js';
 import { PaymentsController } from './payments/controller.js';
 import { PaymentsService } from './payments/service.js';
@@ -87,9 +89,10 @@ export async function createApp(identity: IdentityService | null = null, options
   const payments = identity ? new PaymentsService(identity) : null;
   const checkout = identity && cart && shipping && payments ? new CheckoutService(identity, cart, shipping, payments) : null;
   const orders = identity && shipping ? new OrdersService(identity, shipping) : null;
+  const afterSales = identity ? new AfterSalesService(identity) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
-    OrdersController, PaymentsController],
+    OrdersController, PaymentsController, AfterSalesController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
@@ -98,7 +101,8 @@ export async function createApp(identity: IdentityService | null = null, options
       { provide: 'CART', useValue: cart },
       { provide: 'CHECKOUT', useValue: checkout },
       { provide: 'ORDERS', useValue: orders },
-      { provide: 'PAYMENTS', useValue: payments }] })
+      { provide: 'PAYMENTS', useValue: payments },
+      { provide: 'AFTERSALES', useValue: afterSales }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

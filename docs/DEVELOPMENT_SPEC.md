@@ -263,7 +263,9 @@ packages/
 | `shipping.manage`, `notifications.read`, `notifications.manage`, `notifications.retry` | Owner、Admin；Shipping/Operations 岗位按职责授权 | 配送规则有版本；重发只重试通知，不重做业务动作 |
 | `reports.view`, `reports.export` | Owner、Admin、ReportsReadOnly | ReportsReadOnly 仅聚合结果，不能查看顾客/订单 PII |
 | `privacy.read`, `privacy.manage`, `privacy.verify`, `privacy.process`, `privacy.export` | Owner、PrivacySpecialist 按任务授权 | 核验、处理、导出分权；申请人不得审批自己处理的请求 |
-| `aftersales.read`, `aftersales.manage`, `aftersales.approve`, `aftersales.inspect`, `audit.read` | Owner；客服/仓库/审计人员按职责授权 | 售后审批/质检/审计权限分开；审计记录不可编辑/删除 |
+| `aftersales.read`, `aftersales.manage`, `aftersales.approve`, `aftersales.inspect`, `audit.read` | Owner；OrderSupport 默认 `read`+`manage`+`inspect` 不含 `approve`；Warehouse 只给 `inspect`；审计人员单授 `audit.read` | 售后审批（案件结论与批准金额）、质检处置、审计三类权限分开；审计记录不可编辑/删除 |
+
+售后与退款的实际授权形状（`role-presets.ts`）：`aftersales` 预设组固定为 `read`+`manage`+`approve`+`inspect` 四项；`order_support` 显式列 `read`/`manage`/`inspect` 三项、不含 `approve`；`warehouse` 只拿 `aftersales.inspect`。退款另走 `refunds.create`、`refund.approve`、`refund.execute`：`finance` 预设三项全给，Owner 全给，OrderSupport 与 Warehouse 一项都不给。服务端在 `approveRefund` 里强制“申请人 ≠ 批准人”（`403 SELF_APPROVAL_FORBIDDEN`），因此即便一个账号拿到全部三项，也不能自建自批；取消类案件的批准会同时取消订单并释放预留，所以它要求 `aftersales.approve` 而不是 `orders.cancel`。
 
 本表的代码投影是 `packages/config/src/role-presets.ts`（服务启动时幂等补齐缺失的预设角色，已存在的预设不被覆盖）；新增权限码时先改契约 x-permission，再同步该文件，否则启动会因预设引用未知权限码而失败。
 

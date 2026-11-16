@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进履约与售后（M09/M16）：包裹承运商与状态回传、退货收件与质检，以及建立在这些之上的退款（审批与执行分权、调用原支付适配器或人工凭据登记）；结算文件导入与对账差异队列（M08 剩余部分）依赖选定服务商与文件格式，须在客户提供沙箱/生产凭证后单独验收。前台展示目前只有只读目录接口，三语参考前台（M02 前台部分）与页面内容（M04）尚未开始。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+推进库存与优惠（M12/M11）：`InventoryMovement` 本批只为退货入库建表，接下来把库存调整（人工增减、盘点、不可 set `onHand`）、流水查询与低库存阈值补齐，让售后入库和人工调整共用同一条流水口径；随后做优惠引擎（当前结账折扣恒为 0，优惠码只返回警告），它决定订单折扣分摊与退款返券规则。再往后是会员 OTP 与积分（M10）、报表（M14）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -263,3 +263,25 @@
 关键对抗用例：凭证引用传 `sk_live_...` 422、启用无批准依据 422、缺 If-Match 422、旧版本改配置 409、响应体不含 `secretRef`、仍有待收流水时停用 409、未发货登记 COD 收款 409 `ORDER_NOT_SHIPPED`、少收 1 分 422 `PAYMENT_AMOUNT_MISMATCH`、跨币种 422、收款时间早于下单时间 422、拒收/退回无原因 422、已收款订单取消 409 `PAID_ORDER_REQUIRES_REFUND`、同键重放不产生第二条流水、同键不同内容 409、拒收后再退回 409、退回保留 `paidAt`、停用 COD 后结账 422、人工转账未配置说明时不给伪造指令、回调式“人工改判未知状态”没有入口。
 
 边界：本批只做了线下渠道（COD、人工转账）与登记式台账，没有线上支付适配器、Webhook 原始 body 验签、事件重放窗口、`unknown` 自动重查（1/5/15/30 分钟）、退款（M16）与服务商结算文件对账，`connectionStatus`/`lastCheckedAt` 只有字段没有探活任务；订单付款状态投影只覆盖 `collected/succeeded/rejected/returned/cancelled/failed`，`authorized` 目前无处产生。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 12 条迁移）。
+
+## 2026-11-16：售后案件、退货质检与退款分权（M16）
+
+本批程序：
+
+- 第十三条迁移新增 `AfterSalesCase`/`AfterSalesItem`/`AfterSalesEvent`、`Refund`/`RefundEvent`、`ReturnShipment`/`ReturnReceipt`/`ReturnReceiptItem`、`InspectionRecord`、`InventoryMovement`。数据库继续承担业务不变量：`AfterSalesCase_approval_pair_check`（`approvedAt` 与 `approvedBy` 同真同假）、`AfterSalesCase_approved_amount_requires_approval_check`、`AfterSalesCase_status_requires_approval_check`（进入 `approved` 之后的状态必须已有批准记录，不能靠改字段跳过审核）、`AfterSalesCase_completed_closed_check`、`Refund_status_requires_approval_check`、`Refund_refunded_requires_execution_check`（`refunded` 必须有执行人与执行时间）、`InventoryMovement_restock_delta_check`（`("type"='return_restock') = ("stockDelta"="quantity")`）与 `InventoryMovement_onhand_only_on_restock_check`。台账号格式 `AS-YYYYMMDD-XXXXXX` / `REF-YYYYMMDD-XXXXXX`；`Refund.idempotencyKey` 与各事件表 `dedupeKey` 唯一，重放写不进第二行。
+- `packages/domain/src/aftersales.ts`（纯判定，不含 IO）：案件动作与结果的前向状态机（`CASE_ACTIONS`/`CASE_RESULT`）、`nextRefundStatus`（只进不退）、`refundableBalance`/`assertRefundWithinBalance`、`assertRefundablePayment`（只有 `collected|succeeded` 可退，`returned` 返回 `PAYMENT_ALREADY_RETURNED`）、`assertCancelCaseOrder`、`assertCaseRefundable`、`allocateLineAmount`（按行金额比例向下取整，余数不补，避免多退）、`approvedAmount`（申请额/行分摊额/订单总额三者取最小）、`assertInspectionQuantity`、`restocksStock`（只有 `sellable` 入库）、`caseNumber`/`refundNumber`。
+- `apps/api/src/orders/reservations.ts`：把 `releaseOrderReservations(tx, orderId, onlyExpired)` 从 `OrdersService` 抽出，订单取消与售后取消类案件复用同一段释放逻辑，避免两处各写一遍预留回收。
+- 售后案件：`GET/POST /admin/after-sales`（`after-sales.read`/`after-sales.manage`，游标分页 + `status`/`caseType`/`orderId` 筛选）、`GET /admin/after-sales/:id`。建案时不接受客户端传来的价格与总计：行必须属于该订单，数量按同一案件内累计（`requestedQuantity`），超可退量 422，`requestedRefundMinor` 只是申请额、不是承诺额。
+- 审核：`POST /admin/after-sales/:id/approve`（`aftersales.approve` + CSRF + Origin + `If-Match` + `Idempotency-Key`）——批准金额取三者最小值，逐行写 `approvedQuantity`/`amountMinor`；`cancel` 类案件在同一事务内取消订单、释放全部 active 预留、直接置 `completed`+`closedAt`，已收款 409 `PAID_ORDER_REQUIRES_REFUND`、已发货 409 `ORDER_ALREADY_SHIPPED`。`POST .../reject` 只写驳回原因，案件不可再前进。
+- 退货链路：`POST .../return-shipment`（承运商/追踪号/寄回时间，进入 `return_in_transit`）→ `POST .../receive-return`（收件时间、参考号、逐行数量，累计不得超过批准量）→ `POST .../inspect`（`aftersales.inspect`，逐行数量与处置 `sellable|damaged|quarantine|scrap`）。只有 `sellable` 在事务内 `UPDATE ... inventoryItem onHand + qty` 并写 `InventoryMovement(type=return_restock)`；损坏/冻结/报废只写质检记录，不动库存——「退货即入库」这条路走不通。超量质检 422 `INSPECTION_QUANTITY_EXCEEDED`。
+- 退款台账（与支付台账分开的独立记录）：`GET /admin/refunds`（`refunds.read`，可按 `status`/`orderId`/`paymentId` 筛选）、`GET /admin/refunds/:id`（含追加写 `events[]`）、`POST /admin/refunds`、`POST /admin/after-sales/:id/refund`。余额双维度校验：订单级「实收 − 已退 − 在途」与流水级余额都要过，案件内退款另受批准金额上限约束，超出一律 422 `REFUND_EXCEEDS_BALANCE`。
+- 分权：`POST /admin/refunds/:id/approve`（`refund.approve`）里 `requestedBy === actor.id` 直接 403 `SELF_APPROVAL_FORBIDDEN`；`POST /admin/refunds/:id/execute`（`refund.execute`）要求线下渠道必须留 `reference`（水单/现金凭据），线上渠道在没有真实适配器时返回 503 `PAYMENT_ADAPTER_UNAVAILABLE`——不伪造退款成功。执行写 `RefundEvent` 并把 `Payment`/订单付款状态按投影规则同步，不原地改历史金额。
+- 结案与在途：在途退款（`requested|approved|processing|unknown`）计入 `pendingRefundMinor`，`POST .../close` 此时 409 `REFUND_IN_PROGRESS`，不存在「结案了钱还在飞」的状态。
+- 权限：`aftersales` 预设组扩为 `read`+`manage`+`approve`+`inspect`；`order_support` 显式拿 `read`/`manage`/`inspect`（不含 `approve`）；`warehouse` 只拿 `aftersales.inspect`；退款三项仍只给 Owner 与 Finance。`docs/DEVELOPMENT_SPEC.md` 7.1 与 `docs/API_SPEC.md` 3.4/3.6.6 同步。
+- apps/admin 新增 /admin/aftersales：列表与筛选、从订单建案（`?orderId=` 预填并自动载入订单行）、审核/驳回、寄回物流、收件、质检处置、申请退款、批准退款、登记已退款（凭据）、结案与时间线；订单详情新增「为该订单建立售后案件」入口，商品目录、媒体库、配送、付款、店铺设置页给出入口。
+
+验证：pnpm check 通过（Node 88 项：售后域 10 项 + 真实 PostgreSQL 售后 HTTP 用例 + 订单/付款/结账/目录/身份回归；Python 契约 30 项，新增售后快照字段、退款与支付分离、售后写权限与幂等三项断言），管理端类型检查与生产构建通过（新增 /admin/aftersales 路由）；本地 Edge 的 pnpm test:browser 54 项桌面/手机用例通过（新增售后页 2 项×2 项目）。
+
+关键对抗用例：无 `aftersales.approve` 不能批准案件 403、批准无 If-Match/版本过期 409、行不属于该订单 422、同一案件累计申请量超额 422、取消类批准同时取消订单并释放预留、已收款订单走取消类 409 `PAID_ORDER_REQUIRES_REFUND`、申请人自己批退款 403 `SELF_APPROVAL_FORBIDDEN`、超过可退余额 422 `REFUND_EXCEEDS_BALANCE`、案件内退款超批准额 422、同幂等键重放不产生第二笔退款、同键不同金额 409 `IDEMPOTENCY_CONFLICT`、在途退款时结案 409 `REFUND_IN_PROGRESS`、COD 未收款无款可退 422 `NOTHING_TO_REFUND`、线上渠道无适配器 503、线下渠道无凭据 422、质检数量超收件量 422 `INSPECTION_QUANTITY_EXCEEDED`、只有 `sellable` 让 `onHand` +1（损坏处置后账面不变）、案件响应改写订单总额字段被 schema 拒绝、`refunded` 无执行人写不进数据库。
+
+边界：本批没有线上支付/退款适配器（`online` 渠道只到 `503 PAYMENT_ADAPTER_UNAVAILABLE`）、没有换货发货（`exchange` 案件可建案与批准，但没有补发包裹接口）、没有顾客自助售后入口（只有后台建案）、没有退货物流回传与逆向运费、没有退款重试/自动对账与 `unknown` 重查任务、没有部分质检后自动拆分处置；`InventoryMovement` 本批只由退货入库产生，库存调整与调拨仍在 M12 未做。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 13 条迁移）。

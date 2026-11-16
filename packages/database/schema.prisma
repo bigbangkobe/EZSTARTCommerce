@@ -362,6 +362,7 @@ model ProductVariant {
   quoteLines CheckoutQuoteLine[]
   orderItems OrderItem[]
   reservations InventoryReservation[]
+  inventoryMovements InventoryMovement[]
 }
 
 model ProductMedia {
@@ -568,6 +569,8 @@ model ShopOrder {
   addressChanges OrderAddressChange[]
   payments Payment[]
   paymentEvents PaymentEvent[]
+  afterSalesCases AfterSalesCase[]
+  refunds Refund[]
   @@index([orderStatus, placedAt])
   @@index([placedAt])
 }
@@ -587,6 +590,7 @@ model OrderItem {
   lineDiscountMinor Int
   lineTotalMinor Int
   shipmentItems ShipmentItem[]
+  afterSalesItems AfterSalesItem[]
   @@index([orderId])
 }
 
@@ -742,6 +746,7 @@ model Payment {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   events PaymentEvent[]
+  refunds Refund[]
   @@index([orderId])
   @@index([status, createdAt])
   @@index([providerCode, providerTransactionId])
@@ -763,4 +768,201 @@ model PaymentEvent {
   occurredAt DateTime @db.Timestamptz(3)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   @@index([paymentId, occurredAt])
+}
+
+// ---- 售后与退款（M16 第一批）--------------------------------------------------
+// 售后案件不改写订单/付款快照：案件只记录申请、批准与处置，退款是独立的交易记录。
+// 三条数据库兜底：批准金额必须有批准时间；退款成功必须有执行时间；同一案件行不能重复入库。
+
+model AfterSalesCase {
+  id String @id @default(uuid()) @db.Uuid
+  publicCaseNumber String @unique
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  caseType String
+  status String @default("submitted")
+  reasonCode String?
+  reason String
+  source String @default("admin")
+  requestedRefundMinor Int?
+  approvedRefundMinor Int?
+  ownerId String? @db.Uuid
+  approvedAt DateTime? @db.Timestamptz(3)
+  approvedBy String? @db.Uuid
+  rejectedAt DateTime? @db.Timestamptz(3)
+  rejectedBy String? @db.Uuid
+  rejectReason String?
+  closedAt DateTime? @db.Timestamptz(3)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  items AfterSalesItem[]
+  refunds Refund[]
+  returns ReturnShipment[]
+  receipts ReturnReceipt[]
+  inspections InspectionRecord[]
+  events AfterSalesEvent[]
+  movements InventoryMovement[]
+  @@index([orderId, createdAt])
+  @@index([status, createdAt])
+  @@index([caseType, createdAt])
+}
+
+model AfterSalesItem {
+  id String @id @default(uuid()) @db.Uuid
+  caseId String @db.Uuid
+  afterSalesCase AfterSalesCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  orderItemId String @db.Uuid
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  requestedQuantity Int
+  approvedQuantity Int?
+  amountMinor Int?
+  disposition String?
+  @@unique([caseId, orderItemId])
+  @@index([orderItemId])
+}
+
+model Refund {
+  id String @id @default(uuid()) @db.Uuid
+  publicRefundNumber String @unique
+  idempotencyKey String @unique
+  requestDigest String
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  paymentId String @db.Uuid
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  caseId String? @db.Uuid
+  afterSalesCase AfterSalesCase? @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  channel String
+  providerCode String
+  environment String
+  amountMinor Int
+  currency String
+  status String @default("requested")
+  reasonCode String?
+  reason String
+  requestedBy String @db.Uuid
+  approvedBy String? @db.Uuid
+  executedBy String? @db.Uuid
+  approvedAt DateTime? @db.Timestamptz(3)
+  executedAt DateTime? @db.Timestamptz(3)
+  externalRefundId String?
+  reference String?
+  failureCode String?
+  failureMessage String?
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  events RefundEvent[]
+  @@index([orderId, createdAt])
+  @@index([paymentId, status])
+  @@index([status, createdAt])
+  @@index([caseId])
+}
+
+model RefundEvent {
+  id String @id @default(uuid()) @db.Uuid
+  refundId String @db.Uuid
+  refund Refund @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  type String
+  fromStatus String?
+  toStatus String
+  source String
+  actorId String? @db.Uuid
+  dedupeKey String @unique
+  payload Json
+  occurredAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([refundId, occurredAt])
+}
+
+model ReturnShipment {
+  id String @id @default(uuid()) @db.Uuid
+  caseId String @db.Uuid
+  afterSalesCase AfterSalesCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  carrierCode String?
+  carrierName String?
+  trackingNumber String?
+  status String @default("in_transit")
+  shippedAt DateTime? @db.Timestamptz(3)
+  receivedAt DateTime? @db.Timestamptz(3)
+  reference String?
+  note String?
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  receipts ReturnReceipt[]
+  @@index([caseId, createdAt])
+}
+
+model ReturnReceipt {
+  id String @id @default(uuid()) @db.Uuid
+  caseId String @db.Uuid
+  afterSalesCase AfterSalesCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  shipmentId String? @db.Uuid
+  shipment ReturnShipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  receivedAt DateTime @db.Timestamptz(3)
+  reference String?
+  actorId String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  items ReturnReceiptItem[]
+  @@index([caseId, receivedAt])
+}
+
+model ReturnReceiptItem {
+  id String @id @default(uuid()) @db.Uuid
+  receiptId String @db.Uuid
+  receipt ReturnReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  orderItemId String @db.Uuid
+  quantity Int
+  @@unique([receiptId, orderItemId])
+  @@index([orderItemId])
+}
+
+model InspectionRecord {
+  id String @id @default(uuid()) @db.Uuid
+  caseId String @db.Uuid
+  afterSalesCase AfterSalesCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  receiptId String? @db.Uuid
+  orderItemId String @db.Uuid
+  quantity Int
+  disposition String
+  note String?
+  actorId String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([caseId, createdAt])
+}
+
+// 处置流水：卖得出去的才加回 onHand，其余只记录去向，库存数字不为“已处理”背书。
+model InventoryMovement {
+  id String @id @default(uuid()) @db.Uuid
+  variantId String @db.Uuid
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  orderId String? @db.Uuid
+  caseId String? @db.Uuid
+  afterSalesCase AfterSalesCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  type String
+  quantity Int
+  stockDelta Int
+  onHandAfter Int?
+  reason String
+  dedupeKey String @unique
+  actorId String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([variantId, createdAt])
+  @@index([caseId])
+}
+
+model AfterSalesEvent {
+  id String @id @default(uuid()) @db.Uuid
+  caseId String @db.Uuid
+  afterSalesCase AfterSalesCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  type String
+  fromStatus String?
+  toStatus String
+  note String?
+  actorId String? @db.Uuid
+  dedupeKey String @unique
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([caseId, createdAt])
 }

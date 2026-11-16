@@ -27,7 +27,7 @@ const orders = ['orders.read', 'orders.update', 'orders.cancel', 'orders.address
 const inventory = ['inventory.read', 'inventory.adjust', 'inventory.manage'];
 const notifications = ['notifications.read', 'notifications.manage', 'notifications.retry'];
 const coupons = ['coupons.read', 'coupons.manage', 'coupons.issue'];
-const aftersales = ['aftersales.read', 'aftersales.manage'];
+const aftersales = ['aftersales.read', 'aftersales.manage', 'aftersales.approve', 'aftersales.inspect'];
 
 export const rolePresets: readonly RolePreset[] = [
   {
@@ -51,8 +51,9 @@ export const rolePresets: readonly RolePreset[] = [
   },
   {
     key: 'order_support', name: '订单客服', kind: 'preset',
-    permissions: [...orders, 'catalog.read', 'customers.read_masked', ...aftersales, 'notifications.read', 'reports.view'],
-    description: '订单客服：订单、未发货地址修改、配送与售后案件；只读脱敏顾客资料，退款审批与执行需另行授权。',
+    permissions: [...orders, 'catalog.read', 'customers.read_masked', 'aftersales.read', 'aftersales.manage',
+      'aftersales.inspect', 'notifications.read', 'reports.view'],
+    description: '订单客服：订单、未发货地址修改、配送与售后案件受理；只读脱敏顾客资料，售后审批、退款审批与执行需另行授权。',
   },
   {
     key: 'finance', name: '财务', kind: 'preset',

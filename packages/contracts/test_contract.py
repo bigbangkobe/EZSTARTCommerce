@@ -363,6 +363,81 @@ class ContractTests(unittest.TestCase):
         self.assertEqual("payment.config", patch["x-permission"])
         self.assertIn({"$ref": "#/components/parameters/IfMatch"}, patch["parameters"])
 
+    def test_after_sales_case_schema_keeps_snapshots_and_closed_sets(self):
+        self.assertEqual(["submitted", "under_review", "approved", "rejected", "needs_information",
+                          "return_in_transit", "received_inspection", "refund_pending", "refunded",
+                          "replacement_sent", "completed", "closed"],
+                         SPEC["components"]["schemas"]["AfterSalesCaseStatus"]["enum"])
+        self.assertEqual(["cancel", "refund", "return", "exchange"],
+                         SPEC["components"]["schemas"]["AfterSalesCaseType"]["enum"])
+        case = {
+            "id": UUID, "publicCaseNumber": "AS-20261116-AB12CD", "orderId": UUID,
+            "publicOrderNumber": "EZ-20261116-ABC123", "caseType": "return", "status": "received_inspection",
+            "reason": "Wrong size", "source": "admin", "requestedRefundMinor": 20000,
+            "approvedRefundMinor": 20000, "refundedMinor": 10000, "pendingRefundMinor": 0,
+            "refundableMinor": 13000, "currency": "HKD", "orderStatus": "completed", "paymentStatus": "collected",
+            "orderTotalMinor": 23000, "version": 3, "createdAt": NOW, "updatedAt": NOW,
+            "items": [{"orderItemId": UUID, "sku": "SKU-1", "productName": "Test Product", "orderedQuantity": 2,
+                       "requestedQuantity": 2, "receivedQuantity": 2, "inspectedQuantity": 1}],
+            "refunds": [], "returns": [], "receipts": [], "inspections": [], "events": [],
+        }
+        self.assertEqual([], errors("AdminAfterSalesCase", case))
+        # 案件响应里不能夹带订单快照之外的字段（例如直接改写后的订单金额）。
+        self.assertTrue(errors("AdminAfterSalesCase", dict(case, rewrittenTotalMinor=1)))
+        self.assertTrue(errors("AdminAfterSalesCase", dict(case, caseType="chargeback")))
+        self.assertTrue(errors("AdminAfterSalesCase", dict(case, status="refund_pending_by_customer")))
+        self.assertTrue(errors("AdminAfterSalesCase", dict(case, publicCaseNumber="AS-1")))
+
+    def test_refund_ledger_is_a_separate_record_from_the_payment(self):
+        self.assertEqual(["requested", "approved", "processing", "refunded", "failed", "rejected", "cancelled", "unknown"],
+                         SPEC["components"]["schemas"]["RefundStatus"]["enum"])
+        refund = {"id": UUID, "publicRefundNumber": "REF-20261116-AB12CD", "orderId": UUID,
+                  "publicOrderNumber": "EZ-20261116-ABC123", "paymentId": UUID,
+                  "publicPaymentNumber": "PAY-20261116-AB12CD", "channel": "manual", "providerCode": "manual_bank_transfer",
+                  "environment": "production", "amountMinor": 10000, "currency": "HKD", "status": "refunded",
+                  "reason": "Damage refund", "requestedBy": UUID, "approvedBy": UUID, "executedBy": UUID,
+                  "approvedAt": NOW, "executedAt": NOW, "reference": "PAYOUT-1", "version": 3,
+                  "createdAt": NOW, "updatedAt": NOW}
+        self.assertEqual([], errors("AdminRefund", refund))
+        self.assertTrue(errors("AdminRefund", dict(refund, amountMinor=0)))
+        self.assertTrue(errors("AdminRefund", dict(refund, status="paid")))
+        self.assertTrue(errors("AdminRefund", dict(refund, refundToCard="4242")))
+        # 执行退款必须能说明“钱以什么凭据付出去的”，但凭据不是必填字段：线上渠道由适配器回执。
+        execute = SPEC["paths"]["/admin/refunds/{id}/execute"]["post"]
+        self.assertEqual("refund.execute", execute["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], execute["security"])
+        self.assertIn({"$ref": "#/components/parameters/IdempotencyKey"}, execute["parameters"])
+        self.assertEqual([], errors("RefundExecuteRequest", {"reason": "Paid out", "reference": "PAYOUT-1"}))
+        self.assertTrue(errors("RefundExecuteRequest", {"reason": ""}))
+
+    def test_after_sales_writes_are_permissioned_and_idempotent(self):
+        create = SPEC["paths"]["/admin/after-sales"]["post"]
+        self.assertEqual("aftersales.manage", create["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], create["security"])
+        self.assertIn({"$ref": "#/components/parameters/IdempotencyKey"}, create["parameters"])
+        approve = SPEC["paths"]["/admin/after-sales/{id}/approve"]["post"]
+        self.assertEqual("aftersales.approve", approve["x-permission"])
+        self.assertIn({"$ref": "#/components/parameters/IfMatch"}, approve["parameters"])
+        for action in ("receive-return", "inspect", "return-shipment"):
+            operation = SPEC["paths"][f"/admin/after-sales/{{id}}/{action}"]["post"]
+            self.assertEqual("aftersales.inspect", operation["x-permission"])
+            self.assertIn({"$ref": "#/components/parameters/IdempotencyKey"}, operation["parameters"])
+        # 退款与案件审批是两个权限：受理售后不等于能批钱。
+        refund = SPEC["paths"]["/admin/after-sales/{id}/refund"]["post"]
+        self.assertEqual("refunds.create", refund["x-permission"])
+        self.assertNotEqual(approve["x-permission"], refund["x-permission"])
+        request = {"orderId": UUID, "caseType": "refund", "items": [{"orderItemId": UUID, "quantity": 1}],
+                   "reason": "Damaged"}
+        self.assertEqual([], errors("AfterSalesCreateRequest", request))
+        self.assertTrue(errors("AfterSalesCreateRequest", dict(request, caseType="chargeback")))
+        self.assertTrue(errors("AfterSalesCreateRequest", dict(request, items=[])))
+        self.assertTrue(errors("AfterSalesCreateRequest", dict(request,
+                                                                items=[{"orderItemId": UUID, "quantity": 0}])))
+        # 申请行不接受“金额”字段：金额由服务端按订单行快照分摊。
+        self.assertTrue(errors("AfterSalesCreateRequest", dict(request,
+                                                                items=[{"orderItemId": UUID, "quantity": 1,
+                                                                        "amountMinor": 1}])))
+
 
 if __name__ == "__main__":
     unittest.main()

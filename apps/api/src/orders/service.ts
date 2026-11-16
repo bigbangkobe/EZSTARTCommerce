@@ -9,6 +9,7 @@ import {
 } from '../../../../packages/domain/src/orders.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import type { ShippingService } from '../shipping/service.js';
+import { releaseOrderReservations } from './reservations.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -171,19 +172,9 @@ export class OrdersService {
 
   // ---- 取消 -------------------------------------------------------------------
 
-  /**
-   * 释放该订单所有 active 预留。取消与过期清理共用同一条路径：
-   * 只有 reserved 足够时才扣减，绝不把 reserved 减成负数。
-   */
+  /** 释放该订单所有 active 预留；售后取消案件复用同一实现，避免两套扣减逻辑漂移。 */
   private async releaseReservations(tx: Tx, orderId: string, onlyExpired = false) {
-    const rows = await tx.inventoryReservation.findMany({ where: { orderId, status: 'active',
-      ...(onlyExpired ? { expiresAt: { lte: new Date() } } : {}) } });
-    for (const row of rows) {
-      await tx.inventoryItem.updateMany({ where: { variantId: row.variantId, reserved: { gte: row.quantity } },
-        data: { reserved: { decrement: row.quantity } } });
-      await tx.inventoryReservation.update({ where: { id: row.id }, data: { status: 'released' } });
-    }
-    return rows.length;
+    return releaseOrderReservations(tx, orderId, onlyExpired);
   }
 
   private async replay(tx: Tx, key: string, action: string, orderId: string, digest: string) {

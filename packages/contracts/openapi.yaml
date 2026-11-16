@@ -1910,16 +1910,39 @@ paths:
       summary: List refund ledger entries
       security: [{ AdminSession: [] }]
       x-permission: payments.read
-      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/RefundStatus' }
+        - name: orderId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: caseId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: paymentId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/RefundListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
     post:
       tags: [Payments]
       operationId: createRefund
       summary: Request a refund without exceeding the refundable amount
+      description: >-
+        Money may only be refunded against a payment that actually settled. The amount is capped by
+        the settled balance minus refunds already made or still in flight; the order total is not the
+        limit. Requests carry an Idempotency-Key so a retry cannot book a second refund.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: refunds.create
       x-mfa-required: true
@@ -1930,18 +1953,35 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RefundCreateRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/RefundCreated' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
-        '503': { $ref: '#/components/responses/Unavailable' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/refunds/{id}:
+    get:
+      tags: [Payments]
+      operationId: getRefund
+      summary: Get a refund and its event history
+      security: [{ AdminSession: [] }]
+      x-permission: payments.read
+      parameters: [{ $ref: '#/components/parameters/UuidId' }]
+      responses:
+        '200': { $ref: '#/components/responses/RefundSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/refunds/{id}/approve:
     post:
       tags: [Payments]
       operationId: approveRefund
       summary: Approve a pending refund
+      description: >-
+        The approver must differ from the requester. Approval only moves the ledger state; money is
+        moved by a separate execute step under refund.execute.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: refund.approve
       x-mfa-required: true
@@ -1952,17 +1992,43 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReasonRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/RefundSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/refunds/{id}/reject:
+    post:
+      tags: [Payments]
+      operationId: rejectRefund
+      summary: Reject a pending refund with a reason
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: refund.approve
+      parameters: [{ $ref: '#/components/parameters/UuidId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/RefundSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/refunds/{id}/execute:
     post:
       tags: [Payments]
       operationId: executeRefund
-      summary: Execute an approved refund through its original payment adapter
+      summary: Execute an approved refund through its original payment channel
+      description: >-
+        Offline channels (cash on delivery, manual transfer) record a payout that already happened and
+        therefore require a payout reference. Online channels without a configured adapter answer 503
+        rather than pretending the refund succeeded. An unknown provider state cannot be forced.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: refund.execute
       x-mfa-required: true
@@ -1971,13 +2037,14 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ReasonRequest' }
+            schema: { $ref: '#/components/schemas/RefundExecuteRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/RefundSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         '503': { $ref: '#/components/responses/Unavailable' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/settlements:
@@ -2840,16 +2907,38 @@ paths:
       summary: List after-sales cases
       security: [{ AdminSession: [] }]
       x-permission: aftersales.read
-      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/AfterSalesCaseStatus' }
+        - name: caseType
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/AfterSalesCaseType' }
+        - name: orderId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, maxLength: 200 }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/AfterSalesCaseListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
     post:
       tags: [AfterSales]
       operationId: createAfterSalesCase
       summary: Create an after-sales case linked to an order
+      description: >-
+        The server computes the selectable quantities from the order lines minus quantities already
+        requested by other live cases of the same order; the client cannot ask for more.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: aftersales.manage
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
@@ -2859,7 +2948,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AfterSalesCreateRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/AfterSalesCaseCreated' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2875,7 +2964,7 @@ paths:
       x-permission: aftersales.read
       parameters: [{ $ref: '#/components/parameters/UuidId' }]
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/AfterSalesCaseSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2885,16 +2974,23 @@ paths:
       tags: [AfterSales]
       operationId: approveAfterSalesCase
       summary: Approve an eligible after-sales case
+      description: >-
+        Approving a cancellation case cancels the order and releases its inventory hold; that is only
+        allowed while the order is unshipped and unpaid. Other case types lock the approved quantities
+        and refundable amount without moving any money.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: aftersales.approve
-      parameters: [{ $ref: '#/components/parameters/UuidId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidId' }
+        - { $ref: '#/components/parameters/IfMatch' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ReasonRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/AfterSalesCaseSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2915,17 +3011,42 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReasonRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/AfterSalesCaseSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/after-sales/{id}/return-shipment:
+    post:
+      tags: [AfterSales]
+      operationId: registerAfterSalesReturnShipment
+      summary: Record the carrier and tracking number of a return parcel
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: aftersales.inspect
+      parameters: [{ $ref: '#/components/parameters/UuidId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReturnShipmentRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/AfterSalesCaseSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/after-sales/{id}/receive-return:
     post:
       tags: [AfterSales]
       operationId: receiveAfterSalesReturn
       summary: Record physical receipt of returned items
+      description: >-
+        Receiving does not change sellable stock. Quantities are capped by what the case approved and
+        by what has not already been received.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: aftersales.inspect
       parameters: [{ $ref: '#/components/parameters/UuidId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
@@ -2935,17 +3056,21 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReturnReceiptRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/AfterSalesCaseSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/after-sales/{id}/inspect:
     post:
       tags: [AfterSales]
       operationId: inspectAfterSalesReturn
       summary: Record item inspection and inventory disposition
+      description: >-
+        Only sellable quantities return to on-hand stock; damaged, quarantined and scrapped items are
+        recorded as a disposition movement without increasing sellable stock.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: aftersales.inspect
       parameters: [{ $ref: '#/components/parameters/UuidId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
@@ -2955,7 +3080,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReturnInspectionRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/AfterSalesCaseSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2967,6 +3092,9 @@ paths:
       tags: [AfterSales]
       operationId: refundAfterSalesCase
       summary: Request refund for an approved after-sales case
+      description: >-
+        The payment is chosen by the server from settled payments of the order. The amount is capped by
+        both the case approval and the refundable balance of that payment.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: refunds.create
       x-mfa-required: true
@@ -2977,14 +3105,37 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AfterSalesRefundRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/RefundCreated' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
-
+  /admin/after-sales/{id}/close:
+    post:
+      tags: [AfterSales]
+      operationId: closeAfterSalesCase
+      summary: Close a case once no refund is still in flight
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: aftersales.manage
+      parameters:
+        - { $ref: '#/components/parameters/UuidId' }
+        - { $ref: '#/components/parameters/IfMatch' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReasonRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/AfterSalesCaseSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
 components:
   securitySchemes:
     DeploymentBootstrap:
@@ -3438,6 +3589,65 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/PaymentMethodEnvelope' }
+    AfterSalesCaseSuccess:
+      description: After-sales case with its timeline, returns, receipts and refunds
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+        ETag:
+          schema:
+            type: string
+            pattern: ^"[1-9][0-9]*"$
+          description: Case version for the next If-Match
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AfterSalesCaseEnvelope' }
+    AfterSalesCaseCreated:
+      description: Newly created after-sales case in submitted state
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AfterSalesCaseEnvelope' }
+    AfterSalesCaseListSuccess:
+      description: After-sales case page
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AfterSalesCaseListEnvelope' }
+    RefundSuccess:
+      description: Refund ledger entry with its append-only event history
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/RefundEnvelope' }
+    RefundCreated:
+      description: Refund request recorded in requested state; no money has moved yet
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/RefundEnvelope' }
+    RefundListSuccess:
+      description: Refund ledger page
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/RefundListEnvelope' }
     PaymentResultSuccess:
       description: Recorded payment outcome together with the projected order payment state
       headers:
@@ -6087,7 +6297,7 @@ components:
     AfterSalesCreateRequest:
       type: object
       additionalProperties: false
-      required: [orderId, caseType, items, reasonCode, reason]
+      required: [orderId, caseType, items, reason]
       properties:
         orderId: { type: string, format: uuid }
         caseType: { type: string, enum: [cancel, refund, return, exchange] }
@@ -6101,7 +6311,7 @@ components:
             properties:
               orderItemId: { type: string, format: uuid }
               quantity: { type: integer, minimum: 1, maximum: 99 }
-        reasonCode: { type: string, maxLength: 80 }
+        reasonCode: { type: [string, 'null'], maxLength: 80 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         requestedRefundMinor: { type: [integer, 'null'], minimum: 0 }
     ReturnReceiptRequest:
@@ -6146,5 +6356,282 @@ components:
       properties:
         amountMinor: { type: integer, minimum: 1 }
         currency: { type: string, pattern: '^[A-Z]{3}$' }
-        reasonCode: { type: string, maxLength: 80 }
+        reasonCode: { type: [string, 'null'], maxLength: 80 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
+    AfterSalesCaseType:
+      type: string
+      enum: [cancel, refund, return, exchange]
+    AfterSalesCaseStatus:
+      type: string
+      enum: [submitted, under_review, approved, rejected, needs_information, return_in_transit,
+        received_inspection, refund_pending, refunded, replacement_sent, completed, closed]
+      description: >-
+        Cases only move forward. A cancellation case closes as soon as the order is cancelled because
+        there is nothing left to fulfil; refunds, returns and exchanges keep their own timeline.
+    RefundStatus:
+      type: string
+      enum: [requested, approved, processing, refunded, failed, rejected, cancelled, unknown]
+      description: >-
+        Unknown means the provider has not answered yet; it can only be resolved by a provider query
+        or webhook, never by an operator forcing a state.
+    ReturnShipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [trackingNumber]
+      properties:
+        carrierCode: { type: [string, 'null'], maxLength: 80 }
+        carrierName: { type: [string, 'null'], maxLength: 120 }
+        trackingNumber: { type: string, minLength: 1, maxLength: 160 }
+        shippedAt: { type: [string, 'null'], format: date-time }
+        reference: { type: [string, 'null'], maxLength: 200 }
+        note: { type: [string, 'null'], maxLength: 1000 }
+    RefundExecuteRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        reference:
+          type: [string, 'null']
+          maxLength: 200
+          description: Payout proof for offline channels (bank slip, cash receipt); required for them.
+        occurredAt: { type: [string, 'null'], format: date-time }
+    AdminRefund:
+      type: object
+      additionalProperties: false
+      required: [id, publicRefundNumber, orderId, publicOrderNumber, paymentId, publicPaymentNumber,
+        channel, providerCode, environment, amountMinor, currency, status, reason, requestedBy,
+        version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        publicRefundNumber: { type: string, pattern: '^REF-[0-9]{8}-[A-Z0-9]{6}$' }
+        orderId: { type: string, format: uuid }
+        publicOrderNumber: { type: string, maxLength: 64 }
+        paymentId: { type: string, format: uuid }
+        publicPaymentNumber: { type: string, pattern: '^PAY-[0-9]{8}-[A-Z0-9]{6}$' }
+        caseId: { type: [string, 'null'], format: uuid }
+        channel: { type: string, enum: [cod, manual, online] }
+        providerCode: { type: string, pattern: '^[a-z][a-z0-9_]{1,31}$' }
+        environment: { type: string, enum: [sandbox, production] }
+        amountMinor: { type: integer, minimum: 1 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        status: { $ref: '#/components/schemas/RefundStatus' }
+        reasonCode: { type: [string, 'null'], maxLength: 80 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        requestedBy: { type: string, format: uuid }
+        approvedBy: { type: [string, 'null'], format: uuid }
+        executedBy: { type: [string, 'null'], format: uuid }
+        approvedAt: { type: [string, 'null'], format: date-time }
+        executedAt: { type: [string, 'null'], format: date-time }
+        reference: { type: [string, 'null'], maxLength: 200 }
+        externalRefundId: { type: [string, 'null'], maxLength: 160 }
+        failureCode: { type: [string, 'null'], maxLength: 80 }
+        failureMessage: { type: [string, 'null'], maxLength: 1000 }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        events:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, type, toStatus, source, occurredAt]
+            properties:
+              id: { type: string, format: uuid }
+              type: { type: string, enum: [requested, approved, rejected, executed, failed, cancelled, unknown] }
+              fromStatus: { type: [string, 'null'] }
+              toStatus: { $ref: '#/components/schemas/RefundStatus' }
+              source: { type: string, enum: [admin, system, provider] }
+              actorId: { type: [string, 'null'], format: uuid }
+              occurredAt: { type: string, format: date-time }
+    RefundEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/AdminRefund' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    RefundListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminRefund' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    AdminAfterSalesItem:
+      type: object
+      additionalProperties: false
+      required: [orderItemId, sku, productName, orderedQuantity, requestedQuantity, receivedQuantity,
+        inspectedQuantity]
+      properties:
+        orderItemId: { type: string, format: uuid }
+        sku: { type: string, maxLength: 120 }
+        productName: { type: string, maxLength: 200 }
+        variantName: { type: [string, 'null'], maxLength: 200 }
+        orderedQuantity: { type: integer, minimum: 1 }
+        requestedQuantity: { type: integer, minimum: 1 }
+        approvedQuantity: { type: [integer, 'null'], minimum: 0 }
+        amountMinor: { type: [integer, 'null'], minimum: 0 }
+        disposed: { type: [string, 'null'], enum: [sellable, damaged, quarantine, scrap, null] }
+        receivedQuantity: { type: integer, minimum: 0 }
+        inspectedQuantity: { type: integer, minimum: 0 }
+    AdminAfterSalesCase:
+      type: object
+      additionalProperties: false
+      required: [id, publicCaseNumber, orderId, publicOrderNumber, caseType, status, reason, source,
+        requestedRefundMinor, approvedRefundMinor, refundedMinor, pendingRefundMinor, refundableMinor,
+        currency, orderStatus, paymentStatus, orderTotalMinor, version, createdAt, updatedAt,
+        items, refunds, returns, receipts, inspections, events]
+      properties:
+        id: { type: string, format: uuid }
+        publicCaseNumber: { type: string, pattern: '^AS-[0-9]{8}-[A-Z0-9]{6}$' }
+        orderId: { type: string, format: uuid }
+        publicOrderNumber: { type: string, maxLength: 64 }
+        caseType: { $ref: '#/components/schemas/AfterSalesCaseType' }
+        status: { $ref: '#/components/schemas/AfterSalesCaseStatus' }
+        reasonCode: { type: [string, 'null'], maxLength: 80 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        source: { type: string, enum: [admin, customer] }
+        requestedRefundMinor: { type: [integer, 'null'], minimum: 0 }
+        approvedRefundMinor: { type: [integer, 'null'], minimum: 0 }
+        refundedMinor: { type: integer, minimum: 0 }
+        pendingRefundMinor: { type: integer, minimum: 0 }
+        refundableMinor: { type: integer, minimum: 0 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        orderStatus:
+          type: string
+          enum: [pending_payment, awaiting_confirmation, confirmed, processing, partially_shipped,
+            shipped, completed, cancelled, on_hold]
+        paymentStatus:
+          type: string
+          enum: [created, requires_action, processing, succeeded, failed, cancelled, unknown,
+            cod_due, collected, rejected, returned]
+        orderTotalMinor: { type: integer, minimum: 0 }
+        contactMasked: { type: [string, 'null'], maxLength: 200 }
+        ownerId: { type: [string, 'null'], format: uuid }
+        approvedAt: { type: [string, 'null'], format: date-time }
+        approvedBy: { type: [string, 'null'], format: uuid }
+        rejectedAt: { type: [string, 'null'], format: date-time }
+        rejectReason: { type: [string, 'null'], maxLength: 1000 }
+        closedAt: { type: [string, 'null'], format: date-time }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AdminAfterSalesItem' }
+        refunds:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, publicRefundNumber, status, amountMinor, currency, channel, createdAt]
+            properties:
+              id: { type: string, format: uuid }
+              publicRefundNumber: { type: string, pattern: '^REF-[0-9]{8}-[A-Z0-9]{6}$' }
+              status: { $ref: '#/components/schemas/RefundStatus' }
+              amountMinor: { type: integer, minimum: 1 }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+              channel: { type: string, enum: [cod, manual, online] }
+              createdAt: { type: string, format: date-time }
+              executedAt: { type: [string, 'null'], format: date-time }
+        returns:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, status]
+            properties:
+              id: { type: string, format: uuid }
+              status: { type: string, enum: [in_transit, received] }
+              carrierCode: { type: [string, 'null'], maxLength: 80 }
+              carrierName: { type: [string, 'null'], maxLength: 120 }
+              trackingNumber: { type: [string, 'null'], maxLength: 160 }
+              shippedAt: { type: [string, 'null'], format: date-time }
+              receivedAt: { type: [string, 'null'], format: date-time }
+              reference: { type: [string, 'null'], maxLength: 200 }
+        receipts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, receivedAt, items]
+            properties:
+              id: { type: string, format: uuid }
+              receivedAt: { type: string, format: date-time }
+              reference: { type: [string, 'null'], maxLength: 200 }
+              items:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [orderItemId, quantity]
+                  properties:
+                    orderItemId: { type: string, format: uuid }
+                    quantity: { type: integer, minimum: 1 }
+        inspections:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, orderItemId, quantity, disposition, createdAt]
+            properties:
+              id: { type: string, format: uuid }
+              orderItemId: { type: string, format: uuid }
+              quantity: { type: integer, minimum: 1 }
+              disposition: { type: string, enum: [sellable, damaged, quarantine, scrap] }
+              note: { type: [string, 'null'], maxLength: 1000 }
+              actorId: { type: [string, 'null'], format: uuid }
+              createdAt: { type: string, format: date-time }
+        events:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, type, toStatus, createdAt]
+            properties:
+              id: { type: string, format: uuid }
+              type: { type: string, enum: [created, approved, rejected, return_registered, received,
+                inspected, refund_requested, refunded, closed] }
+              fromStatus: { type: [string, 'null'] }
+              toStatus: { $ref: '#/components/schemas/AfterSalesCaseStatus' }
+              note: { type: [string, 'null'], maxLength: 1000 }
+              actorId: { type: [string, 'null'], format: uuid }
+              createdAt: { type: string, format: date-time }
+        contact:
+          type: object
+          additionalProperties: false
+          description: Present only for sessions holding customers.read_pii.
+          required: [email, phone, fullName]
+          properties:
+            email: { type: [string, 'null'], maxLength: 320 }
+            phone: { type: [string, 'null'], maxLength: 40 }
+            fullName: { type: [string, 'null'], maxLength: 200 }
+    AfterSalesCaseEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/AdminAfterSalesCase' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    AfterSalesCaseListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminAfterSalesCase' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }

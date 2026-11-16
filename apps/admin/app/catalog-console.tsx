@@ -138,7 +138,7 @@ export function CatalogConsole() {
 
   return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
     <header><div><p className="eyebrow">商品管理</p><h1>商品目录</h1></div><div className="actions">
-      <a href="/admin/media">媒体库</a><a href="/admin/orders">订单</a><a href="/admin/shipping">配送与结账</a><a href="/admin/payments">付款</a><a href="/admin/access">员工与角色</a><a href="/admin/settings">店铺设置</a>
+      <a href="/admin/media">媒体库</a><a href="/admin/orders">订单</a><a href="/admin/shipping">配送与结账</a><a href="/admin/payments">付款</a><a href="/admin/aftersales">售后</a><a href="/admin/access">员工与角色</a><a href="/admin/settings">店铺设置</a>
       <button disabled={busy} onClick={() => void run(async () => { setEditing(null); })}>刷新目录</button></div></header>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {!ready && !error && <p>正在检查会话与权限…</p>}

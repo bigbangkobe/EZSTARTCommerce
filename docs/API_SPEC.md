@@ -236,14 +236,24 @@
 | `GET/POST /admin/shipping/zones`；`GET/PATCH /admin/shipping/zones/:id` | 配送区域 | `shipping.manage`；阻止非法/冲突区域规则 |
 | `GET/POST /admin/shipping/rates`；`GET/PATCH /admin/shipping/rates/:id` | 固定运费/门槛费率 | `shipping.manage`；发布配置版本 |
 | `POST /admin/shipping/quote-preview` | 地址/购物袋测试条件 | `shipping.manage`；只预览，不创建订单 |
-| `GET/POST /admin/after-sales`、`GET /admin/after-sales/:id` | 案件列表/登记/详情 | `aftersales.read/manage` |
-| `POST /admin/after-sales/:id/approve` / `POST /admin/after-sales/:id/reject` | 审核理由 | `aftersales.approve`；订单、金额、行数复核 |
-| `POST /admin/after-sales/:id/receive-return` / `POST /admin/after-sales/:id/inspect` | 退货收件和质检处置 | `aftersales.inspect`；只能经库存领域服务入账 |
-| `POST /admin/after-sales/:id/refund` | 已审批金额、原支付引用 | 调用退款领域服务；不直接改付款状态 |
+| `GET/POST /admin/after-sales`、`GET /admin/after-sales/:id` | 案件列表（可按 status/caseType/orderId 筛选）/登记/详情 | `aftersales.read` / `aftersales.manage`；行数量与金额均由服务端复核 |
+| `POST /admin/after-sales/:id/approve` / `POST /admin/after-sales/:id/reject` | 审核理由、expectedVersion（`If-Match`） | `aftersales.approve`；批准金额取申请额、行分摊额与订单总额的最小值；取消类批准即取消订单并释放预留后结案 |
+| `POST /admin/after-sales/:id/return-shipment` | 承运商、追踪号、寄回时间 | `aftersales.manage`；案件进入 `return_in_transit` |
+| `POST /admin/after-sales/:id/receive-return` | 收件时间、参考号、逐行数量 | `aftersales.manage`；累计收件量不得超过批准量 |
+| `POST /admin/after-sales/:id/inspect` | 逐行数量与处置（`sellable|damaged|quarantine|scrap`） | `aftersales.inspect`；只有 `sellable` 才写 `onHand` 与库存流水，其余处置只记账不动库存 |
+| `POST /admin/after-sales/:id/refund` | 金额、币种、原因（落在案件批准额内） | 建 refund 记录（`requested`），不直接改付款状态 |
+| `POST /admin/after-sales/:id/close` | 结案理由 | `aftersales.manage`；尚有在途退款时 409 `REFUND_IN_PROGRESS` |
+| `GET /admin/refunds` / `GET /admin/refunds/:id` | 退款台账（可按 status/orderId/paymentId 筛选） | `refunds.read`；退款是与支付分开的记录 |
+| `POST /admin/refunds/:id/approve` / `POST /admin/refunds/:id/reject` | 审批理由 | `refund.approve`；申请人不得自批（`403 SELF_APPROVAL_FORBIDDEN`） |
+| `POST /admin/refunds/:id/execute` | 凭据、时间、原因 | `refund.execute`；线下渠道必须有 `reference`，线上渠道无适配器时 503 `PAYMENT_ADAPTER_UNAVAILABLE` |
 
 订单读取与订单动作是分开的权限：`GET /admin/orders`、`GET /admin/orders/:id` 只要求 `orders.read`，响应里的联系人按 `customers.read_pii` 决定是否遮蔽（列表恒为遮蔽值）；取消、改址、备注、包裹、发货、签收各自使用 `orders.cancel`、`orders.address_change`、`orders.update`、`shipments.manage`，且都要求 CSRF 与 `Idempotency-Key`（发货另需 `If-Match`）。
 
 取消只释放该订单的库存预留，不改 `onHand`；已收款订单必须走售后退款，接口返回 `409 PAID_ORDER_REQUIRES_REFUND`。改址沿用原配送方式重算运费，费用变化必须带 `customerConfirmationRef`（否则 `422 CUSTOMER_CONFIRMATION_REQUIRED`），任何包裹发出后拒绝（`409 ORDER_ALREADY_SHIPPED`）。发货才扣减 `onHand` 并同步释放 `reserved`；签收只推进履约，不改变付款状态——货到付款订单在收款登记前始终是 `cod_due`。订单预留过期后由清理任务释放，仍处于 `awaiting_confirmation` 的订单会被系统取消（`actorType=system`）。
+
+售后案件不改写订单与付款快照：申请、批准、收件、质检、处置各写本模块自己的表，订单金额与支付台账保持原样，可追溯性由 `AfterSalesEvent` 追加写事件提供。案件状态只进不退（`submitted → under_review → approved → return_in_transit → received_inspection → refund_pending → refunded → completed/closed`），批准时间与批准人、批准金额与批准动作由数据库 CHECK 成对约束——没有批准依据的案件写不进 `approved` 之后的状态。`cancel` 类案件批准即取消订单、释放该订单全部 active 预留并直接结案（已收款返回 `409 PAID_ORDER_REQUIRES_REFUND`，已发货返回 `409 ORDER_ALREADY_SHIPPED`）。
+
+退款是可独立核对的台账，不是对 `Payment` 的原地改写。可退余额按「实收 − 已退 − 在途」计算，并同时校验订单级和流水级两个维度；案件内退款还受批准金额上限约束。进入 `refunded` 必须已有执行动作与执行时间（数据库 CHECK 兜底），`unknown` 没有人工出口。执行人不能是申请人（四眼原则）；线上渠道在没有真实适配器时返回 `503 PAYMENT_ADAPTER_UNAVAILABLE`，不伪造成功，线下渠道必须留下银行水单/现金凭据等 `reference`。
 
 ### 3.5 会员、优惠、库存、通知、报表、部署（M10–M15）
 
@@ -359,7 +369,9 @@ validate 响应：`jobId`、`fileSha256`、`status`、`totalRows`、`validRows`�
 
 创建 shipment body：`items[]`（`orderItemId`、`quantity` ≥ 1）、`carrierCode`（可空）、`carrierName`（手工承运时可填）、`trackingNumber`（可空）、`note`。提交后累计包裹数不得大于订购量；发货 action 需要 `expectedVersion`，原子扣库存并建立流水。COD 收款登记 body：`outcome`（`collected|rejected|returned`，人工转账另有 `succeeded|cancelled`）、`amountMinor`、`occurredAt`、`reference`、`reason`、`expectedVersion`；金额必须等于订单总额且币种一致，拒收与退回必须写原因，COD 必须已有包裹发货。签收不会自动触发收款，也不会把 `paymentStatus` 改成已收款。
 
-退款创建 body：`paymentId`、`orderId`、`amountMinor`（positive integer）、`currency`（与原支付相同）、`reasonCode`、`reason`、`caseId`（售后关联）、`Idempotency-Key`。审批与执行拆开；响应展示 `refundId`、状态（`requested|approval_pending|processing|succeeded|failed|unknown|cancelled`）、金额、原 payment、provider reference 脱敏摘要和操作历史。结果未知时只能查/对账，不能无幂等重试。
+退款创建 body：`paymentId`、`orderId`、`amountMinor`（positive integer）、`currency`（与原支付相同）、`reasonCode`、`reason`、`caseId`（售后关联，可空）、`Idempotency-Key`。响应字段固定为 `id`、`publicRefundNumber`（`REF-YYYYMMDD-XXXXXX`）、`orderId`/`publicOrderNumber`、`paymentId`/`publicPaymentNumber`、`caseId`、`channel`（`cod|manual|online`）、`providerCode`、`environment`、`amountMinor`、`currency`、`status`（`requested|approved|processing|refunded|failed|rejected|cancelled|unknown`）、`reasonCode`、`reason`、`requestedBy`、`approvedBy`/`approvedAt`、`executedBy`/`executedAt`、`reference`（付款凭据）、`externalRefundId`（渠道退款号）、`failureCode`/`failureMessage`、`version`、`createdAt`/`updatedAt`；操作历史读 `GET /admin/refunds/:id` 的追加写 `events[]`（`type`、`fromStatus`/`toStatus`、`source`（`admin|system|provider`）、`actorId`、`occurredAt`）。审批 `POST /admin/refunds/:id/approve` 与驳回 `.../reject` 只接受 `reason` 与 `If-Match`，申请人与批准人必须是两个账号；执行 `POST /admin/refunds/:id/execute` 接受 `reason`、`reference`（线下渠道必填，作为付款凭据）、`occurredAt`。结果未知时只能查/对账，不能无幂等重试。
+
+售后案件 DTO：创建 body 为 `orderId`、`caseType`（`cancel|refund|return|exchange`）、`items[]`（`orderItemId`、`quantity` 1–99）、`reasonCode`（可空）、`reason`、`requestedRefundMinor`（可空）；行数量按同一案件内累计计算，超出可退量 422，非本订单行 422。案件响应含 `publicCaseNumber`（`AS-YYYYMMDD-XXXXXX`）、`publicOrderNumber`、`status`、`source`（`admin|customer`）、`currency`、`orderStatus`、`orderTotalMinor`、`requestedRefundMinor`、`approvedRefundMinor`、`refundedMinor`、`pendingRefundMinor`、`refundableMinor`、`paymentStatus`、`contactMasked`、`ownerId`、`approvedAt`/`approvedBy`、`rejectedAt`/`rejectReason`、`closedAt`、`items[]`（`orderItemId`、`sku`、商品/规格快照、订购/申请/批准/已收/已检数量、`amountMinor`、`disposed`）、`refunds[]`、`returns[]`、`receipts[]`、`inspections[]`、`events[]`、`version`。可退余额由服务端计算并下发，客户端不自行用订单总额推算。审核 body 只含 `reason` 与 `If-Match`；退货寄回 `ReturnShipmentRequest`（`trackingNumber` 必填，承运商/名称/时间/参考号可空）；收件 `receivedAt` + 逐行 `quantity`；质检逐行 `quantity` 与 `disposition`（`sellable|damaged|quarantine|scrap`），只有 `sellable` 会写 `onHand` 与 `return_restock` 库存流水。
 
 支付渠道配置写入 body：`providerCode`、`environment`（`sandbox|production`）、`enabled`、`publicConfig`（白名单字段 `accountSummary|instructions|defaultCurrency|providerAccountRef`）、`secretRef`（必须形如 `secret://`/`env://` 的引用，直接传密钥本体一律 422 `SECRET_REFERENCE_INVALID`）、`approvalReference`。GET 仅返回 `secretConfigured`、`secretFingerprint`、`connectionStatus`、`lastCheckedAt`，不回显引用与密钥。启用必须有批准依据（数据库 CHECK 兜底），停用在该渠道仍有 `pending|authorized|unknown` 流水时返回 409 `PAYMENT_METHOD_IN_USE`。
 
