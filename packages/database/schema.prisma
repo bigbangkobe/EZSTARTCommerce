@@ -180,3 +180,52 @@ model IdentityNotificationJob {
   @@index([status, expiresAt])
   @@index([status, availableAt, leaseExpiresAt])
 }
+
+// 单实例单店铺：id 固定为 1，用 CHECK 约束在数据库层阻止第二个店铺行。
+model StoreConfig {
+  id Int @id @default(1)
+  displayName String
+  locales String[]
+  defaultLocale String
+  baseCurrency String
+  timezone String
+  featureFlags Json @default("{}")
+  logoMediaId String? @db.Uuid
+  faviconMediaId String? @db.Uuid
+  /// 首次产生真实交易后锁定基础币种，避免历史订单与本位币不一致。
+  tradingStartedAt DateTime? @db.Timestamptz(3)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  markets MarketProfile[]
+  reviews MarketReviewRecord[]
+}
+
+model MarketProfile {
+  id String @id @default(uuid()) @db.Uuid
+  marketCode String @unique
+  enabled Boolean @default(false)
+  eligibleProductIds String[] @db.Uuid
+  reviewStatus String @default("pending")
+  reviewValidUntil DateTime? @db.Timestamptz(3)
+  storeConfigId Int @default(1)
+  storeConfig StoreConfig @relation(fields: [storeConfigId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+
+// 审核是追加历史：记录客户提供的依据，不做法规判断，也不能被改写。
+model MarketReviewRecord {
+  id String @id @default(uuid()) @db.Uuid
+  storeConfigId Int @default(1)
+  storeConfig StoreConfig @relation(fields: [storeConfigId], references: [id], onDelete: Cascade)
+  marketCode String
+  decision String
+  evidenceReference String
+  reason String
+  reviewedBy String @db.Uuid
+  reviewedAt DateTime @db.Timestamptz(3)
+  validUntil DateTime? @db.Timestamptz(3)
+  storeConfigVersion Int
+  @@index([marketCode, reviewedAt])
+}

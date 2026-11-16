@@ -56,7 +56,7 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
     app = await createApp(identity); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     await t.test('migration history and dependency readiness are real', async () => {
       const migrated = await db.$queryRaw<{ count: bigint }[]>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
-      assert.equal(Number(migrated[0]!.count), 6);
+      assert.equal(Number(migrated[0]!.count), 7);
       const ready = await call('health/ready', undefined, new Map(), {}, 'ReadinessStatusEnvelope');
       assert.equal(ready.status, 200);
       const zone = await db.$queryRaw<{ zone: string }[]>`SELECT current_setting('TimeZone') AS zone`;
@@ -369,6 +369,117 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
       assert.equal((await db.auditLog.findUniqueOrThrow({ where: { id: entry.id } })).result, entry.result);
       const rows = JSON.stringify(await db.auditLog.findMany());
       assert.ok(!rows.includes('A-long-test-password-1') && !rows.includes('Staff-password-123456'), 'audit rows must never contain passwords');
+      await db.identityRateLimit.deleteMany();
+    });
+    await t.test('store configuration is versioned, cross-validated, permission scoped and audited', async () => {
+      await db.identityRateLimit.deleteMany();
+      const headers = { 'X-CSRF-Token': csrf };
+      const patch = (body: unknown, version: number, target = jar) =>
+        call('admin/store-config', body, target, { ...headers, 'If-Match': `"${version}"` }, undefined, base, 'PATCH');
+      const read = () => call('admin/store-config', undefined, jar, {}, 'StoreConfigurationEnvelope');
+
+      const initial = await read();
+      assert.equal(initial.status, 200);
+      assert.equal(initial.body.data.version, 1);
+      assert.deepEqual(initial.body.data.locales, ['zh-CN', 'zh-HK', 'en']);
+      assert.equal(initial.body.data.defaultLocale, 'zh-CN');
+      assert.deepEqual(initial.body.data.marketProfiles, []);
+      assert.equal(initial.response.headers.get('etag'), '"1"');
+      assert.equal(initial.response.headers.get('cache-control'), 'no-store');
+
+      // 没有 If-Match 的写入一律 422，不能退化成覆盖写。
+      assert.equal((await call('admin/store-config', { displayName: 'X' }, jar, headers, undefined, base, 'PATCH')).status, 422);
+      // 跨字段与真实时区校验：这些规则静态 schema 表达不了，必须由服务端拒绝。
+      assert.equal((await patch({ locales: ['zh-CN'] }, 1)).status, 422);
+      assert.equal((await patch({ defaultLocale: 'en' }, 1)).status, 422);
+      assert.equal((await patch({ timezone: 'Mars/Olympus' }, 1)).status, 422);
+      assert.equal((await patch({ featureFlags: { teleportation: true } }, 1)).status, 422);
+      assert.equal((await patch({ baseCurrency: 'hkd' }, 1)).status, 422);
+
+      const renamed = await patch({ displayName: '晨光商行' }, 1);
+      assert.equal(renamed.status, 200); assert.equal(renamed.body.data.displayName, '晨光商行');
+      assert.equal(renamed.body.data.version, 2); assert.equal(renamed.response.headers.get('etag'), '"2"');
+      assert.equal((await patch({ displayName: '并发覆盖' }, 1)).status, 409);
+
+      // 无 store.settings.manage 的员工既不能读也不能写。
+      const outsiderRole = await db.adminRole.create({ data: { name: 'Store outsider', kind: 'custom', permissionCodes: ['staff.read'] } });
+      const outsider = await db.adminUser.create({ data: { email: 'store-outsider@example.test', displayName: 'Outsider', locale: 'en',
+        passwordHash: 'unused', mfaRequired: false, roles: { create: { roleId: outsiderRole.id } } } });
+      const outsiderSecret = randomBytes(32).toString('base64url');
+      await db.adminSession.create({ data: { userId: outsider.id, tokenDigest: digest(outsiderSecret), mfaVerified: false, lastSeenAt: new Date(),
+        idleExpiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 120_000) } });
+      const outsiderJar = new Map([['ez_admin_session', outsiderSecret]]);
+      assert.equal((await call('admin/store-config', undefined, outsiderJar)).status, 403);
+
+      // 市场可以先建档，但不能在未审核时开启交易。
+      const created = await patch({ marketProfiles: [{ marketCode: 'hk', enabled: false }] }, 2);
+      assert.equal(created.status, 200);
+      assert.deepEqual(created.body.data.marketProfiles.map((market: { marketCode: string }) => market.marketCode), ['HK']);
+      assert.equal(created.body.data.marketProfiles[0].reviewStatus, 'pending');
+      assert.equal(created.body.data.marketProfiles[0].enabled, false);
+      const enable = (code: string, version: number) => patch({ marketProfiles: [{ marketCode: code, enabled: true }] }, version);
+      assert.equal((await enable('HK', 3)).status, 422);
+
+      // 记录审核是店主专属：拥有 store.settings.manage 的普通管理员也不能代替客户作合规声明。
+      const settingsRole = await db.adminRole.create({ data: { name: 'Store manager', kind: 'custom', permissionCodes: ['store.settings.manage'] } });
+      const manager = await db.adminUser.create({ data: { email: 'store-manager@example.test', displayName: 'Store manager', locale: 'en',
+        passwordHash: 'unused', mfaRequired: false, roles: { create: { roleId: settingsRole.id } } } });
+      const managerSecret = randomBytes(32).toString('base64url');
+      await db.adminSession.create({ data: { userId: manager.id, tokenDigest: digest(managerSecret), mfaVerified: false, lastSeenAt: new Date(),
+        idleExpiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 120_000) } });
+      const managerJar = new Map([['ez_admin_session', managerSecret]]);
+      assert.equal((await call('admin/store-config', undefined, managerJar)).status, 200);
+      const review = (code: string, body: unknown, version: number, target = jar) =>
+        call(`admin/store-config/markets/${code}/reviews`, body, target, { ...headers, 'If-Match': `"${version}"` }, 'MarketReviewRecordEnvelope', base, 'POST');
+      const decision = { decision: 'approved', evidenceReference: 'LEGAL-2026-11', reason: '客户律师确认可售', validUntil: null, confirmedMarketCode: 'HK' };
+      const managerSession = await call('admin/auth/session', undefined, managerJar);
+      assert.equal((await call('admin/store-config/markets/HK/reviews', decision, managerJar,
+        { 'X-CSRF-Token': managerSession.body.data.csrfToken, 'If-Match': '"3"' }, undefined, base, 'POST')).status, 403);
+
+      assert.equal((await review('HK', { ...decision, confirmedMarketCode: 'MO' }, 3)).status, 422);
+      assert.equal((await review('HK', { ...decision, validUntil: new Date(Date.now() - 1_000).toISOString() }, 3)).status, 422);
+      assert.equal((await review('MO', { ...decision, confirmedMarketCode: 'MO' }, 3)).status, 404);
+      assert.equal((await review('HK', decision, 2)).status, 409);
+
+      const approved = await review('HK', decision, 3);
+      assert.equal(approved.status, 200);
+      assert.equal(approved.body.data.reviewedBy, userId);
+      assert.equal(approved.body.data.storeConfigVersion, 4);
+      assert.equal(approved.response.headers.get('etag'), '"4"');
+      const afterApproval = (await read()).body.data.marketProfiles[0];
+      assert.equal(afterApproval.reviewStatus, 'approved');
+      assert.equal(afterApproval.enabled, false, '审核通过不得自动开启市场');
+      const enabled = await enable('HK', 4);
+      assert.equal(enabled.status, 200);
+      assert.equal(enabled.body.data.marketProfiles[0].enabled, true);
+
+      const revoked = await review('HK', { ...decision, decision: 'revoked', reason: '客户撤回授权' }, 5);
+      assert.equal(revoked.status, 200);
+      const afterRevoke = (await read()).body.data.marketProfiles[0];
+      assert.equal(afterRevoke.enabled, false, '撤销审核必须立即停止交易资格');
+      assert.equal(afterRevoke.reviewStatus, 'revoked');
+      assert.equal((await enable('HK', 6)).status, 422);
+
+      // 过期不依赖清理任务：读取时就收敛为 expired，并且无法再次启用。
+      const future = new Date(Date.now() + 3_600_000).toISOString();
+      assert.equal((await review('HK', { ...decision, validUntil: future }, 6)).status, 200);
+      assert.equal((await enable('HK', 7)).status, 200);
+      await db.marketProfile.update({ where: { marketCode: 'HK' }, data: { reviewValidUntil: new Date(Date.now() - 1_000) } });
+      const expired = (await read()).body.data.marketProfiles[0];
+      assert.equal(expired.reviewStatus, 'expired');
+      assert.equal(expired.enabled, false);
+      assert.equal((await enable('HK', 8)).status, 422);
+
+      // 有交易后本位币锁定，但其余设置仍可修改。
+      await db.storeConfig.update({ where: { id: 1 }, data: { tradingStartedAt: new Date() } });
+      assert.equal((await patch({ baseCurrency: 'USD' }, 8)).status, 409);
+      const retimed = await patch({ timezone: 'Asia/Macau' }, 8);
+      assert.equal(retimed.status, 200); assert.equal(retimed.body.data.timezone, 'Asia/Macau');
+
+      const actions = await db.auditLog.findMany({ where: { action: { in: ['store.config.updated', 'store.market.reviewed'] } } });
+      assert.ok(actions.length >= 5);
+      assert.ok(actions.every(row => row.actorId === userId));
+      assert.ok(actions.every(row => !JSON.stringify(row).includes('LEGAL-') || row.action === 'store.market.reviewed'), '依据只随审核记录保存，不进入审计摘要以外的字段');
       await db.identityRateLimit.deleteMany();
     });
     await t.test('password reset is uniformly accepted, single-use, revokes sessions and keeps MFA', async () => {

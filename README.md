@@ -45,6 +45,6 @@ EZSTARTCommerce 是一个可配置、可复用、可独立部署的电商独立�
 
 按 CLIENT_LAUNCH_INPUTS.md 完成首店参数表；评审需求处理决议、生产就绪验收清单、页面状态原型及客户专属前台页面/陈列清单，再冻结 PRODUCT_BACKLOG.md 和首店报价范围。
 
-工程已建立 pnpm workspace 和 NestJS API 骨架。安装与运行见 [R1 说明](docs/R1_ENGINEERING_PROGRESS.md)，统一检查命令为 `pnpm check`。首店主初始化、MFA 和本人会话 API 已接入 PostgreSQL 18/Prisma 7；配置与范围见 [身份实现说明](docs/R1_IDENTITY_IMPLEMENTATION.md)。现已新增邀请后端、通知 Worker、接受邀请/登录/MFA/密码重设页面及员工/角色管理 API 与 /admin/access 页面，并按开发规格 7.1 预置 8 个默认岗位权限包（`packages/config/src/role-presets.ts`）；审计记录读取界面（/admin/audit）、完整后台、店铺业务和生产部署仍未完成。
+工程已建立 pnpm workspace 和 NestJS API 骨架。安装与运行见 [R1 说明](docs/R1_ENGINEERING_PROGRESS.md)，统一检查命令为 `pnpm check`。首店主初始化、MFA 和本人会话 API 已接入 PostgreSQL 18/Prisma 7；配置与范围见 [身份实现说明](docs/R1_IDENTITY_IMPLEMENTATION.md)。现已新增邀请后端、通知 Worker、接受邀请/登录/MFA/密码重设页面及员工/角色管理 API 与 /admin/access 页面，并按开发规格 7.1 预置 8 个默认岗位权限包（`packages/config/src/role-presets.ts`）；店铺设置（/admin/settings，含语言/币种/时区、功能开关与市场审核门禁）与审计记录读取界面（/admin/audit）已实现；商品目录、交易链路、完整后台和生产部署仍未完成。
 
 

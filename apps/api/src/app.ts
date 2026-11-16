@@ -6,6 +6,7 @@ import type { ExceptionFilter } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AuditController } from './identity/audit-controller.js';
 import { RolesController } from './identity/roles-controller.js';
+import { StoreController } from './identity/store-controller.js';
 import { StaffController } from './identity/staff-controller.js';
 import { IdentityController } from './identity/controller.js';
 import { AuthError, IdentityService } from './identity/service.js';
@@ -58,7 +59,7 @@ class ApiExceptionFilter implements ExceptionFilter {
 }
 
 export async function createApp(identity: IdentityService | null = null) {
-  @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController], providers: [{ provide: 'IDENTITY', useValue: identity }] })
+  @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController], providers: [{ provide: 'IDENTITY', useValue: identity }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

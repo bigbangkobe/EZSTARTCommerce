@@ -4,6 +4,8 @@ import { loadMigrationManifest, migrationsMatch, type MigrationRecord } from '..
 import type { Prisma, PrismaClient } from '../../../../packages/database/src/client.js';
 import { issueInvitation, resendInvitation, revokeInvitation, acceptInvitation, issuePasswordReset, rotatePasswordReset, completePasswordReset,
   IdentityConflict, type Invitation, type PasswordReset, digest } from '../../../../packages/domain/src/identity.js';
+import { DEFAULT_FEATURE_FLAGS, StoreRuleError, SUPPORTED_LOCALES, assertMarketCanEnable, marketAfterReview, marketView,
+  normalizeMarketCode, normalizeMarketInput, normalizeStoreSettings, type MarketInput, type ReviewDecision } from '../../../../packages/domain/src/store.js';
 import { expiresAt, securityPolicy as policy } from '../../../../packages/config/src/security-policy.js';
 import { resolveRolePresets } from '../../../../packages/config/src/role-presets.js';
 import { csrf, decrypt, encrypt, equal, newTotpSecret, passwordHash, passwordMatches, recoveryCodes, token, totp, totpStep } from './crypto.js';
@@ -670,6 +672,128 @@ export class IdentityService {
       }
       await this.audit(tx, ctx, actor.id, existing ? 'admin.role.updated' : 'admin.role.created', role.id);
       return this.roleSummary(role);
+    }, true);
+  }
+
+  // ---- 商店设置（M01）--------------------------------------------------------
+  // 单实例单店铺：StoreConfig 恒为 id=1。读取/写入都先确保该行存在，
+  // 因此即使实例尚未初始化配置，管理端也能看到可编辑的默认值。
+
+  private async ensureStoreConfig(tx: Tx) {
+    return tx.storeConfig.upsert({ where: { id: 1 }, update: {}, create: {
+      id: 1, displayName: 'EZSTART Store', locales: [...SUPPORTED_LOCALES], defaultLocale: 'zh-CN',
+      baseCurrency: 'HKD', timezone: 'Asia/Hong_Kong', featureFlags: { ...DEFAULT_FEATURE_FLAGS },
+    } });
+  }
+
+  /** 领域规则失败统一映射为 422：调用方不应看到内部字段名以外的信息。 */
+  private rule<T>(fn: () => T): T {
+    try { return fn(); } catch (error) { if (error instanceof StoreRuleError) throw new AuthError(422, 'VALIDATION_ERROR'); throw error; }
+  }
+
+  private async storeView(tx: Tx, now: Date) {
+    const row = await this.ensureStoreConfig(tx);
+    const markets = await tx.marketProfile.findMany({ where: { storeConfigId: row.id }, orderBy: { marketCode: 'asc' } });
+    return {
+      displayName: row.displayName, locales: row.locales, defaultLocale: row.defaultLocale,
+      baseCurrency: row.baseCurrency, timezone: row.timezone,
+      // 审核过期在这里即时反映：enabled 会被收敛为 false，不等后台清理任务。
+      marketProfiles: markets.map(market => marketView({ ...market, eligibleProductIds: market.eligibleProductIds }, now)),
+      featureFlags: row.featureFlags as Record<string, boolean>,
+      brandAssets: { logoMediaId: row.logoMediaId ?? null, faviconMediaId: row.faviconMediaId ?? null },
+      version: row.version, updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
+  async storeConfiguration(supplied: string) {
+    return this.authenticated(supplied, null, async (tx, actor) => {
+      this.requirePermission(actor, 'store.settings.manage');
+      return this.storeView(tx, await this.now(tx));
+    });
+  }
+
+  async updateStoreConfiguration(supplied: string, csrfValue: string, version: number, body: {
+    displayName?: string; locales?: string[]; defaultLocale?: string; baseCurrency?: string; timezone?: string;
+    marketProfiles?: MarketInput[]; featureFlags?: Record<string, boolean>;
+    brandAssets?: { logoMediaId?: string | null; faviconMediaId?: string | null };
+  }, ctx: RequestContext) {
+    return this.authenticated(supplied, csrfValue, async (tx, actor, _session, now) => {
+      this.requirePermission(actor, 'store.settings.manage');
+      await this.lock(tx, 'store-config');
+      const row = await this.ensureStoreConfig(tx);
+      if (row.version !== version) throw new AuthError(409, 'VERSION_CONFLICT');
+      // 已有交易后再改本位币会让历史订单无法解释，必须拒绝而不是重算历史。
+      if (body.baseCurrency !== undefined && body.baseCurrency !== row.baseCurrency && row.tradingStartedAt) throw new AuthError(409, 'CURRENCY_LOCKED');
+
+      const settings = this.rule(() => normalizeStoreSettings({
+        displayName: body.displayName ?? row.displayName,
+        locales: body.locales ?? row.locales,
+        defaultLocale: body.defaultLocale ?? row.defaultLocale,
+        baseCurrency: body.baseCurrency ?? row.baseCurrency,
+        timezone: body.timezone ?? row.timezone,
+        featureFlags: body.featureFlags ?? (row.featureFlags as Record<string, boolean>),
+        logoMediaId: body.brandAssets?.logoMediaId !== undefined ? body.brandAssets.logoMediaId : row.logoMediaId,
+        faviconMediaId: body.brandAssets?.faviconMediaId !== undefined ? body.brandAssets.faviconMediaId : row.faviconMediaId,
+      }));
+
+      if (body.marketProfiles) {
+        const existing = new Map((await tx.marketProfile.findMany({ where: { storeConfigId: row.id } })).map(market => [market.marketCode, market]));
+        for (const input of body.marketProfiles) {
+          const market = this.rule(() => normalizeMarketInput(input));
+          const stored = existing.get(market.marketCode);
+          if (market.enabled) {
+            // 启用只能建立在“审核通过且未过期”之上；审核本身不自动启用市场。
+            if (!stored) throw new AuthError(422, 'MARKET_NOT_REVIEWED');
+            this.rule(() => assertMarketCanEnable({ ...stored }, now));
+          }
+          if (stored) await tx.marketProfile.update({ where: { id: stored.id }, data: { enabled: market.enabled, eligibleProductIds: market.eligibleProductIds } });
+          else await tx.marketProfile.create({ data: { marketCode: market.marketCode, enabled: false, eligibleProductIds: market.eligibleProductIds, storeConfigId: row.id } });
+        }
+      }
+
+      await tx.storeConfig.update({ where: { id: row.id }, data: {
+        displayName: settings.displayName, locales: [...settings.locales], defaultLocale: settings.defaultLocale,
+        baseCurrency: settings.baseCurrency, timezone: settings.timezone, featureFlags: settings.featureFlags,
+        logoMediaId: settings.logoMediaId, faviconMediaId: settings.faviconMediaId, version: { increment: 1 },
+      } });
+      await this.audit(tx, ctx, actor.id, 'store.config.updated', 'store-config', 'success', Object.keys(body).join(','));
+      return this.storeView(tx, now);
+    }, true);
+  }
+
+  /**
+   * 记录市场审核结论。审核人、时间由服务端赋值；结论是追加历史，不可改写。
+   * 只有店主且会话已完成 MFA 才能记录——这是对外的合规声明，不授权给普通管理员。
+   */
+  async recordMarketReview(supplied: string, csrfValue: string, marketCodeInput: string, version: number, body: {
+    decision: ReviewDecision; evidenceReference: string; reason: string; validUntil: string | null; confirmedMarketCode: string;
+  }, ctx: RequestContext) {
+    return this.authenticated(supplied, csrfValue, async (tx, actor, session, now) => {
+      this.requirePermission(actor, 'store.settings.manage');
+      await this.lock(tx, 'store-config');
+      const marketCode = this.rule(() => normalizeMarketCode(marketCodeInput));
+      if (this.rule(() => normalizeMarketCode(body.confirmedMarketCode)) !== marketCode) throw new AuthError(422, 'VALIDATION_ERROR');
+      if (!actor.roles.some(link => link.role.kind === 'owner') || !actor.factor || !session.mfaVerified) throw new AuthError(403, 'FORBIDDEN');
+      const row = await this.ensureStoreConfig(tx);
+      if (row.version !== version) throw new AuthError(409, 'VERSION_CONFLICT');
+      const market = await tx.marketProfile.findUnique({ where: { marketCode } });
+      if (!market) throw new AuthError(404, 'NOT_FOUND');
+      const validUntil = body.validUntil === null ? null : new Date(body.validUntil);
+      if (validUntil && Number.isNaN(validUntil.getTime())) throw new AuthError(422, 'VALIDATION_ERROR');
+      const next = this.rule(() => marketAfterReview(body.decision, validUntil, now));
+
+      const updated = await tx.storeConfig.update({ where: { id: row.id }, data: { version: { increment: 1 } } });
+      await tx.marketProfile.update({ where: { id: market.id }, data: next });
+      const record = await tx.marketReviewRecord.create({ data: { storeConfigId: row.id, marketCode, decision: body.decision,
+        evidenceReference: body.evidenceReference.trim(), reason: body.reason.trim(), reviewedBy: actor.id, reviewedAt: now,
+        validUntil: next.reviewValidUntil, storeConfigVersion: updated.version } });
+      await this.audit(tx, ctx, actor.id, 'store.market.reviewed', record.id, 'success', `${marketCode}:${body.decision}`);
+      return {
+        data: { id: record.id, marketCode, decision: record.decision, evidenceReference: record.evidenceReference,
+          reason: record.reason, reviewedBy: record.reviewedBy, reviewedAt: record.reviewedAt.toISOString(),
+          validUntil: record.validUntil?.toISOString() ?? null, storeConfigVersion: record.storeConfigVersion },
+        version: updated.version,
+      };
     }, true);
   }
 

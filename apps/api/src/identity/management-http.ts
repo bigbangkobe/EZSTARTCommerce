@@ -13,9 +13,11 @@ export class ManagementHttp {
     if (header(request, 'origin') !== service.config.allowedOrigin) throw new AuthError(403, 'FORBIDDEN');
     await service.limitIp(this.context(request)); this.contracts.assert(schema, body); return service;
   }
-  protected send(response: ServerResponse, request: ApiRequest, status: number, data: unknown) {
+  protected send(response: ServerResponse, request: ApiRequest, status: number, data: unknown, etagVersion?: number) {
     response.statusCode = status;
-    if (data && typeof data === 'object' && 'version' in data) response.setHeader('ETag', `"${data.version}"`);
+    // 资源版本既可能来自 data.version，也可能是外层返回的新版本（如审核后返回配置版本）。
+    const version = etagVersion ?? (data && typeof data === 'object' && 'version' in data ? Number((data as { version: unknown }).version) : undefined);
+    if (version !== undefined && Number.isSafeInteger(version) && version > 0) response.setHeader('ETag', `"${version}"`);
     response.setHeader('Content-Type', 'application/json; charset=utf-8');
     response.end(JSON.stringify({ data, meta: { requestId: request.requestId } }));
   }

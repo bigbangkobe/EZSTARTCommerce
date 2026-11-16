@@ -2,7 +2,7 @@
 
 跨模块固定实体、金额/时间约定与状态机以 [开发执行规格](DEVELOPMENT_SPEC.md) 为准；本文件描述关系和字段模型。
 
-后台身份生命周期的初始 Prisma 模型与迁移已落地，见 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md)。BootstrapState 对应开通状态；AdminChallenge 合并承载受限挑战与待 MFA 登记字段；MfaFactor、RecoveryCode 和 AdminSession 保存因子/恢复码/会话；AdminInvitation 与 AdminPasswordReset 保存一次性邀请/重设凭据；IdentityNotificationJob 按 kind 承载两类单次秘密的加密待投递任务，数据库约束保证每个任务只对应一种目标。门店与业务实体仍待迁移实现；完整契约见 [身份生命周期数据约束](ADMIN_IDENTITY_LIFECYCLE.md#数据审计及交付门槛)。
+后台身份生命周期的初始 Prisma 模型与迁移已落地，见 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md)。BootstrapState 对应开通状态；AdminChallenge 合并承载受限挑战与待 MFA 登记字段；MfaFactor、RecoveryCode 和 AdminSession 保存因子/恢复码/会话；AdminInvitation 与 AdminPasswordReset 保存一次性邀请/重设凭据；IdentityNotificationJob 按 kind 承载两类单次秘密的加密待投递任务，数据库约束保证每个任务只对应一种目标。StoreConfig（单实例单店铺，id=1）、MarketProfile 与 MarketReviewRecord 已随第七条迁移落地：审核是追加历史，数据库约束保证“启用即已审核”且默认语言属于启用语言；商品目录与其余业务实体仍待迁移实现。完整契约见 [身份生命周期数据约束](ADMIN_IDENTITY_LIFECYCLE.md#数据审计及交付门槛)。
 
 ## 1. 建模原则
 
