@@ -358,6 +358,10 @@ model ProductVariant {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   inventory InventoryItem?
+  cartItems CartItem[]
+  quoteLines CheckoutQuoteLine[]
+  orderItems OrderItem[]
+  reservations InventoryReservation[]
 }
 
 model ProductMedia {
@@ -395,4 +399,209 @@ model InventoryItem {
   variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
   onHand Int @default(0)
   reserved Int @default(0)
+}
+
+// ---- 购物车与结账（M06）-----------------------------------------------------
+// 游客购物袋只认 cookie 里的随机 token：库里存摘要，泄库也拿不到可用 token。
+// 报价是不可变快照，行数据与联系/地址/配送快照一起冻结，下单只认报价版本。
+
+model GuestCart {
+  id String @id @default(uuid()) @db.Uuid
+  tokenDigest String @unique
+  status String @default("active")
+  currency String
+  marketCode String?
+  locale String?
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  items CartItem[]
+  quotes CheckoutQuote[]
+  orders ShopOrder[]
+  @@index([status, expiresAt])
+}
+
+model CartItem {
+  id String @id @default(uuid()) @db.Uuid
+  cartId String @db.Uuid
+  cart GuestCart @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variantId String @db.Uuid
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  quantity Int
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@unique([cartId, variantId])
+}
+
+// 配送区按国家/区域划分；费率绑定到区，首期只支持固定费与金额门槛免邮。
+model ShippingZone {
+  id String @id @default(uuid()) @db.Uuid
+  code String @unique
+  nameByLocale Json
+  countryCodes String[]
+  regionCodes String[]
+  priority Int @default(0)
+  enabled Boolean @default(true)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  rates ShippingRateZone[]
+}
+
+model ShippingRate {
+  id String @id @default(uuid()) @db.Uuid
+  code String @unique
+  nameByLocale Json
+  fixedFeeMinor Int
+  freeAboveMinor Int?
+  currency String
+  estimatedMinDays Int?
+  estimatedMaxDays Int?
+  codEnabled Boolean @default(false)
+  enabled Boolean @default(true)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  zones ShippingRateZone[]
+  orders ShopOrder[]
+}
+
+model ShippingRateZone {
+  rateId String @db.Uuid
+  zoneId String @db.Uuid
+  rate ShippingRate @relation(fields: [rateId], references: [id], onDelete: Cascade)
+  zone ShippingZone @relation(fields: [zoneId], references: [id], onDelete: Restrict)
+  @@id([rateId, zoneId])
+}
+
+model CheckoutQuote {
+  id String @id @default(uuid()) @db.Uuid
+  cartId String @db.Uuid
+  cart GuestCart @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  status String @default("active")
+  version Int @default(1)
+  locale String
+  marketCode String
+  currency String
+  contact Json
+  shippingAddress Json
+  shippingMethodId String @db.Uuid
+  shippingMethodSnapshot Json
+  subtotalMinor Int
+  discountMinor Int
+  shippingMinor Int
+  taxMinor Int
+  totalMinor Int
+  couponCode String?
+  couponSummary Json?
+  ruleVersions Json
+  warnings Json
+  policyAcceptances Json
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  lines CheckoutQuoteLine[]
+  order ShopOrder?
+  @@index([cartId, status])
+}
+
+model CheckoutQuoteLine {
+  id String @id @default(uuid()) @db.Uuid
+  quoteId String @db.Uuid
+  quote CheckoutQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  variantId String @db.Uuid
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  sku String
+  productName String
+  variantName String?
+  quantity Int
+  unitPriceMinor Int
+  lineSubtotalMinor Int
+  lineDiscountMinor Int
+  lineTotalMinor Int
+  @@unique([quoteId, variantId])
+}
+
+// 订单只由报价生成：金额、联系、地址、配送、优惠全部来自快照，不接受客户端金额。
+model ShopOrder {
+  id String @id @default(uuid()) @db.Uuid
+  publicOrderNumber String @unique
+  idempotencyKey String @unique
+  requestDigest String
+  quoteId String @unique @db.Uuid
+  quote CheckoutQuote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  cartId String? @db.Uuid
+  cart GuestCart? @relation(fields: [cartId], references: [id], onDelete: SetNull)
+  shippingRateId String? @db.Uuid
+  shippingRate ShippingRate? @relation(fields: [shippingRateId], references: [id], onDelete: Restrict)
+  orderStatus String
+  paymentStatus String
+  fulfillmentStatus String @default("unfulfilled")
+  currency String
+  subtotalMinor Int
+  discountMinor Int
+  shippingMinor Int
+  taxMinor Int
+  totalMinor Int
+  locale String
+  marketCode String
+  contact Json
+  shippingAddress Json?
+  shippingMethodSnapshot Json
+  couponSnapshot Json?
+  customerNote String?
+  paymentMethodCode String
+  policyAcceptances Json
+  placedAt DateTime @db.Timestamptz(3)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  items OrderItem[]
+  events OrderStatusEvent[]
+  reservations InventoryReservation[]
+  @@index([orderStatus, placedAt])
+  @@index([placedAt])
+}
+
+model OrderItem {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variantId String? @db.Uuid
+  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  sku String
+  productName String
+  variantName String?
+  quantity Int
+  unitPriceMinor Int
+  lineSubtotalMinor Int
+  lineDiscountMinor Int
+  lineTotalMinor Int
+  @@index([orderId])
+}
+
+// 预留与订单同事务写入：库存不足时没有任何一行能落库。
+model InventoryReservation {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variantId String @db.Uuid
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  quantity Int
+  status String @default("active")
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([orderId, variantId])
+  @@index([status, expiresAt])
+}
+
+model OrderStatusEvent {
+  id String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromStatus String?
+  toStatus String
+  reason String?
+  actorType String @default("customer")
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([orderId, createdAt])
 }

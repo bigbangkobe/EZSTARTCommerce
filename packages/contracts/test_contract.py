@@ -218,6 +218,28 @@ class ContractTests(unittest.TestCase):
         quote["totalMinor"] = 1.5
         self.assertTrue(errors("CheckoutQuote", quote))
 
+    def test_cart_response_is_typed_and_never_carries_client_prices(self):
+        line = {"id": UUID, "variantId": UUID, "sku": "SKU-1", "productName": "Item", "variantName": None,
+                "quantity": 2, "unitPriceMinor": 1000, "lineSubtotalMinor": 2000,
+                "available": True, "availableQuantity": 5}
+        self.assertEqual([], errors("CartLine", line))
+        for key in ("priceMinor", "reserved", "onHand", "costMinor"):
+            self.assertTrue(errors("CartLine", dict(line, **{key: 1})), key)
+        cart = {"cartId": UUID, "currency": "HKD", "locale": "en", "itemCount": 2, "subtotalMinor": 2000,
+                "items": [line], "warnings": [], "expiresAt": NOW}
+        self.assertEqual([], errors("Cart", cart))
+        for key in ("cartId", "items", "subtotalMinor", "expiresAt"):
+            invalid = copy.deepcopy(cart)
+            del invalid[key]
+            self.assertTrue(errors("Cart", invalid), key)
+        # 购物车响应必须类型化，不能退回通用 Success：否则客户端无法知道行结构。
+        for path, method in (("/storefront/cart", "get"), ("/storefront/cart/items", "post"),
+                             ("/storefront/cart/items/{id}", "patch")):
+            self.assertIn("CartSuccess", SPEC["paths"][path][method]["responses"]["200"]["$ref"])
+        created = SPEC["paths"]["/storefront/cart"]["post"]["responses"]["201"]["$ref"]
+        self.assertIn("CartCreatedSuccess", created)
+        self.assertIn("Set-Cookie", SPEC["components"]["responses"]["CartCreatedSuccess"]["headers"])
+
     def test_response_variant_accepts_inventory_but_input_rejects_it(self):
         variant = {"sku": "SKU-1", "optionValues": {"size": "M"}, "priceMinor": 1000, "currency": "HKD"}
         self.assertEqual([], errors("ProductVariantInput", variant))

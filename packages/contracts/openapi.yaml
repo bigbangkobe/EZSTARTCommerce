@@ -1445,7 +1445,7 @@ paths:
       summary: Get the active guest cart
       security: [{ GuestCartSession: [] }]
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CartSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         default: { $ref: '#/components/responses/UnexpectedError' }
     post:
@@ -1453,7 +1453,7 @@ paths:
       operationId: createCart
       summary: Create a guest cart session
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/CartCreatedSuccess' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/cart/items:
     post:
@@ -1467,7 +1467,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CartItemWriteRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CartSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -1485,7 +1485,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CartItemUpdateRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CartSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -3398,6 +3398,23 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/QuoteEnvelope' }
+    CartSuccess:
+      description: Guest cart with live prices and availability
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CartEnvelope' }
+    CartCreatedSuccess:
+      description: Guest cart created
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Set-Cookie:
+          description: ez_guest_cart (HttpOnly session token) and ez_cart_csrf (readable double-submit token); both scoped to /api/v1.
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CartEnvelope' }
     OrderCreatedSuccess:
       description: Created order and next payment action
       content:
@@ -4658,6 +4675,13 @@ components:
       properties:
         data: { $ref: '#/components/schemas/ImportPreview' }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
+    CartEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/Cart' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     QuoteEnvelope:
       type: object
       additionalProperties: false
@@ -4926,6 +4950,37 @@ components:
         shippingMinor: { type: integer, minimum: 0 }
         taxMinor: { type: integer, minimum: 0 }
         totalMinor: { type: integer, minimum: 0 }
+    Cart:
+      type: object
+      additionalProperties: false
+      required: [cartId, currency, locale, itemCount, subtotalMinor, items, warnings, expiresAt]
+      description: Guest cart. Prices and availability are recomputed on every read; the client never supplies them.
+      properties:
+        cartId: { type: string, format: uuid }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        locale: { type: [string, 'null'] }
+        itemCount: { type: integer, minimum: 0 }
+        subtotalMinor: { type: integer, minimum: 0, description: Sum of currently sellable lines only. }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CartLine' }
+        warnings: { type: array, items: { type: string, maxLength: 120 } }
+        expiresAt: { type: string, format: date-time }
+    CartLine:
+      type: object
+      additionalProperties: false
+      required: [id, variantId, sku, productName, variantName, quantity, unitPriceMinor, lineSubtotalMinor, available, availableQuantity]
+      properties:
+        id: { type: string, format: uuid }
+        variantId: { type: string, format: uuid }
+        sku: { type: string, maxLength: 64 }
+        productName: { type: string, maxLength: 160 }
+        variantName: { type: [string, 'null'], maxLength: 160 }
+        quantity: { type: integer, minimum: 1, maximum: 99 }
+        unitPriceMinor: { type: integer, minimum: 0 }
+        lineSubtotalMinor: { type: integer, minimum: 0 }
+        available: { type: boolean, description: False when the variant is no longer sellable or stock fell below the line quantity. }
+        availableQuantity: { type: integer, minimum: 0 }
     CheckoutQuote:
       type: object
       additionalProperties: false

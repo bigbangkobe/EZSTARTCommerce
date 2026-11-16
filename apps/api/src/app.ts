@@ -9,6 +9,11 @@ import { RolesController } from './identity/roles-controller.js';
 import { StoreController } from './identity/store-controller.js';
 import { CatalogController } from './catalog/controller.js';
 import { CatalogService } from './catalog/service.js';
+import { CartController, CheckoutController } from './checkout/controller.js';
+import { CartService } from './checkout/cart-service.js';
+import { CheckoutService } from './checkout/service.js';
+import { ShippingController } from './shipping/controller.js';
+import { ShippingService } from './shipping/service.js';
 import { MediaController, MediaObjectsController } from './media/controller.js';
 import { mediaStorageConfig } from './media/config.js';
 import { MediaService } from './media/service.js';
@@ -72,12 +77,19 @@ export interface AppOptions { mediaStorage?: MediaStorage }
 export async function createApp(identity: IdentityService | null = null, options: AppOptions = {}) {
   // 媒体存储默认按环境配置构造；测试可以注入临时目录，避免把上传文件写进仓库。
   const mediaStorage = identity ? options.mediaStorage ?? createMediaStorage(mediaStorageConfig(process.env, identity.config.encryptionKey)) : null;
+  // 结账依赖购物袋与配送配置：三个服务共享同一个 IdentityService 连接池。
+  const shipping = identity ? new ShippingService(identity) : null;
+  const cart = identity ? new CartService(identity) : null;
+  const checkout = identity && cart && shipping ? new CheckoutService(identity, cart, shipping) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
-    CatalogController, MediaController, MediaObjectsController, StorefrontController],
+    CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
-      { provide: 'STOREFRONT', useValue: identity ? new StorefrontService(identity) : null }] })
+      { provide: 'STOREFRONT', useValue: identity ? new StorefrontService(identity) : null },
+      { provide: 'SHIPPING', useValue: shipping },
+      { provide: 'CART', useValue: cart },
+      { provide: 'CHECKOUT', useValue: checkout }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

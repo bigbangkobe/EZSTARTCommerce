@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进购物车与结账（M06），再进入订单与支付（M07/M08）。前台展示目前只有只读目录接口，三语参考前台（M02 前台部分）与页面内容（M04）尚未开始。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+推进订单与支付（M07/M08）：后台订单列表与详情、取消/地址变更、付款渠道配置与 Webhook 验签，以及预留释放。前台展示目前只有只读目录接口，三语参考前台（M02 前台部分）与页面内容（M04）尚未开始。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -203,3 +203,22 @@
 关键对抗用例：SVG/GIF 与扩展名不同族 422、超过 10 MiB 422、无扩展名按 MIME 放宽、对象 key 不能越出 media 前缀、伪造/过期/无签名 PUT 与 GET 一律 403、错误摘要 422 且记录保持 pending、未知对象 422、重复确认 409、确认后 pending 才转 ready、pending 对象不提供字节、品牌引用不存在的媒体 422、`catalog.read` 不能读媒体库、未审核市场前台为空、未来发布时间与草稿不可见、英文 slug 用中文前台访问按当前语言回退。
 
 边界：本地驱动把字节写在 API 主机磁盘上，多副本部署必须改 S3 驱动；S3 驱动的确认步骤会整对象回读算摘要（单文件 ≤10 MiB），未做分片与 CDN；无媒体删除/替换/裁剪接口，pending 行不会自动清理；前台只输出媒体引用不输出图片地址（契约未定义），三语参考前台与页面内容（M04）未开始；购物车与结账未实现。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 9 条迁移）。
+
+## 2026-11-16：购物车、配送配置与结账（M06）
+
+本批程序：
+
+- 第十条迁移新增 `GuestCart`（token 只存 SHA-256）、`CartItem`、`ShippingZone`/`ShippingRate`/`ShippingRateZone`、`CheckoutQuote`/`CheckoutQuoteLine`、`ShopOrder`/`OrderItem`、`InventoryReservation`、`OrderStatusEvent`。金额表与行表都用 CHECK 约束锁住“总额 = 小计 - 折扣 + 运费 + 税”“行小计 = 单价 × 数量”；算错的服务端同样写不进去。订单号、幂等键、报价 ID 各自唯一。
+- `packages/domain/src/checkout.ts`：数量 1–99、联系方式至少一个有效渠道、地址长度与国家码、优惠码 trim+uppercase、政策同意去重且必须显式 true、运费免邮门槛、报价金额不变量、报价版本/有效期、订单号与幂等指纹。
+- `packages/domain/src/shipping.ts`：编码/名称/国家/区域/金额/天数的规范化，启用区之间拒绝重叠口径（同国家全境、或区域集合相交）。
+- 游客购物袋：`POST/GET /storefront/cart`、`POST /storefront/cart/items`、`PATCH/DELETE /storefront/cart/items/:id`。身份只来自 `ez_guest_cart`（HttpOnly、Secure、SameSite=Lax、path=/api/v1、30 天）；写操作要求 `ez_cart_csrf` 与 `X-CSRF-Token` 双提交一致，缺失或不匹配一律 403。未发布、已下架、跨币种、超出可售库存的变体拒收；购物袋不保存价格，每次读取按当前变体重算，并标记 `available`/`availableQuantity`。小计只汇总当前可售行。
+- 配送配置（M09 最小切片）：`/admin/shipping/zones`、`/admin/shipping/rates` 的列表/创建/详情/更新（`shipping.manage` + CSRF + Origin + If-Match），`POST /admin/shipping/quote-preview` 试算。费率币种必须等于店铺基础币种；名称只能使用店铺已启用语言；引用不存在的区返回 422。
+- 报价 `POST /storefront/checkout/quote`：市场必须已启用且审核未过期（否则 409 `MARKET_NOT_AVAILABLE`），重新校验商品在该市场的可售性、变体状态与库存，运费按配送区覆盖与免邮门槛计算，生成不可变快照（15 分钟），并把该购物袋此前的 active 报价置为 `superseded`。报价响应不回显联系方式。优惠引擎未实现，提交优惠码时返回 `COUPON_NOT_APPLIED` 警告而不是静默打折。
+- 下单 `POST /storefront/checkout/orders`：`Idempotency-Key` 16–128 字符，指纹只覆盖报价 ID、确认版本、支付方式与备注；同键同指纹返回原订单，同键不同指纹 409 `IDEMPOTENCY_CONFLICT`。事务内校验报价归属/状态/有效期/版本、当前价格与市场可售性，用 `UPDATE ... WHERE onHand - reserved >= qty` 原子预留库存（扣不到即整体回滚并返回 409 `OUT_OF_STOCK`），随后写入订单行、预留记录与状态事件，并把报价置为 `consumed`、购物袋置为 `converted`。首期无支付网关：只接受配送方式显式开启的货到付款（`paymentMethodCode=cod`），其余方式 422 `PAYMENT_METHOD_UNAVAILABLE`。
+- apps/admin 新增 /admin/shipping：配送区与费率列表、创建、启用/停用（带 If-Match）、金额按分提交、运费试算；商品目录、店铺设置、媒体库页给出入口。
+
+验证：pnpm check 通过（Node 测试新增结账域 13 项与真实 PostgreSQL 结账 HTTP 用例；契约测试 22 项含新增购物车响应类型断言），管理端类型检查与生产构建通过（新增 /admin/shipping 路由）；本地 Edge 的 pnpm test:browser 40 项桌面/手机用例通过（新增配送页 3 项×2 项目）。
+
+关键对抗用例：无 cookie 读购物袋 401、缺 CSRF 或令牌不符 403、CSRF cookie 可读而会话 cookie 不可读、数量 0/100/非整数 422、客户端价格字段 422、草稿商品变体 422、超库存 409、跨购物袋删行 404、未审核市场 409、非本袋 cartId 422、优惠码只产生警告、报价不回显联系方式、同键重放返回同订单且不重复预留、同键不同备注 409、已消费报价不能再下单、改价后下单 409 `PRICE_CHANGED`、过期报价 409 `QUOTE_EXPIRED`、库存不足回滚且不留半张订单、超过 IP 阈值 429。
+
+边界：没有优惠引擎（折扣恒为 0）、没有税费配置（`ruleVersions.tax = null`）、没有顾客/会员档案与订单查询接口（M07/M10）；预留 30 分钟到期后由 M07 释放任务处理，本批没有后台释放任务；订单只有 `awaiting_confirmation`/`cod_due` 两个初始状态，取消、发货、退款均未实现；配送只支持固定运费与金额门槛免邮，没有重量/体积/阶梯计费；本地实例升级需运行 pnpm db:migrate（第 10 条迁移）。

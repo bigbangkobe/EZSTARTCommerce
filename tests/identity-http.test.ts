@@ -56,7 +56,7 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
     app = await createApp(identity); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     await t.test('migration history and dependency readiness are real', async () => {
       const migrated = await db.$queryRaw<{ count: bigint }[]>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
-      assert.equal(Number(migrated[0]!.count), 9);
+      assert.equal(Number(migrated[0]!.count), 10);
       const ready = await call('health/ready', undefined, new Map(), {}, 'ReadinessStatusEnvelope');
       assert.equal(ready.status, 200);
       const zone = await db.$queryRaw<{ zone: string }[]>`SELECT current_setting('TimeZone') AS zone`;

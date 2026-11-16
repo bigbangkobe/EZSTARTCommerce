@@ -15,6 +15,8 @@ export class ManagementHttp {
   }
   protected send(response: ServerResponse, request: ApiRequest, status: number, data: unknown, etagVersion?: number) {
     response.statusCode = status;
+    // 204 不能带响应体：与契约一致，删掉资源后只回状态码。
+    if (status === 204) { response.end(); return; }
     // 资源版本既可能来自 data.version，也可能是外层返回的新版本（如审核后返回配置版本）。
     const version = etagVersion ?? (data && typeof data === 'object' && 'version' in data ? Number((data as { version: unknown }).version) : undefined);
     if (version !== undefined && Number.isSafeInteger(version) && version > 0) response.setHeader('ETag', `"${version}"`);

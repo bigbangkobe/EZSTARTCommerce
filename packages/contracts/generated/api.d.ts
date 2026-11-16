@@ -2688,6 +2688,10 @@ export interface components {
             data: components["schemas"]["ImportPreview"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        CartEnvelope: {
+            data: components["schemas"]["Cart"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         QuoteEnvelope: {
             data: components["schemas"]["CheckoutQuote"];
             meta: components["schemas"]["ResponseMeta"];
@@ -2913,6 +2917,35 @@ export interface components {
             shippingMinor: number;
             taxMinor: number;
             totalMinor: number;
+        };
+        /** @description Guest cart. Prices and availability are recomputed on every read; the client never supplies them. */
+        Cart: {
+            /** Format: uuid */
+            cartId: string;
+            currency: string;
+            locale: string | null;
+            itemCount: number;
+            /** @description Sum of currently sellable lines only. */
+            subtotalMinor: number;
+            items: components["schemas"]["CartLine"][];
+            warnings: string[];
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        CartLine: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            variantId: string;
+            sku: string;
+            productName: string;
+            variantName: string | null;
+            quantity: number;
+            unitPriceMinor: number;
+            lineSubtotalMinor: number;
+            /** @description False when the variant is no longer sellable or stock fell below the line quantity. */
+            available: boolean;
+            availableQuantity: number;
         };
         CheckoutQuote: {
             currency: string;
@@ -4006,6 +4039,28 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["QuoteEnvelope"];
+            };
+        };
+        /** @description Guest cart with live prices and availability */
+        CartSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CartEnvelope"];
+            };
+        };
+        /** @description Guest cart created */
+        CartCreatedSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                /** @description ez_guest_cart (HttpOnly session token) and ez_cart_csrf (readable double-submit token); both scoped to /api/v1. */
+                "Set-Cookie"?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CartEnvelope"];
             };
         };
         /** @description Created order and next payment action */
@@ -5760,7 +5815,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CartSuccess"];
             401: components["responses"]["Unauthorized"];
             default: components["responses"]["UnexpectedError"];
         };
@@ -5774,7 +5829,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["CartCreatedSuccess"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -5791,7 +5846,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CartSuccess"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
@@ -5836,7 +5891,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CartSuccess"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];

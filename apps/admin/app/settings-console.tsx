@@ -102,7 +102,7 @@ export function SettingsConsole() {
   }
 
   return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div><header><div><p className="eyebrow">店铺管理</p><h1>店铺设置</h1></div><div className="actions">
-    <a href="/admin/catalog">商品目录</a><a href="/admin/access">员工与角色</a>{permissions.includes('audit.read') && <a href="/admin/audit">审计记录</a>}{permissions.includes('media.manage') && <a href="/admin/media">媒体库</a>}    <button disabled={busy || !canManage} onClick={() => void run(async () => {})}>刷新配置</button></div></header>
+    <a href="/admin/catalog">商品目录</a><a href="/admin/access">员工与角色</a>{permissions.includes('audit.read') && <a href="/admin/audit">审计记录</a>}{permissions.includes('media.manage') && <a href="/admin/media">媒体库</a>}{permissions.includes('shipping.manage') && <a href="/admin/shipping">配送与结账</a>}    <button disabled={busy || !canManage} onClick={() => void run(async () => {})}>刷新配置</button></div></header>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {!ready && !error && <p>正在检查会话与权限…</p>}
     {ready && !canManage && <section><h2>没有店铺设置权限</h2><p>店铺设置只对获 store.settings.manage 的员工开放，请联系店主。</p></section>}

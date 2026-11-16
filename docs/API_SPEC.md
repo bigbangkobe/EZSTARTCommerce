@@ -175,6 +175,10 @@
 
 媒体字节的收发不经过业务契约：`upload-target` 返回的短时 URL 指向对象存储，或（本地驱动时）指向 `/api/v1/media/objects?key=&expires=&signature=` 这一存储端点。该端点只认 URL 上的单对象、单方法签名，不读后台会话，也不要求 CSRF；签名过期即失效，且只有已确认（`ready`）的媒体才可读取。因此它不属于 OpenAPI 业务接口，也不承担权限判断。
 
+游客购物袋的身份只来自 `ez_guest_cart` cookie（HttpOnly、Secure、SameSite=Lax、作用域 `/api/v1`）；写接口同时要求 `ez_cart_csrf` cookie 与 `X-CSRF-Token` 头一致（双提交）。该 cookie 只代表一个购物袋，不能读取订单、顾客或后台资源；这些接口不做 Origin 校验，因为前台与 API 可能不同源。
+
+`/storefront/checkout/orders` 的 `paymentMethodCode` 首期只接受配送方式显式开启的 `cod`（货到付款）。没有支付网关时不得接受其他方式，也不得在未收到交易通知前把订单标为已付款。
+
 ### 3.3 导入、购物车与结账（M05–M06）
 
 | 方法与路径 | 用途 / 关键输入 | 权限与关键规则 |
