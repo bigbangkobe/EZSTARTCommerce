@@ -5,6 +5,7 @@ import { assertQuoteActive, assertQuoteMath, assertQuoteVersion, CheckoutRuleErr
   publicOrderNumber, quoteExpiry, QUOTE_TTL_SECONDS, type Address, type Contact } from '../../../../packages/domain/src/checkout.js';
 import { effectiveReviewStatus, normalizeMarketCode } from '../../../../packages/domain/src/store.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
+import type { PaymentsService } from '../payments/service.js';
 import type { ShippingService } from '../shipping/service.js';
 import { CartService, type CartRow } from './cart-service.js';
 
@@ -35,7 +36,7 @@ interface Settings {
  */
 export class CheckoutService {
   constructor(private readonly identity: IdentityService, private readonly cartService: CartService,
-    private readonly shipping: ShippingService) {}
+    private readonly shipping: ShippingService, private readonly payments: PaymentsService) {}
   private get db() { return this.identity.db; }
 
   private rule<T>(fn: () => T): T {
@@ -149,17 +150,23 @@ export class CheckoutService {
     }, { timeout: 15_000 });
   }
 
-  private paymentAction(locale: string, paymentStatus: string) {
-    if (paymentStatus !== 'cod_due') return { type: 'none' as const, redirectUrl: null, instructions: null };
-    const instructions = locale === 'en' ? 'Order confirmed. Pay in cash when the order is delivered.'
-      : locale === 'zh-HK' ? '訂單已確認，將於送貨時以現金付款。' : '订单已确认，将在送货时现金付款。';
-    return { type: 'instructions' as const, redirectUrl: null, instructions };
+  private paymentAction(locale: string, paymentStatus: string, accountSummary?: string | null) {
+    if (paymentStatus === 'cod_due') {
+      const instructions = locale === 'en' ? 'Order confirmed. Pay in cash when the order is delivered.'
+        : locale === 'zh-HK' ? '訂單已確認，將於送貨時以現金付款。' : '订单已确认，将在送货时现金付款。';
+      return { type: 'instructions' as const, redirectUrl: null, instructions };
+    }
+    // 人工转账：付款说明来自支付方式配置，未配置就不编造银行信息。
+    if (paymentStatus === 'created' && accountSummary) {
+      return { type: 'instructions' as const, redirectUrl: null, instructions: accountSummary.slice(0, 2_000) };
+    }
+    return { type: 'none' as const, redirectUrl: null, instructions: null };
   }
 
-  private orderView(row: Prisma.ShopOrderGetPayload<{}>) {
+  private orderView(row: Prisma.ShopOrderGetPayload<{}>, accountSummary?: string | null) {
     return { orderId: row.id, publicOrderNumber: row.publicOrderNumber, orderStatus: row.orderStatus,
       paymentStatus: row.paymentStatus, currency: row.currency, totalMinor: row.totalMinor,
-      paymentAction: this.paymentAction(row.locale, row.paymentStatus) };
+      paymentAction: this.paymentAction(row.locale, row.paymentStatus, accountSummary) };
   }
 
   private day(timezone: string, now: Date) {
@@ -207,10 +214,13 @@ export class CheckoutService {
           if (!fresh || fresh.status !== 'active') throw new AuthError(409, 'QUOTE_NOT_AVAILABLE');
 
           const rate = await tx.shippingRate.findUnique({ where: { id: quote.shippingMethodId } });
-          const methodCode = body.paymentMethodCode.trim().toLowerCase();
-          // 首期没有支付网关：只接受配送方式显式开启的货到付款，未开通的方法明确拒绝。
           if (!rate || !rate.enabled) throw new AuthError(409, 'SHIPPING_UNAVAILABLE');
-          if (methodCode !== 'cod' || !rate.codEnabled) throw new AuthError(422, 'PAYMENT_METHOD_UNAVAILABLE');
+          // 可售方式 = 已接入 + 已批准 + 已启用；COD 还需要配送方式本身开启货到付款。
+          const method = await this.payments.resolveCheckout(tx, body.paymentMethodCode.trim().toLowerCase(), rate.codEnabled);
+          const methodCode = method.definition.code;
+          // 首期没有线上网关：COD 记 cod_due（交货收钱），人工转账记 created（等到账）。
+          const paymentStatus = method.definition.channel === 'cod' ? 'cod_due' : 'created';
+          const accountSummary = (method.row.publicConfig as Record<string, string>).accountSummary ?? null;
 
           const now = new Date();
           for (const line of quote.lines) {
@@ -227,7 +237,7 @@ export class CheckoutService {
             publicOrderNumber: publicOrderNumber(this.day(settings.timezone, now),
               Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')),
             idempotencyKey, requestDigest: digest, quoteId: quote.id, cartId: cart.id, shippingRateId: rate.id,
-            orderStatus: 'awaiting_confirmation', paymentStatus: 'cod_due', currency: quote.currency,
+            orderStatus: 'awaiting_confirmation', paymentStatus, currency: quote.currency,
             subtotalMinor: quote.subtotalMinor, discountMinor: quote.discountMinor, shippingMinor: quote.shippingMinor,
             taxMinor: quote.taxMinor, totalMinor: quote.totalMinor, locale: quote.locale, marketCode: quote.marketCode,
             contact: quote.contact as Prisma.InputJsonValue, shippingAddress: quote.shippingAddress as Prisma.InputJsonValue,
@@ -239,6 +249,8 @@ export class CheckoutService {
             sku: line.sku, productName: line.productName, variantName: line.variantName, quantity: line.quantity,
             unitPriceMinor: line.unitPriceMinor, lineSubtotalMinor: line.lineSubtotalMinor,
             lineDiscountMinor: line.lineDiscountMinor, lineTotalMinor: line.lineTotalMinor })) });
+          // 台账与订单同事务：下单即有一条待收流水，收款登记只推进状态，不补造记录。
+          await this.payments.openLedger(tx, created, method.definition, method.row);
           const expiresAt = new Date(now.getTime() + RESERVATION_MINUTES * 60_000);
           for (const line of quote.lines) await this.reserve(tx, created.id, line, expiresAt);
           await tx.checkoutQuote.update({ where: { id: quote.id }, data: { status: 'consumed' } });
@@ -246,7 +258,7 @@ export class CheckoutService {
           await tx.orderStatusEvent.create({ data: { orderId: created.id, fromStatus: null,
             toStatus: 'awaiting_confirmation', reason: 'order_placed', actorType: 'customer' } });
           await this.identity.recordAudit(tx, ctx, null, 'checkout.order.created', created.id);
-          return this.orderView(created);
+          return this.orderView(created, accountSummary);
         }, { timeout: 15_000 });
       } catch (error) {
         const code = (error as { code?: string }).code;

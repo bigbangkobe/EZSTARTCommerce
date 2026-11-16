@@ -259,7 +259,7 @@ packages/
 | `customers.read_masked`, `customers.read_pii`, `customers.manage`, `customers.export` | Owner；OrderSupport 默认 masked；PrivacySpecialist 按任务授权 | 顾客档案、全字段查看和导出分开授权 |
 | `members.manage`, `points.adjust`, `coupons.read`, `coupons.manage`, `coupons.issue` | Owner、Admin；对应运营岗位可授权 | 积分人工调整单独记录原因、审计和限额；营销发放检查同意 |
 | `inventory.read`, `inventory.adjust`, `inventory.manage` | Owner、Admin；Warehouse 可获读/调整的受限权限 | 调整记前后数量/原因；批量盘点也必须生成流水 |
-| `payments.read`, `payment.config`, `payments.reconcile`, `refunds.create`, `refund.approve`, `refund.execute` | Owner；Finance 可按需授权；OrderSupport 默认只能建售后案/查有限信息 | 退款审批与执行分开；生产凭证配置不因财务权限自动开放 |
+| `payments.read`, `payments.collect`, `payment.config`, `payments.reconcile`, `refunds.create`, `refund.approve`, `refund.execute` | Owner；Finance 可获收款登记与对账；OrderSupport 默认只能建售后案/查有限信息 | 收款登记与退款审批/执行分开；生产凭证配置不因财务权限自动开放 |
 | `shipping.manage`, `notifications.read`, `notifications.manage`, `notifications.retry` | Owner、Admin；Shipping/Operations 岗位按职责授权 | 配送规则有版本；重发只重试通知，不重做业务动作 |
 | `reports.view`, `reports.export` | Owner、Admin、ReportsReadOnly | ReportsReadOnly 仅聚合结果，不能查看顾客/订单 PII |
 | `privacy.read`, `privacy.manage`, `privacy.verify`, `privacy.process`, `privacy.export` | Owner、PrivacySpecialist 按任务授权 | 核验、处理、导出分权；申请人不得审批自己处理的请求 |

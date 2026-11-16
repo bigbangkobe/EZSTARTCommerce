@@ -273,6 +273,13 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       assert.equal((await db.checkoutQuote.findUniqueOrThrow({ where: { id: quoteId } })).status, 'consumed');
       assert.equal((await db.guestCart.findUniqueOrThrow({ where: { id: cart.id } })).status, 'converted');
       assert.equal(await db.orderItem.count({ where: { orderId } }), 1);
+      // 下单与台账同事务：订单落库时就已经有一条待收流水，金额只来自订单快照。
+      const ledger = await db.payment.findFirstOrThrow({ where: { orderId } });
+      assert.equal(ledger.status, 'pending');
+      assert.equal(ledger.channel, 'cod');
+      assert.equal(ledger.amountMinor, 13_000);
+      assert.equal(ledger.currency, 'HKD');
+      assert.match(ledger.publicPaymentNumber, /^PAY-[0-9]{8}-[A-Z0-9]{6}$/);
 
       const replay = await front('POST', 'storefront/checkout/orders', { quoteId, confirmedQuoteVersion: 1,
         paymentMethodCode: 'cod', customerNote: 'Call before delivery' }, 'OrderCreatedEnvelope', { 'Idempotency-Key': key });
@@ -339,8 +346,45 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       assert.ok(limited.response.headers.get('retry-after'));
       await resetLimits();
     });
+    await t.test('checkout only accepts enabled and approved payment methods', async () => {
+      await resetLimits();
+      const cod = await db.paymentMethodConfig.findUniqueOrThrow({ where: { providerCode_environment:
+        { providerCode: 'cod', environment: 'production' } } });
+      // 停用 COD：结账不能再借“配送方式开启货到付款”绕过支付方式配置。
+      await db.paymentMethodConfig.update({ where: { id: cod.id }, data: { enabled: false, version: { increment: 1 } } });
+      await newCart();
+      assert.equal((await front('POST', 'storefront/cart/items', { variantId, quantity: 1 })).status, 200);
+      const blockedQuote = await front('POST', 'storefront/checkout/quote', quoteBody(cart.id, methodId), 'QuoteEnvelope');
+      const blocked = await front('POST', 'storefront/checkout/orders', { quoteId: blockedQuote.body.data.quoteId,
+        confirmedQuoteVersion: 1, paymentMethodCode: 'cod' }, 'OrderCreatedEnvelope', { 'Idempotency-Key': randomUUID() });
+      assert.equal(blocked.status, 422);
+      assert.equal(blocked.body.error.code, 'PAYMENT_METHOD_UNAVAILABLE');
+      assert.equal(await db.payment.count({ where: { orderId: { not: orderId } } }), 0, '失败的下单不留台账');
+
+      await db.paymentMethodConfig.update({ where: { id: cod.id }, data: { enabled: true } });
+      const manual = await db.paymentMethodConfig.findUniqueOrThrow({ where: { providerCode_environment:
+        { providerCode: 'manual_bank_transfer', environment: 'production' } } });
+      await db.paymentMethodConfig.update({ where: { id: manual.id }, data: { enabled: true,
+        approvalReference: 'ticket-manual', approvedAt: new Date(), publicConfig: { accountSummary: 'Bank: 012-345' } } });
+
+      const manualQuote = await front('POST', 'storefront/checkout/quote', quoteBody(cart.id, methodId), 'QuoteEnvelope');
+      const created = await front('POST', 'storefront/checkout/orders', { quoteId: manualQuote.body.data.quoteId,
+        confirmedQuoteVersion: 1, paymentMethodCode: 'manual_bank_transfer' }, 'OrderCreatedEnvelope',
+        { 'Idempotency-Key': randomUUID() });
+      assert.equal(created.status, 201);
+      assert.equal(created.body.data.paymentStatus, 'created', '人工转账在到账前不是 cod_due');
+      assert.equal(created.body.data.paymentAction.type, 'instructions');
+      assert.equal(created.body.data.paymentAction.instructions, 'Bank: 012-345');
+      const ledger = await db.payment.findFirstOrThrow({ where: { orderId: created.body.data.orderId } });
+      assert.equal(ledger.channel, 'manual');
+      assert.equal(ledger.status, 'pending');
+      assert.equal(ledger.amountMinor, 13_000);
+    });
+
     // 兜底断言：若子测试未执行，orderNumber 为空会在这里失败，而不是静默“通过”。
     assert.match(orderNumber, /^EZ-[0-9]{8}-[A-Z0-9]{6}$/);
+    assert.equal(await db.payment.count({ where: { channel: 'manual' } }), 1, '人工转账下单必须留下待收流水');
+    assert.equal(await db.payment.count({ where: { channel: 'manual' } }), 1, '人工转账下单必须留下待收流水');
   } finally {
     if (app) await app.close();
     await identity.onModuleDestroy().catch(() => {});

@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进支付与收款（M08）：付款渠道配置（密钥只写入安全存储、GET 只回脱敏状态）、Webhook 原始 body 验签与事件去重、COD 收款登记。前台展示目前只有只读目录接口，三语参考前台（M02 前台部分）与页面内容（M04）尚未开始。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+推进履约与售后（M09/M16）：包裹承运商与状态回传、退货收件与质检，以及建立在这些之上的退款（审批与执行分权、调用原支付适配器或人工凭据登记）；结算文件导入与对账差异队列（M08 剩余部分）依赖选定服务商与文件格式，须在客户提供沙箱/生产凭证后单独验收。前台展示目前只有只读目录接口，三语参考前台（M02 前台部分）与页面内容（M04）尚未开始。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -244,3 +244,22 @@
 关键对抗用例：无会话 401、只有 orders.read 不能取消/发货/写备注 403、列表与详情在无 PII 权限时遮蔽联系方式、owner 可见完整联系方式、版本过期 409、同幂等键不同原因 409、同键重放不重复释放预留/不重复写事件、已取消订单再取消 409、运费变化无确认依据 422、地址不在配送区 409、包裹数量超订购量 409、未发货直接签收 409、重复发货 409、发货只释放本包裹预留、拆两包裹发货后订单才转 shipped、全部签收后 completed 且 paymentStatus 仍为 cod_due、过期预留释放且订单被系统取消、清理任务重复执行无副作用。
 
 边界：没有支付渠道与 Webhook（M08）、没有 COD 收款登记、退款与售后；没有订单确认/暂停/恢复等中间动作的独立接口，确认与处理中状态目前只由发货推进；已确认但未发货的订单若预留过期不会被自动取消（会保留原状态，需人工处理）；包裹不可取消/合并/改址，发货后地址只能人工记录；多副本部署时清理任务会在每个副本各跑一次（按行条件更新与订单锁保证不重复扣减）；本地实例升级需运行 pnpm db:migrate（第 11 条迁移）。
+
+## 2026-11-16：付款方式配置、收款登记与交易台账（M08）
+
+本批程序：
+
+- 第十二条迁移新增 `PaymentMethodConfig`、`Payment`、`PaymentEvent`。数据库不是“尽力而为”，而是把三条规则写成约束：启用的方式必须有批准依据（`approvalReference` 与 `approvedAt` 同时存在，或 `enabled=false`）；`secretRef` 必须是 `scheme://...` 形状的引用，指纹必须是 16 位小写十六进制；台账状态与时间必须同时成立（`collected|succeeded|returned` 必须有 `paidAt`，`returned` 与 `returnedAt` 同真同假），`("providerCode","providerTransactionId")` 在非空时唯一，同一服务商交易号无法入账两次。
+- `packages/domain/src/payments.ts`：已接入渠道白名单（`cod` 与 `manual_bank_transfer`，各带渠道类型与凭证要求）、按渠道收口的结果集（COD 没有“授权成功”，人工转账没有“拒收”）、只进不退的状态机（`unknown` 没有人工出口，必须由渠道查询结论推进）、订单付款状态投影、收款入参规范化（金额为正整数、时间不得晚于当前 1 分钟以上、拒收/退回必须写原因）、金额三向校验（台账=订单=请求且币种一致）、COD 必须已发货、凭证引用形状校验、`publicConfig` 白名单、台账号 `PAY-YYYYMMDD-XXXXXX`。
+- 后台配置：`GET /admin/payment-methods`（`payment.config`）返回渠道、环境、启用状态、批准状态与依据、`publicConfig`、`secretConfigured`、`secretFingerprint`、连接状态与版本——响应模型里没有 `secretRef` 字段，凭证引用写进去就再也读不出来。`PATCH /admin/payment-methods`（`payment.config` + CSRF + Origin + If-Match）按 `providerCode`+`environment` 定点更新；启用必须有批准依据，直接粘密钥本体 422 `SECRET_REFERENCE_INVALID`，渠道仍有 `pending|authorized|unknown` 流水时停用 409 `PAYMENT_METHOD_IN_USE`；凭证更换只更新指纹，写审计 `payments.method.enabled|payments.method.updated`。
+- 结账接入：`CheckoutService` 不再硬编码 `cod`。可售方式 = 已接入 + 已批准 + 生产环境已启用，COD 另需配送方式开启货到付款；否则 422 `PAYMENT_METHOD_UNAVAILABLE`。下单与台账同事务：COD 订单 `paymentStatus=cod_due`、人工转账 `created`，同时开一条 `pending` 流水（金额只来自订单快照），人工转账的顾客付款说明取自 `publicConfig.accountSummary`，未配置就不编造银行信息。
+- 收款登记：`POST /admin/orders/:id/payment-result`（`payments.collect` + CSRF + Origin + `Idempotency-Key` + If-Match）。事务内按订单加锁、核对版本、复核金额与时间窗、按渠道推进台账状态，并把订单 `paymentStatus` 投影为 `collected|rejected|returned|succeeded|cancelled`（订单版本 +1，后续动作必须用新版本）。重放同键返回同一笔流水，同键不同内容 409 `IDEMPOTENCY_CONFLICT`，再收一次 409 `PAYMENT_STATE_CONFLICT`。签到收不改付款状态的旧规则保留：登记收款是独立动作。
+- 台账读取：`GET /admin/payments`（`payments.read`，游标分页 + `status`/`orderId`/`providerCode` 筛选）与 `GET /admin/payments/:id`（含追加写事件流）。
+- 权限：新增 `payments.collect`，授予 owner、admin 与财务预设；`payment.config` 仍只给 owner 与管理员的显式授权，财务不能改生产凭证。`docs/DEVELOPMENT_SPEC.md` 7.1 与 `docs/API_SPEC.md` 3.4/3.6.6 同步。
+- apps/admin 新增 /admin/payments：渠道配置（批准依据、凭证引用、收款说明、启停，带 If-Match）、台账列表与筛选、单笔流水与事件；订单详情新增「登记收款」（结果、金额、参考号、原因，带订单版本）。各页面补充付款入口。
+
+验证：pnpm check 通过（Node 77 项：付款域 9 项 + 真实 PostgreSQL 付款 HTTP 用例 + 结账/订单/目录/身份回归；Python 契约 27 项含支付权限矩阵、台账状态闭集、配置响应不含凭证），管理端类型检查与生产构建通过（新增 /admin/payments 路由）；本地 Edge 的 pnpm test:browser 50 项桌面/手机用例通过（新增付款页 2 项×2 项目）。
+
+关键对抗用例：凭证引用传 `sk_live_...` 422、启用无批准依据 422、缺 If-Match 422、旧版本改配置 409、响应体不含 `secretRef`、仍有待收流水时停用 409、未发货登记 COD 收款 409 `ORDER_NOT_SHIPPED`、少收 1 分 422 `PAYMENT_AMOUNT_MISMATCH`、跨币种 422、收款时间早于下单时间 422、拒收/退回无原因 422、已收款订单取消 409 `PAID_ORDER_REQUIRES_REFUND`、同键重放不产生第二条流水、同键不同内容 409、拒收后再退回 409、退回保留 `paidAt`、停用 COD 后结账 422、人工转账未配置说明时不给伪造指令、回调式“人工改判未知状态”没有入口。
+
+边界：本批只做了线下渠道（COD、人工转账）与登记式台账，没有线上支付适配器、Webhook 原始 body 验签、事件重放窗口、`unknown` 自动重查（1/5/15/30 分钟）、退款（M16）与服务商结算文件对账，`connectionStatus`/`lastCheckedAt` 只有字段没有探活任务；订单付款状态投影只覆盖 `collected/succeeded/rejected/returned/cancelled/failed`，`authorized` 目前无处产生。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 12 条迁移）。

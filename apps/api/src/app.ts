@@ -19,6 +19,8 @@ import { mediaStorageConfig } from './media/config.js';
 import { MediaService } from './media/service.js';
 import { createMediaStorage, type MediaStorage } from './media/storage.js';
 import { OrdersController } from './orders/controller.js';
+import { PaymentsController } from './payments/controller.js';
+import { PaymentsService } from './payments/service.js';
 import { OrdersService } from './orders/service.js';
 import { StorefrontController } from './storefront/controller.js';
 import { StorefrontService } from './storefront/service.js';
@@ -82,11 +84,12 @@ export async function createApp(identity: IdentityService | null = null, options
   // 结账依赖购物袋与配送配置：三个服务共享同一个 IdentityService 连接池。
   const shipping = identity ? new ShippingService(identity) : null;
   const cart = identity ? new CartService(identity) : null;
-  const checkout = identity && cart && shipping ? new CheckoutService(identity, cart, shipping) : null;
+  const payments = identity ? new PaymentsService(identity) : null;
+  const checkout = identity && cart && shipping && payments ? new CheckoutService(identity, cart, shipping, payments) : null;
   const orders = identity && shipping ? new OrdersService(identity, shipping) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
-    OrdersController],
+    OrdersController, PaymentsController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
@@ -94,7 +97,8 @@ export async function createApp(identity: IdentityService | null = null, options
       { provide: 'SHIPPING', useValue: shipping },
       { provide: 'CART', useValue: cart },
       { provide: 'CHECKOUT', useValue: checkout },
-      { provide: 'ORDERS', useValue: orders }] })
+      { provide: 'ORDERS', useValue: orders },
+      { provide: 'PAYMENTS', useValue: payments }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

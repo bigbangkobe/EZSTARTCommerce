@@ -24,6 +24,16 @@ function money(minor: number, currency: string) {
 function shortDate(value: string) {
   return new Date(value).toLocaleString();
 }
+/** 金额按“元”录入、按分提交：超过两位小数直接判为非法，不四舍五入。 */
+function toMinor(value: string): number | null {
+  const text = value.trim();
+  if (!/^\d{1,7}(\.\d{1,2})?$/.test(text)) return null;
+  const [major = '0', cents = ''] = text.split('.');
+  return Number(major) * 100 + Number(cents.padEnd(2, '0'));
+}
+
+/** 台账还停留在这些状态时才可以登记收款/拒收/退回。 */
+const OPEN_PAYMENT_STATUSES = new Set(['cod_due', 'created', 'processing', 'requires_action', 'unknown']);
 
 const SHIPMENT_LABEL: Record<string, string> = { created: '待发货', dispatched: '已发货', delivered: '已签收', cancelled: '已取消' };
 
@@ -41,6 +51,7 @@ export function OrdersConsole() {
   const canChangeAddress = permissions.includes('orders.address_change');
   const canNote = permissions.includes('orders.update');
   const canShip = permissions.includes('shipments.manage');
+  const canCollect = permissions.includes('payments.collect');
 
   async function request<T>(path: string, method = 'GET', body?: object, version?: number): Promise<T> {
     const response = await fetch(`/api/v1/admin/${path}`, { method, credentials: 'same-origin', cache: 'no-store', headers: {
@@ -150,6 +161,24 @@ export function OrdersConsole() {
     });
   }
 
+  function recordPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const amount = toMinor(String(values.get('amount') ?? ''));
+    if (amount === null) { setError('金额格式不正确，最多两位小数。'); return; }
+    const reason = String(values.get('reason') ?? '').trim();
+    void run(async () => {
+      await request(`orders/${selected.id}/payment-result`, 'POST', { outcome: String(values.get('outcome') ?? ''),
+        amountMinor: amount, occurredAt: new Date().toISOString(),
+        reference: String(values.get('reference') ?? '').trim() || null, reason: reason || null,
+        expectedVersion: selected.version }, selected.version);
+      form.reset();
+      return '收款结果已登记，订单付款状态已更新。';
+    });
+  }
+
   function changeAddress(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) return;
@@ -172,7 +201,7 @@ export function OrdersConsole() {
   return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
     <header><div><p className="eyebrow">店铺管理</p><h1>订单</h1></div>
       <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/shipping">配送与结账</a>
-        <a href="/admin/media">媒体库</a><a href="/admin/settings">店铺设置</a>
+        <a href="/admin/payments">付款</a><a href="/admin/media">媒体库</a><a href="/admin/settings">店铺设置</a>
         <button disabled={busy} onClick={() => void run(async () => '已刷新。')}>刷新</button></div></header>
     {error && <p className="error">{error}</p>}{notice && <p className="notice">{notice}</p>}
     {!canRead && <p className="error">当前账号没有订单读取权限（orders.read）。</p>}
@@ -250,6 +279,23 @@ export function OrdersConsole() {
         </li>)}</ul>}
         <p><small>发货才扣减库存；签收不改变付款状态。</small></p>
       </article>
+
+      {canCollect && OPEN_PAYMENT_STATUSES.has(selected.paymentStatus) && selected.orderStatus !== 'cancelled' && <article>
+        <h3>登记收款</h3>
+        <p><small>只登记确实发生的收付：金额必须等于订单总额；拒收与退回必须写原因。货到付款需先发货。</small></p>
+        <form onSubmit={recordPayment}>
+          <label>结果<select name="outcome" defaultValue={selected.paymentMethodCode === 'manual_bank_transfer' ? 'succeeded' : 'collected'}>
+            {selected.paymentMethodCode === 'manual_bank_transfer'
+              ? <><option value="succeeded">已到账</option><option value="cancelled">取消</option><option value="returned">已退回</option></>
+              : <><option value="collected">已收现金</option><option value="rejected">拒收</option><option value="returned">已退回</option></>}
+          </select></label>
+          <label>金额<small>{selected.currency}，必须等于总额</small>
+            <input name="amount" defaultValue={(selected.totalMinor / 100).toFixed(2)} inputMode="decimal" required /></label>
+          <label>参考号<input name="reference" maxLength={200} placeholder="收款单号 / 转账流水号" /></label>
+          <label>原因<small>拒收或退回时必填</small><textarea name="reason" maxLength={1000} /></label>
+          <button disabled={busy}>保存收款结果</button>
+        </form>
+      </article>}
 
       {canChangeAddress && selected.fulfillmentStatus === 'unfulfilled' && selected.orderStatus !== 'cancelled' && <article>
         <h3>修改收货地址</h3>

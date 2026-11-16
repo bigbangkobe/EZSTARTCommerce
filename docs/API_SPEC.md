@@ -224,8 +224,9 @@
 | `POST /admin/orders/:id/notes` | 内部备注 | `orders.manage`；只允许内部内容 |
 | `POST /admin/orders/:id/shipments` | 包裹行项目数量、承运商/追踪号 | `shipments.manage`；累计不超订单数量 |
 | `POST /admin/shipments/:id/dispatch` / `POST /admin/shipments/:id/deliver` | 发货/签收时间与凭据 | 状态合法；发货时写库存流水 |
-| `GET /admin/payments` / `GET /admin/payments/:id` | 支付台账/明细 | `payments.read`；状态与金额只由账本和适配器服务变更 |
-| `GET/PATCH /admin/payment-methods` | 渠道开关、环境及凭证引用 | `payments.configure`；秘密只写入安全存储并回显脱敏状态 |
+| `GET /admin/payments` / `GET /admin/payments/:id` | 交易台账/明细（可按 status/orderId/providerCode 筛选） | `payments.read`；状态与金额只由账本与登记动作变更 |
+| `GET/PATCH /admin/payment-methods` | 渠道开关、环境及凭证引用 | `payment.config` + If-Match；秘密只存引用，响应仅回 `secretConfigured` 与指纹 |
+| `POST /admin/orders/:id/payment-result` | COD 收款/拒收/退回、人工转账到账 | `payments.collect` + CSRF + `Idempotency-Key` + If-Match；金额必须等于订单总额 |
 | `POST /admin/refunds` | paymentId、金额、币种、原因 | `refunds.create` + 幂等；不能超过已收可退余额 |
 | `POST /admin/refunds/:id/approve` / `POST /admin/refunds/:id/execute` | 审批/执行 | 对应分离权限；阈值审批和二次确认 |
 | `GET /admin/settlements` / `POST /admin/settlements/import` | 结算批次/文件摘要 | `settlements.manage`；幂等识别重复文件 |
@@ -356,11 +357,11 @@ validate 响应：`jobId`、`fileSha256`、`status`、`totalRows`、`validRows`�
 
 取消 body：`expectedVersion`、`reasonCode`、`reason`、`customerNotified`；已成功付款不得由此接口直接清账/退款，必须走售后退款接口。地址修改 body：`expectedVersion`、`address`、`customerConfirmationRef`（费用变化必需）；已发货请求返回 409 `ORDER_ALREADY_SHIPPED` 并要求走承运商人工记录。
 
-创建 shipment body：`items[]`（`orderItemId`、`quantity` ≥ 1）、`carrierCode`（可空）、`carrierName`（手工承运时可填）、`trackingNumber`（可空）、`note`。提交后累计包裹数不得大于订购量；发货 action 需要 `expectedVersion`，原子扣库存并建立流水。COD 收款登记 body：`amountMinor`、`currency`、`receivedAt`、`reference`、`reason`；必须等于待收规则允许金额，不能由签收事件自动触发。
+创建 shipment body：`items[]`（`orderItemId`、`quantity` ≥ 1）、`carrierCode`（可空）、`carrierName`（手工承运时可填）、`trackingNumber`（可空）、`note`。提交后累计包裹数不得大于订购量；发货 action 需要 `expectedVersion`，原子扣库存并建立流水。COD 收款登记 body：`outcome`（`collected|rejected|returned`，人工转账另有 `succeeded|cancelled`）、`amountMinor`、`occurredAt`、`reference`、`reason`、`expectedVersion`；金额必须等于订单总额且币种一致，拒收与退回必须写原因，COD 必须已有包裹发货。签收不会自动触发收款，也不会把 `paymentStatus` 改成已收款。
 
 退款创建 body：`paymentId`、`orderId`、`amountMinor`（positive integer）、`currency`（与原支付相同）、`reasonCode`、`reason`、`caseId`（售后关联）、`Idempotency-Key`。审批与执行拆开；响应展示 `refundId`、状态（`requested|approval_pending|processing|succeeded|failed|unknown|cancelled`）、金额、原 payment、provider reference 脱敏摘要和操作历史。结果未知时只能查/对账，不能无幂等重试。
 
-支付渠道配置写入 body：`providerCode`、`environment`（`sandbox|production`）、`enabled`、`publicConfig`、`secretRef`（仅安全存储引用/经受控写接口传入的新密钥，不返回密钥值）。GET 仅返回 `secretConfigured`、脱敏 `secretHint`、状态和最后检查时间。正式环境启用由更高权限、MFA 和批准检查门控。
+支付渠道配置写入 body：`providerCode`、`environment`（`sandbox|production`）、`enabled`、`publicConfig`（白名单字段 `accountSummary|instructions|defaultCurrency|providerAccountRef`）、`secretRef`（必须形如 `secret://`/`env://` 的引用，直接传密钥本体一律 422 `SECRET_REFERENCE_INVALID`）、`approvalReference`。GET 仅返回 `secretConfigured`、`secretFingerprint`、`connectionStatus`、`lastCheckedAt`，不回显引用与密钥。启用必须有批准依据（数据库 CHECK 兜底），停用在该渠道仍有 `pending|authorized|unknown` 流水时返回 409 `PAYMENT_METHOD_IN_USE`。
 
 Webhook 原始 body 由 adapter 验签；进入内部标准事件前，规范字段为 `providerEventId`、`eventType`、`providerTransactionId`、`merchantReference`、`amountMinor`、`currency`、`occurredAt`、`signatureVerified`、`payloadDigest`。客户端不能传 `signatureVerified`；该字段只能由服务端 adapter 产生。成功响应只确认事件已安全接收/去重，不直接暴露订单资料。
 

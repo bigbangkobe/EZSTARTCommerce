@@ -566,6 +566,8 @@ model ShopOrder {
   actions OrderAction[]
   shipments Shipment[]
   addressChanges OrderAddressChange[]
+  payments Payment[]
+  paymentEvents PaymentEvent[]
   @@index([orderStatus, placedAt])
   @@index([placedAt])
 }
@@ -685,4 +687,80 @@ model OrderStatusEvent {
   actorType String @default("customer")
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   @@index([orderId, createdAt])
+}
+
+// ---- 付款（M08）--------------------------------------------------------------
+// 数据库只存“凭证引用”而不是凭证本身：secretRef 必须是 secret:// / env:// 这类引用，
+// 明文密钥由密钥管理服务或环境变量持有；响应里只回是否已配置与指纹。
+
+model PaymentMethodConfig {
+  id String @id @default(uuid()) @db.Uuid
+  providerCode String
+  environment String
+  displayName String
+  enabled Boolean @default(false)
+  approvalReference String?
+  approvedAt DateTime? @db.Timestamptz(3)
+  publicConfig Json
+  secretRef String?
+  secretFingerprint String?
+  connectionStatus String @default("unverified")
+  lastCheckedAt DateTime? @db.Timestamptz(3)
+  version Int @default(1)
+  createdBy String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  payments Payment[]
+  @@unique([providerCode, environment])
+}
+
+// 一笔订单在每个支付渠道只有一条台账记录：dedupeKey 是“渠道:订单”的唯一键，
+// 重复登记会被唯一约束挡住，而不是产生第二条入账。
+model Payment {
+  id String @id @default(uuid()) @db.Uuid
+  publicPaymentNumber String @unique
+  dedupeKey String @unique
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  methodConfigId String? @db.Uuid
+  methodConfig PaymentMethodConfig? @relation(fields: [methodConfigId], references: [id], onDelete: Restrict)
+  providerCode String
+  environment String
+  channel String
+  status String @default("pending")
+  amountMinor Int
+  currency String
+  providerTransactionId String?
+  paidAt DateTime? @db.Timestamptz(3)
+  returnedAt DateTime? @db.Timestamptz(3)
+  reference String?
+  failureCode String?
+  failureMessage String?
+  recordedBy String? @db.Uuid
+  metadata Json
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  events PaymentEvent[]
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([providerCode, providerTransactionId])
+}
+
+model PaymentEvent {
+  id String @id @default(uuid()) @db.Uuid
+  paymentId String @db.Uuid
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  orderId String @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type String
+  fromStatus String?
+  toStatus String
+  source String
+  actorId String? @db.Uuid
+  dedupeKey String @unique
+  payload Json
+  occurredAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([paymentId, occurredAt])
 }

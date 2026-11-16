@@ -39,7 +39,7 @@ export const rolePresets: readonly RolePreset[] = [
     permissions: [
       ...catalog, ...content, ...orders, ...inventory, ...notifications, ...coupons, ...aftersales,
       'customers.read_masked', 'customers.manage', 'members.manage', 'points.adjust',
-      'payments.read', 'payments.reconcile', 'shipping.manage', 'reports.view', 'reports.export',
+      'payments.read', 'payments.collect', 'payments.reconcile', 'shipping.manage', 'reports.view', 'reports.export',
       'store.settings.manage', 'operations.health.read',
     ],
     description: '管理员：商品、内容、订单、库存、顾客日常管理与店铺设置；不含员工/角色、付款配置、退款、隐私导出与实例级操作。',
@@ -56,9 +56,9 @@ export const rolePresets: readonly RolePreset[] = [
   },
   {
     key: 'finance', name: '财务', kind: 'preset',
-    permissions: ['orders.read', 'payments.read', 'payments.reconcile', 'refunds.create', 'refund.approve', 'refund.execute',
-      'reports.view', 'reports.export'],
-    description: '财务：付款、退款审批与执行、对账与财务报表导出；默认不改商品、库存和店铺配置。',
+    permissions: ['orders.read', 'payments.read', 'payments.collect', 'payments.reconcile', 'refunds.create', 'refund.approve',
+      'refund.execute', 'reports.view', 'reports.export'],
+    description: '财务：收款登记、付款、退款审批与执行、对账与财务报表导出；默认不改商品、库存和支付凭证配置。',
   },
   {
     key: 'warehouse', name: '仓库', kind: 'preset',

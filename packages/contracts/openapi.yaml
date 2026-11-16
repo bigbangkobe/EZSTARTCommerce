@@ -1808,11 +1808,26 @@ paths:
       summary: List payment ledger entries
       security: [{ AdminSession: [] }]
       x-permission: payments.read
-      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/PaymentStatus' }
+        - name: orderId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: providerCode
+          in: query
+          required: false
+          schema: { type: string, pattern: '^[a-z][a-z0-9_]{1,31}$' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/PaymentListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/payments/{id}:
     get:
@@ -1823,7 +1838,7 @@ paths:
       x-permission: payments.read
       parameters: [{ $ref: '#/components/parameters/UuidId' }]
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/PaymentSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1836,7 +1851,7 @@ paths:
       security: [{ AdminSession: [] }]
       x-permission: payment.config
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/PaymentMethodListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -1847,15 +1862,44 @@ paths:
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: payment.config
       x-mfa-required: true
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/PaymentMethodPatchRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/PaymentMethodSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/orders/{id}/payment-result:
+    post:
+      tags: [Payments]
+      operationId: recordOrderPaymentResult
+      summary: Record a COD, manual-transfer or return outcome against an order payment
+      description: >-
+        Records money that has actually changed hands. The amount must equal the order total in
+        the order currency; the request carries the order version it was based on. Unknown
+        provider states cannot be forced to failed or succeeded here.
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: payments.collect
+      parameters:
+        - { $ref: '#/components/parameters/UuidId' }
+        - { $ref: '#/components/parameters/IfMatch' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderPaymentResultRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/PaymentResultSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -3353,6 +3397,56 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+    PaymentListSuccess:
+      description: Payment ledger page
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PaymentListEnvelope' }
+    PaymentSuccess:
+      description: Payment ledger entry with its append-only event history
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PaymentEnvelope' }
+    PaymentMethodListSuccess:
+      description: Payment method configurations with redacted credential status
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PaymentMethodListEnvelope' }
+    PaymentMethodSuccess:
+      description: Updated payment method configuration; credentials are never echoed
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+        ETag:
+          schema:
+            type: string
+            pattern: ^"[1-9][0-9]*"$
+          description: Configuration version for the next If-Match
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PaymentMethodEnvelope' }
+    PaymentResultSuccess:
+      description: Recorded payment outcome together with the projected order payment state
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PaymentResultEnvelope' }
     OtpChallengeAccepted:
       description: Uniform response for a syntactically valid OTP request; never reveals membership existence. Challenge ID is a correlation handle, not an authentication secret.
       content:
@@ -5584,6 +5678,147 @@ components:
         publicConfig: { type: object, additionalProperties: true }
         secretRef: { type: [string, 'null'], maxLength: 256, writeOnly: true }
         approvalReference: { type: [string, 'null'], maxLength: 200 }
+    PaymentStatus:
+      type: string
+      enum: [pending, authorized, succeeded, failed, cancelled, unknown, collected, rejected, returned]
+      description: >-
+        Ledger state. Unknown means the provider has not answered yet and must stay unknown until a
+        server-side query or webhook resolves it; it can never be forced to failed here.
+    AdminPaymentMethod:
+      type: object
+      additionalProperties: false
+      required: [id, providerCode, environment, displayName, enabled, approvalStatus, publicConfig,
+        secretConfigured, connectionStatus, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        providerCode: { type: string, pattern: '^[a-z][a-z0-9_]{1,31}$' }
+        environment: { type: string, enum: [sandbox, production] }
+        displayName: { type: string, minLength: 1, maxLength: 80 }
+        enabled: { type: boolean }
+        approvalStatus: { type: string, enum: [approved, unapproved] }
+        approvalReference: { type: [string, 'null'], maxLength: 200 }
+        approvedAt: { type: [string, 'null'], format: date-time }
+        publicConfig: { type: object, additionalProperties: { type: string, maxLength: 200 } }
+        secretConfigured: { type: boolean, description: Whether a credential reference is stored; the reference itself is never returned. }
+        secretFingerprint: { type: [string, 'null'], pattern: '^[0-9a-f]{16}$' }
+        connectionStatus: { type: string, enum: [unverified, ok, failed] }
+        lastCheckedAt: { type: [string, 'null'], format: date-time }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AdminPayment:
+      type: object
+      additionalProperties: false
+      required: [id, publicPaymentNumber, orderId, publicOrderNumber, providerCode, environment, channel,
+        status, amountMinor, currency, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        publicPaymentNumber: { type: string, pattern: '^PAY-[0-9]{8}-[A-Z0-9]{6}$' }
+        orderId: { type: string, format: uuid }
+        publicOrderNumber: { type: string, maxLength: 64 }
+        providerCode: { type: string, pattern: '^[a-z][a-z0-9_]{1,31}$' }
+        environment: { type: string, enum: [sandbox, production] }
+        channel: { type: string, enum: [cod, manual, online] }
+        status: { $ref: '#/components/schemas/PaymentStatus' }
+        amountMinor: { type: integer, minimum: 1 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        providerTransactionId: { type: [string, 'null'], maxLength: 160 }
+        paidAt: { type: [string, 'null'], format: date-time }
+        returnedAt: { type: [string, 'null'], format: date-time }
+        reference: { type: [string, 'null'], maxLength: 200 }
+        failureCode: { type: [string, 'null'], maxLength: 80 }
+        failureMessage: { type: [string, 'null'], maxLength: 1000 }
+        recordedBy: { type: [string, 'null'], format: uuid }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        events:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, type, toStatus, source, occurredAt]
+            properties:
+              id: { type: string, format: uuid }
+              type: { type: string, enum: [created, collected, rejected, returned, succeeded, cancelled, failed] }
+              fromStatus: { type: [string, 'null'] }
+              toStatus: { $ref: '#/components/schemas/PaymentStatus' }
+              source: { type: string, enum: [admin, system, provider] }
+              actorId: { type: [string, 'null'], format: uuid }
+              occurredAt: { type: string, format: date-time }
+    PaymentMethodEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/AdminPaymentMethod' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PaymentMethodListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminPaymentMethod' } }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PaymentEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/AdminPayment' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PaymentListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminPayment' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    OrderPaymentResultRequest:
+      type: object
+      additionalProperties: false
+      required: [outcome, amountMinor, occurredAt, expectedVersion]
+      properties:
+        outcome:
+          type: string
+          enum: [collected, succeeded, rejected, cancelled, returned]
+          description: >-
+            collected = cash or transfer received; rejected = customer refused on delivery;
+            returned = money handed back to the customer outside this system.
+        amountMinor: { type: integer, minimum: 1, description: Must equal the order total in the order currency. }
+        occurredAt: { type: string, format: date-time }
+        reference: { type: [string, 'null'], maxLength: 200 }
+        reason: { type: [string, 'null'], maxLength: 1000, description: Required for rejected and returned outcomes. }
+        expectedVersion: { type: integer, minimum: 1, description: Order version the operator saw; stale writes are rejected. }
+    PaymentResultEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [orderId, orderPaymentStatus, orderVersion, payment]
+          properties:
+            orderId: { type: string, format: uuid }
+            orderPaymentStatus:
+              type: string
+              enum: [created, requires_action, processing, succeeded, failed, cancelled, unknown, cod_due, collected, rejected, returned]
+            orderVersion: { type: integer, minimum: 1 }
+            payment: { $ref: '#/components/schemas/AdminPayment' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     RefundCreateRequest:
       type: object
       additionalProperties: false

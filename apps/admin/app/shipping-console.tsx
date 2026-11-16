@@ -132,7 +132,7 @@ export function ShippingConsole() {
 
   return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
     <header><div><p className="eyebrow">店铺管理</p><h1>配送与结账</h1></div>
-      <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a><a href="/admin/settings">店铺设置</a>
+      <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a><a href="/admin/payments">付款</a><a href="/admin/settings">店铺设置</a>
         <a href="/admin/access">员工与角色</a>
         <button disabled={busy} onClick={() => void run(async () => '已刷新。')}>刷新配置</button></div></header>
     {error && <p className="error">{error}</p>}{notice && <p className="notice">{notice}</p>}

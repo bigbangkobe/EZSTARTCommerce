@@ -1432,6 +1432,26 @@ export interface paths {
         patch: operations["updatePaymentMethod"];
         trace?: never;
     };
+    "/admin/orders/{id}/payment-result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a COD, manual-transfer or return outcome against an order payment
+         * @description Records money that has actually changed hands. The amount must equal the order total in the order currency; the request carries the order version it was based on. Unknown provider states cannot be forced to failed or succeeded here.
+         */
+        post: operations["recordOrderPaymentResult"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/refunds": {
         parameters: {
             query?: never;
@@ -3478,6 +3498,134 @@ export interface components {
             secretRef?: string | null;
             approvalReference?: string | null;
         };
+        /**
+         * @description Ledger state. Unknown means the provider has not answered yet and must stay unknown until a server-side query or webhook resolves it; it can never be forced to failed here.
+         * @enum {string}
+         */
+        PaymentStatus: "pending" | "authorized" | "succeeded" | "failed" | "cancelled" | "unknown" | "collected" | "rejected" | "returned";
+        AdminPaymentMethod: {
+            /** Format: uuid */
+            id: string;
+            providerCode: string;
+            /** @enum {string} */
+            environment: "sandbox" | "production";
+            displayName: string;
+            enabled: boolean;
+            /** @enum {string} */
+            approvalStatus: "approved" | "unapproved";
+            approvalReference?: string | null;
+            /** Format: date-time */
+            approvedAt?: string | null;
+            publicConfig: {
+                [key: string]: string;
+            };
+            /** @description Whether a credential reference is stored; the reference itself is never returned. */
+            secretConfigured: boolean;
+            secretFingerprint?: string | null;
+            /** @enum {string} */
+            connectionStatus: "unverified" | "ok" | "failed";
+            /** Format: date-time */
+            lastCheckedAt?: string | null;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AdminPayment: {
+            /** Format: uuid */
+            id: string;
+            publicPaymentNumber: string;
+            /** Format: uuid */
+            orderId: string;
+            publicOrderNumber: string;
+            providerCode: string;
+            /** @enum {string} */
+            environment: "sandbox" | "production";
+            /** @enum {string} */
+            channel: "cod" | "manual" | "online";
+            status: components["schemas"]["PaymentStatus"];
+            amountMinor: number;
+            currency: string;
+            providerTransactionId?: string | null;
+            /** Format: date-time */
+            paidAt?: string | null;
+            /** Format: date-time */
+            returnedAt?: string | null;
+            reference?: string | null;
+            failureCode?: string | null;
+            failureMessage?: string | null;
+            /** Format: uuid */
+            recordedBy?: string | null;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            events?: {
+                /** Format: uuid */
+                id: string;
+                /** @enum {string} */
+                type: "created" | "collected" | "rejected" | "returned" | "succeeded" | "cancelled" | "failed";
+                fromStatus?: string | null;
+                toStatus: components["schemas"]["PaymentStatus"];
+                /** @enum {string} */
+                source: "admin" | "system" | "provider";
+                /** Format: uuid */
+                actorId?: string | null;
+                /** Format: date-time */
+                occurredAt: string;
+            }[];
+        };
+        PaymentMethodEnvelope: {
+            data: components["schemas"]["AdminPaymentMethod"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PaymentMethodListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminPaymentMethod"][];
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PaymentEnvelope: {
+            data: components["schemas"]["AdminPayment"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PaymentListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminPayment"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        OrderPaymentResultRequest: {
+            /**
+             * @description collected = cash or transfer received; rejected = customer refused on delivery; returned = money handed back to the customer outside this system.
+             * @enum {string}
+             */
+            outcome: "collected" | "succeeded" | "rejected" | "cancelled" | "returned";
+            /** @description Must equal the order total in the order currency. */
+            amountMinor: number;
+            /** Format: date-time */
+            occurredAt: string;
+            reference?: string | null;
+            /** @description Required for rejected and returned outcomes. */
+            reason?: string | null;
+            /** @description Order version the operator saw; stale writes are rejected. */
+            expectedVersion: number;
+        };
+        PaymentResultEnvelope: {
+            data: {
+                /** Format: uuid */
+                orderId: string;
+                /** @enum {string} */
+                orderPaymentStatus: "created" | "requires_action" | "processing" | "succeeded" | "failed" | "cancelled" | "unknown" | "cod_due" | "collected" | "rejected" | "returned";
+                orderVersion: number;
+                payment: components["schemas"]["AdminPayment"];
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
         RefundCreateRequest: {
             /** Format: uuid */
             paymentId: string;
@@ -3975,6 +4123,63 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["SuccessEnvelope"];
+            };
+        };
+        /** @description Payment ledger page */
+        PaymentListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PaymentListEnvelope"];
+            };
+        };
+        /** @description Payment ledger entry with its append-only event history */
+        PaymentSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PaymentEnvelope"];
+            };
+        };
+        /** @description Payment method configurations with redacted credential status */
+        PaymentMethodListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PaymentMethodListEnvelope"];
+            };
+        };
+        /** @description Updated payment method configuration; credentials are never echoed */
+        PaymentMethodSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                /** @description Configuration version for the next If-Match */
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PaymentMethodEnvelope"];
+            };
+        };
+        /** @description Recorded payment outcome together with the projected order payment state */
+        PaymentResultSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PaymentResultEnvelope"];
             };
         };
         /** @description Uniform response for a syntactically valid OTP request; never reveals membership existence. Challenge ID is a correlation handle, not an authentication secret. */
@@ -6314,6 +6519,9 @@ export interface operations {
             query?: {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
+                status?: components["schemas"]["PaymentStatus"];
+                orderId?: string;
+                providerCode?: string;
             };
             header?: never;
             path?: never;
@@ -6321,9 +6529,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["PaymentListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -6338,7 +6547,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["PaymentSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -6354,7 +6563,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["PaymentMethodListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             default: components["responses"]["UnexpectedError"];
@@ -6363,7 +6572,10 @@ export interface operations {
     updatePaymentMethod: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -6373,9 +6585,38 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["PaymentMethodSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    recordOrderPaymentResult: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description Same key and same request returns the original result; same key with different request returns IDEMPOTENCY_CONFLICT. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderPaymentResultRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["PaymentResultSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];

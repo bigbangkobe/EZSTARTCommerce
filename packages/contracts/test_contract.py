@@ -315,6 +315,54 @@ class ContractTests(unittest.TestCase):
         del payload["data"]["challengeId"]
         self.assertTrue(errors(name, payload))
 
+    def test_payment_recording_is_a_versioned_idempotent_write(self):
+        operation = SPEC["paths"]["/admin/orders/{id}/payment-result"]["post"]
+        self.assertEqual("payments.collect", operation["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], operation["security"])
+        for ref in ("#/components/parameters/IdempotencyKey", "#/components/parameters/IfMatch"):
+            self.assertIn({"$ref": ref}, operation["parameters"])
+        body = {"outcome": "collected", "amountMinor": 23000, "occurredAt": NOW, "expectedVersion": 2}
+        self.assertEqual([], errors("OrderPaymentResultRequest", body))
+        # 金额是必填整数：客户端不能用“不传金额”让服务端自己猜收了多少。
+        for key in ("outcome", "amountMinor", "occurredAt", "expectedVersion"):
+            invalid = copy.deepcopy(body)
+            del invalid[key]
+            self.assertTrue(errors("OrderPaymentResultRequest", invalid), key)
+        self.assertTrue(errors("OrderPaymentResultRequest", dict(body, outcome="refunded")))
+        self.assertTrue(errors("OrderPaymentResultRequest", dict(body, amountMinor=0)))
+
+    def test_payment_ledger_status_is_the_contract_closed_set(self):
+        self.assertEqual(["pending", "authorized", "succeeded", "failed", "cancelled", "unknown",
+                          "collected", "rejected", "returned"], SPEC["components"]["schemas"]["PaymentStatus"]["enum"])
+        payment = {"id": UUID, "publicPaymentNumber": "PAY-20261116-AB12CD", "orderId": UUID,
+                   "publicOrderNumber": "EZ-20261116-ABC123", "providerCode": "cod", "environment": "production",
+                   "channel": "cod", "status": "collected", "amountMinor": 23000, "currency": "HKD", "version": 2,
+                   "createdAt": NOW, "updatedAt": NOW, "paidAt": NOW}
+        self.assertEqual([], errors("AdminPayment", payment))
+        self.assertTrue(errors("AdminPayment", dict(payment, status="paid")))
+        self.assertTrue(errors("AdminPayment", dict(payment, channel="card")))
+        self.assertTrue(errors("AdminPayment", dict(payment, publicPaymentNumber="PAY-1")))
+        # 台账不允许夹带未声明的字段（例如把渠道原始报文原样塞回来）。
+        self.assertTrue(errors("AdminPayment", dict(payment, rawProviderPayload={"card": "4242"})))
+
+    def test_payment_method_configuration_never_returns_credentials(self):
+        method = {"id": UUID, "providerCode": "cod", "environment": "production", "displayName": "Cash on delivery",
+                  "enabled": True, "approvalStatus": "approved", "publicConfig": {"instructions": "Pay on delivery"},
+                  "secretConfigured": False, "connectionStatus": "unverified", "version": 1,
+                  "createdAt": NOW, "updatedAt": NOW}
+        self.assertEqual([], errors("AdminPaymentMethod", method))
+        # 响应模型里没有 secretRef 这个字段：凭证引用一旦写进去，就再也不会被读出来。
+        self.assertTrue(errors("AdminPaymentMethod", dict(method, secretRef="secret://prod/gateway")))
+        self.assertTrue(errors("AdminPaymentMethod", dict(method, approvalStatus="pending")))
+        request = {"providerCode": "manual_bank_transfer", "environment": "production", "enabled": True,
+                   "approvalReference": "ticket-1", "secretRef": "secret://prod/bank"}
+        self.assertEqual([], errors("PaymentMethodPatchRequest", request))
+        self.assertTrue(errors("PaymentMethodPatchRequest", dict(request, environment="staging")))
+        self.assertTrue(errors("PaymentMethodPatchRequest", dict(request, enabled="yes")))
+        patch = SPEC["paths"]["/admin/payment-methods"]["patch"]
+        self.assertEqual("payment.config", patch["x-permission"])
+        self.assertIn({"$ref": "#/components/parameters/IfMatch"}, patch["parameters"])
+
 
 if __name__ == "__main__":
     unittest.main()
