@@ -85,7 +85,7 @@ export function MediaConsole() {
 
   return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
     <header><div><p className="eyebrow">商品管理</p><h1>媒体库</h1></div><div className="actions">
-      <a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a><a href="/admin/shipping">配送与结账</a><a href="/admin/payments">付款</a><a href="/admin/aftersales">售后</a><a href="/admin/settings">店铺设置</a>
+      <a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a><a href="/admin/shipping">配送与结账</a><a href="/admin/payments">付款</a><a href="/admin/inventory">库存</a><a href="/admin/aftersales">售后</a><a href="/admin/settings">店铺设置</a>
       <button disabled={busy} onClick={() => void run(async () => {})}>刷新媒体库</button></div></header>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {!ready && !error && <p>正在检查会话与权限…</p>}

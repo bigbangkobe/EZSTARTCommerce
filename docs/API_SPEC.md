@@ -270,9 +270,10 @@
 | `GET/POST /admin/coupons` / `GET/PATCH /admin/coupons/:id` | 优惠规则 CRUD | `coupons.manage`；范围、有效期、限额校验 |
 | `POST /admin/coupon-batches` / `POST /admin/coupon-batches/:id/issue` | 批次创建/发放 | `coupons.issue`；幂等；营销渠道必须有有效同意 |
 | `GET /admin/coupons/:id/redemptions` / `POST /admin/coupons/:id/disable` | 核销记录/停用 | `coupons.read/manage`；保留历史占位/核销 |
-| `GET /admin/inventory` / `GET /admin/inventory/movements` | 库存、流水筛选 | `inventory.read`；available 从账面计算 |
-| `POST /admin/inventory/adjustments` | SKU、数量变化、原因、版本 | `inventory.adjust`；幂等、事务锁、不可直接覆盖现存量 |
-| `GET/PATCH /admin/inventory/thresholds` | 预警阈值 | `inventory.manage`；低库存任务去重告警 |
+| `GET /admin/inventory` | 全部变体的现存/预留/可售与低库存状态（`q`、`variantId`、`lowStock`） | `inventory.read`；`available` 由服务端算，未建库存行的 SKU 也出现（version 0） |
+| `GET /admin/inventory/movements` | 只追加的库存流水（`variantId`、`type`、`orderId`、`caseId`、`from`、`to`） | `inventory.read`；类型为闭集，调整与退货入库共用一张表 |
+| `POST /admin/inventory/adjustments` | `variantId`、`delta`（非零整数增量）、`reason`、`reasonCode`、`reference`、`expectedVersion` | `inventory.adjust` + CSRF + `Idempotency-Key`；不可 set 现存量，调减不得低于已预留 |
+| `GET /admin/inventory/thresholds` / `PATCH /admin/inventory/thresholds` | 低库存阈值列表；单条 `variantId`、`lowStockLevel`、`expectedVersion` | `inventory.read` / `inventory.manage` + CSRF；阈值只影响提醒，`expectedVersion` 在 body 里（0 = 新建） |
 | `GET/PATCH /admin/notification-settings` | 通道、模板和语言 | `notifications.manage`；交易与营销分开配置 |
 | `GET /admin/notification-jobs` / `POST /admin/notification-jobs/:id/retry` | 状态/有限重试 | `notifications.read/retry`；重发不重放业务动作 |
 | `GET /admin/reports/:reportKey` | 时间、时区、维度、筛选 | `reports.view`；响应包含口径版本和生成时间 |
@@ -378,6 +379,8 @@ validate 响应：`jobId`、`fileSha256`、`status`、`totalRows`、`validRows`�
 Webhook 原始 body 由 adapter 验签；进入内部标准事件前，规范字段为 `providerEventId`、`eventType`、`providerTransactionId`、`merchantReference`、`amountMinor`、`currency`、`occurredAt`、`signatureVerified`、`payloadDigest`。客户端不能传 `signatureVerified`；该字段只能由服务端 adapter 产生。成功响应只确认事件已安全接收/去重，不直接暴露订单资料。
 
 结算导入 preview 行字段：`externalReference`、`transactionType`（`payment|refund|fee|adjustment`）、`grossMinor`、`feeMinor`、`netMinor`、`currency`、`settledAt`、`matchStatus`、`differenceCode`。确认操作保存文件摘要、原始行摘要和确认者；人工解决差异 body 必须有 `resolutionCode`、`internalRecordId`（适用时）、`reason`，不允许覆写支付/退款 ledger。
+
+库存 DTO：`GET /admin/inventory` 的每一行是 `variantId`、`sku`、`productId`、`productName`、`productStatus`、`variantStatus`、`onHand`、`reserved`、`available`、`lowStockLevel`、`lowStockVersion`、`lowStockState`（`ok|low|out_of_stock`）、`version`、`updatedAt`；游标是上一页最后一个 `sku`（按键排序，不按时间），所以分页稳定且与业务排序一致。`available = onHand − reserved` 只由服务端计算，客户端不自行相减。`POST /admin/inventory/adjustments` 的响应是 `movement`（`id`、`type`、`quantity`（绝对值）、`stockDelta`（带符号）、`onHandAfter`、`reason`、`reasonCode`、`reference`、`orderId`、`caseId`、`actorId`、`createdAt`）、调整后的 `onHand`/`reserved`/`available`/`version`、`lowStockLevel` 与 `replay`（同一幂等键返回原流水时为 true）。阈值写入用 body 里的 `expectedVersion`（0 表示期望尚无阈值行），与库存版本互不干扰——改阈值不会让库存调整的版本失效。
 
 ### 3.6.7 店铺配送、会员、优惠、库存与报表 DTO（M01/M09–M14）
 

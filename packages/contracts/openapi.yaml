@@ -2645,14 +2645,31 @@ paths:
     get:
       tags: [Inventory]
       operationId: listInventory
-      summary: List SKU stock, reservations and alert thresholds
+      summary: List SKU stock, reservations and low-stock thresholds
+      description: >-
+        Every variant appears, including ones that were never stocked (on hand 0, version 0).
+        Available = onHand - reserved is computed server-side and is the only number clients
+        should use; lowStock=1 keeps rows whose available is at or below the threshold.
       security: [{ AdminSession: [] }]
       x-permission: inventory.read
-      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/SearchQuery' }]
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/SearchQuery' }
+        - name: variantId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: lowStock
+          in: query
+          required: false
+          description: 1 or true keeps rows at or below their low-stock threshold.
+          schema: { type: string, enum: ['1', '0', 'true', 'false'] }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/InventoryListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/inventory/movements:
     get:
@@ -2661,17 +2678,48 @@ paths:
       summary: List immutable stock movements
       security: [{ AdminSession: [] }]
       x-permission: inventory.read
-      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - name: variantId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: type
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/InventoryMovementType' }
+        - name: orderId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: caseId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/InventoryMovementListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/inventory/adjustments:
     post:
       tags: [Inventory]
       operationId: createInventoryAdjustment
       summary: Append an inventory adjustment movement
+      description: >-
+        Adjustments are deltas, never absolute values. A decrease may not eat reserved units:
+        available must stay at or above zero. The request carries the inventory version the
+        operator saw, so a concurrent adjustment fails instead of overwriting it.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: inventory.adjust
       x-mfa-required: true
@@ -2682,9 +2730,10 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/InventoryAdjustmentRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/InventoryAdjustmentSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -2692,18 +2741,25 @@ paths:
     get:
       tags: [Inventory]
       operationId: getInventoryThresholds
-      summary: Get low-stock thresholds
+      summary: List low-stock thresholds that were explicitly set
       security: [{ AdminSession: [] }]
       x-permission: inventory.read
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/InventoryThresholdListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         default: { $ref: '#/components/responses/UnexpectedError' }
     patch:
       tags: [Inventory]
       operationId: updateInventoryThresholds
-      summary: Update low-stock alert thresholds
+      summary: Set the low-stock threshold of one SKU
+      description: >-
+        The threshold only drives alerts, never availability. The expected version lives in the
+        body because a threshold may not exist yet: 0 means "I expect no row", N means the version
+        the operator read.
       security: [{ AdminSession: [], CsrfToken: [] }]
       x-permission: inventory.manage
       requestBody:
@@ -2712,9 +2768,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/InventoryThresholdsPatchRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/InventoryThresholdSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
@@ -3548,6 +3606,51 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+    InventoryListSuccess:
+      description: Stock page with server-computed availability
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InventoryListEnvelope' }
+    InventoryMovementListSuccess:
+      description: Append-only stock movement page
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InventoryMovementListEnvelope' }
+    InventoryThresholdListSuccess:
+      description: Low-stock threshold page
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InventoryThresholdListEnvelope' }
+    InventoryAdjustmentSuccess:
+      description: The recorded adjustment with the resulting stock position
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InventoryAdjustmentEnvelope' }
+    InventoryThresholdSuccess:
+      description: The stored low-stock threshold with its new version
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        ETag:
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InventoryThresholdEnvelope' }
     PaymentListSuccess:
       description: Payment ledger page
       headers:
@@ -6226,28 +6329,158 @@ components:
     InventoryAdjustmentRequest:
       type: object
       additionalProperties: false
-      required: [variantId, delta, reasonCode, reason]
+      required: [variantId, delta, reason, expectedVersion]
       properties:
         variantId: { type: string, format: uuid }
-        delta: { type: integer, not: { const: 0 } }
-        reasonCode: { type: string, maxLength: 80 }
+        delta:
+          type: integer
+          minimum: -100000
+          maximum: 100000
+          not: { const: 0 }
+          description: Signed change. Negative values remove stock but never below reserved.
+        reasonCode: { type: [string, 'null'], maxLength: 80, pattern: '^[a-z0-9][a-z0-9_]{0,79}$' }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         reference: { type: [string, 'null'], maxLength: 200 }
-        expectedVersion: { type: integer, minimum: 1 }
+        expectedVersion:
+          type: integer
+          minimum: 0
+          description: Inventory version the operator saw; 0 means the SKU has no stock row yet.
     InventoryThresholdsPatchRequest:
       type: object
       additionalProperties: false
-      required: [items]
+      required: [variantId, lowStockLevel, expectedVersion]
       properties:
-        items:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            required: [variantId, lowStockThreshold]
-            properties:
-              variantId: { type: string, format: uuid }
-              lowStockThreshold: { type: integer, minimum: 0 }
+        variantId: { type: string, format: uuid }
+        lowStockLevel: { type: integer, minimum: 0, maximum: 1000000 }
+        expectedVersion:
+          type: integer
+          minimum: 0
+          description: 0 creates the threshold; otherwise it must equal the version that was read.
+    InventoryMovementType:
+      type: string
+      enum: [return_restock, return_damaged, return_quarantine, return_scrap, adjustment]
+    InventoryLowStockState:
+      type: string
+      enum: [ok, low, out_of_stock]
+    AdminInventoryItem:
+      type: object
+      additionalProperties: false
+      required: [variantId, sku, productId, productName, productStatus, variantStatus, onHand, reserved,
+        available, lowStockLevel, lowStockVersion, lowStockState, version, updatedAt]
+      properties:
+        variantId: { type: string, format: uuid }
+        sku: { type: string, maxLength: 64 }
+        productId: { type: string, format: uuid }
+        productName: { type: string, maxLength: 200 }
+        productStatus: { type: string }
+        variantStatus: { type: string }
+        onHand: { type: integer, minimum: 0 }
+        reserved: { type: integer, minimum: 0 }
+        available: { type: integer }
+        lowStockLevel: { type: integer, minimum: 0 }
+        lowStockVersion:
+          type: integer
+          minimum: 0
+          description: Version of the threshold row; 0 means no threshold was ever set.
+        lowStockState: { $ref: '#/components/schemas/InventoryLowStockState' }
+        version: { type: integer, minimum: 0 }
+        updatedAt: { type: string, format: date-time }
+    AdminStockMovement:
+      type: object
+      additionalProperties: false
+      required: [id, variantId, type, quantity, stockDelta, onHandAfter, reason, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        variantId: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/InventoryMovementType' }
+        quantity: { type: integer, minimum: 1 }
+        stockDelta: { type: integer }
+        onHandAfter: { type: [integer, 'null'], minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        reasonCode: { type: [string, 'null'], maxLength: 80 }
+        reference: { type: [string, 'null'], maxLength: 200 }
+        orderId: { type: [string, 'null'], format: uuid }
+        caseId: { type: [string, 'null'], format: uuid }
+        actorId: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+    AdminInventoryThreshold:
+      type: object
+      additionalProperties: false
+      required: [variantId, lowStockLevel, version, updatedAt]
+      properties:
+        variantId: { type: string, format: uuid }
+        lowStockLevel: { type: integer, minimum: 0 }
+        version: { type: integer, minimum: 1 }
+        updatedBy: { type: [string, 'null'], format: uuid }
+        updatedAt: { type: string, format: date-time }
+    InventoryListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminInventoryItem' } }
+            nextCursor: { type: [string, 'null'], maxLength: 64 }
+            hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    InventoryMovementListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminStockMovement' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    InventoryThresholdListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminInventoryThreshold' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    InventoryAdjustmentEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [movement, variantId, onHand, reserved, available, version, lowStockLevel, replay]
+          properties:
+            movement: { $ref: '#/components/schemas/AdminStockMovement' }
+            variantId: { type: string, format: uuid }
+            onHand: { type: integer, minimum: 0 }
+            reserved: { type: integer, minimum: 0 }
+            available: { type: integer }
+            version: { type: integer, minimum: 0 }
+            lowStockLevel: { type: integer, minimum: 0 }
+            replay: { type: boolean, description: True when the same Idempotency-Key returned the original movement. }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    InventoryThresholdEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/AdminInventoryThreshold' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     NotificationSettingsPatchRequest:
       type: object
       additionalProperties: false

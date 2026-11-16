@@ -1996,7 +1996,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List SKU stock, reservations and alert thresholds */
+        /**
+         * List SKU stock, reservations and low-stock thresholds
+         * @description Every variant appears, including ones that were never stocked (on hand 0, version 0). Available = onHand - reserved is computed server-side and is the only number clients should use; lowStock=1 keeps rows whose available is at or below the threshold.
+         */
         get: operations["listInventory"];
         put?: never;
         post?: never;
@@ -2032,7 +2035,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Append an inventory adjustment movement */
+        /**
+         * Append an inventory adjustment movement
+         * @description Adjustments are deltas, never absolute values. A decrease may not eat reserved units: available must stay at or above zero. The request carries the inventory version the operator saw, so a concurrent adjustment fails instead of overwriting it.
+         */
         post: operations["createInventoryAdjustment"];
         delete?: never;
         options?: never;
@@ -2047,14 +2053,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get low-stock thresholds */
+        /** List low-stock thresholds that were explicitly set */
         get: operations["getInventoryThresholds"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Update low-stock alert thresholds */
+        /**
+         * Set the low-stock threshold of one SKU
+         * @description The threshold only drives alerts, never availability. The expected version lives in the body because a threshold may not exist yet: 0 means "I expect no row", N means the version the operator read.
+         */
         patch: operations["updateInventoryThresholds"];
         trace?: never;
     };
@@ -3874,18 +3883,118 @@ export interface components {
         InventoryAdjustmentRequest: {
             /** Format: uuid */
             variantId: string;
+            /** @description Signed change. Negative values remove stock but never below reserved. */
             delta: number;
-            reasonCode: string;
+            reasonCode?: string | null;
             reason: string;
             reference?: string | null;
-            expectedVersion?: number;
+            /** @description Inventory version the operator saw; 0 means the SKU has no stock row yet. */
+            expectedVersion: number;
         };
         InventoryThresholdsPatchRequest: {
-            items: {
+            /** Format: uuid */
+            variantId: string;
+            lowStockLevel: number;
+            /** @description 0 creates the threshold; otherwise it must equal the version that was read. */
+            expectedVersion: number;
+        };
+        /** @enum {string} */
+        InventoryMovementType: "return_restock" | "return_damaged" | "return_quarantine" | "return_scrap" | "adjustment";
+        /** @enum {string} */
+        InventoryLowStockState: "ok" | "low" | "out_of_stock";
+        AdminInventoryItem: {
+            /** Format: uuid */
+            variantId: string;
+            sku: string;
+            /** Format: uuid */
+            productId: string;
+            productName: string;
+            productStatus: string;
+            variantStatus: string;
+            onHand: number;
+            reserved: number;
+            available: number;
+            lowStockLevel: number;
+            /** @description Version of the threshold row; 0 means no threshold was ever set. */
+            lowStockVersion: number;
+            lowStockState: components["schemas"]["InventoryLowStockState"];
+            version: number;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AdminStockMovement: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            variantId: string;
+            type: components["schemas"]["InventoryMovementType"];
+            quantity: number;
+            stockDelta: number;
+            onHandAfter: number | null;
+            reason: string;
+            reasonCode?: string | null;
+            reference?: string | null;
+            /** Format: uuid */
+            orderId?: string | null;
+            /** Format: uuid */
+            caseId?: string | null;
+            /** Format: uuid */
+            actorId?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        AdminInventoryThreshold: {
+            /** Format: uuid */
+            variantId: string;
+            lowStockLevel: number;
+            version: number;
+            /** Format: uuid */
+            updatedBy?: string | null;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        InventoryListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminInventoryItem"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        InventoryMovementListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminStockMovement"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        InventoryThresholdListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminInventoryThreshold"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        InventoryAdjustmentEnvelope: {
+            data: {
+                movement: components["schemas"]["AdminStockMovement"];
                 /** Format: uuid */
                 variantId: string;
-                lowStockThreshold: number;
-            }[];
+                onHand: number;
+                reserved: number;
+                available: number;
+                version: number;
+                lowStockLevel: number;
+                /** @description True when the same Idempotency-Key returned the original movement. */
+                replay: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        InventoryThresholdEnvelope: {
+            data: components["schemas"]["AdminInventoryThreshold"];
+            meta: components["schemas"]["ResponseMeta"];
         };
         NotificationSettingsPatchRequest: {
             channels?: components["schemas"]["NotificationChannelInput"][];
@@ -4454,6 +4563,61 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["SuccessEnvelope"];
+            };
+        };
+        /** @description Stock page with server-computed availability */
+        InventoryListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["InventoryListEnvelope"];
+            };
+        };
+        /** @description Append-only stock movement page */
+        InventoryMovementListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["InventoryMovementListEnvelope"];
+            };
+        };
+        /** @description Low-stock threshold page */
+        InventoryThresholdListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["InventoryThresholdListEnvelope"];
+            };
+        };
+        /** @description The recorded adjustment with the resulting stock position */
+        InventoryAdjustmentSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["InventoryAdjustmentEnvelope"];
+            };
+        };
+        /** @description The stored low-stock threshold with its new version */
+        InventoryThresholdSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["InventoryThresholdEnvelope"];
             };
         };
         /** @description Payment ledger page */
@@ -7915,6 +8079,9 @@ export interface operations {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
                 q?: components["parameters"]["SearchQuery"];
+                variantId?: string;
+                /** @description 1 or true keeps rows at or below their low-stock threshold. */
+                lowStock?: "1" | "0" | "true" | "false";
             };
             header?: never;
             path?: never;
@@ -7922,9 +8089,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["InventoryListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -7933,6 +8101,12 @@ export interface operations {
             query?: {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
+                variantId?: string;
+                type?: components["schemas"]["InventoryMovementType"];
+                orderId?: string;
+                caseId?: string;
+                from?: string;
+                to?: string;
             };
             header?: never;
             path?: never;
@@ -7940,9 +8114,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["InventoryMovementListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -7962,9 +8137,10 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["InventoryAdjustmentSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
@@ -7972,14 +8148,17 @@ export interface operations {
     };
     getInventoryThresholds: {
         parameters: {
-            query?: never;
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["InventoryThresholdListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             default: components["responses"]["UnexpectedError"];
@@ -7998,9 +8177,11 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["InventoryThresholdSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };

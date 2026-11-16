@@ -358,6 +358,7 @@ model ProductVariant {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   inventory InventoryItem?
+  threshold InventoryThreshold?
   cartItems CartItem[]
   quoteLines CheckoutQuoteLine[]
   orderItems OrderItem[]
@@ -400,6 +401,9 @@ model InventoryItem {
   variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
   onHand Int @default(0)
   reserved Int @default(0)
+  /// 人工调整与并发操作的版本凭据；退款/发货等服务端动作也会推进它。
+  version Int @default(1)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
 
 // ---- 购物车与结账（M06）-----------------------------------------------------
@@ -946,11 +950,29 @@ model InventoryMovement {
   stockDelta Int
   onHandAfter Int?
   reason String
+  reasonCode String?
+  reference String?
+  /// 人工调整的请求指纹：同一 Idempotency-Key 换了内容就不再是重放。
+  requestFingerprint String?
   dedupeKey String @unique
   actorId String? @db.Uuid
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   @@index([variantId, createdAt])
   @@index([caseId])
+  @@index([type, createdAt])
+}
+
+/// 低库存阈值：0 表示只关心“售罄”，阈值只影响提醒，不影响可售数量。
+model InventoryThreshold {
+  id String @id @default(uuid()) @db.Uuid
+  variantId String @unique @db.Uuid
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  lowStockLevel Int @default(0)
+  updatedBy String? @db.Uuid
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@index([lowStockLevel])
 }
 
 model AfterSalesEvent {

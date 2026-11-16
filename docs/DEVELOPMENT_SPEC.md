@@ -258,7 +258,9 @@ packages/
 | `orders.read`, `orders.update`, `orders.cancel`, `orders.address_change`, `shipments.manage` | Owner、Admin、OrderSupport；Warehouse 只授予受限履约权限 | 地址修改仅未发货；完整联系方式仍需独立 PII 权限；发货数不能超订购量 |
 | `customers.read_masked`, `customers.read_pii`, `customers.manage`, `customers.export` | Owner；OrderSupport 默认 masked；PrivacySpecialist 按任务授权 | 顾客档案、全字段查看和导出分开授权 |
 | `members.manage`, `points.adjust`, `coupons.read`, `coupons.manage`, `coupons.issue` | Owner、Admin；对应运营岗位可授权 | 积分人工调整单独记录原因、审计和限额；营销发放检查同意 |
-| `inventory.read`, `inventory.adjust`, `inventory.manage` | Owner、Admin；Warehouse 可获读/调整的受限权限 | 调整记前后数量/原因；批量盘点也必须生成流水 |
+| `inventory.read`, `inventory.adjust`, `inventory.manage` | Owner 与 Admin 三项全给；ProductOps 只给 `read`；Warehouse 给 `read`+`adjust`（`role-presets.ts` 现状） | 调整记前后数量/原因，只接受增量不做 `set onHand`；阈值只影响提醒，与调整分开授权 |
+
+库存的实际授权形状：`inventory` 预设组固定为 `read`+`adjust`+`manage`；`warehouse` 预设显式只拿 `inventory.read` 与 `inventory.adjust`，改不了阈值；`product_ops` 只有 `inventory.read`。调整需要 `inventory.adjust` + CSRF + `Idempotency-Key` 与期望版本（0 表示该 SKU 尚无库存行），阈值写入需要 `inventory.manage`。
 | `payments.read`, `payments.collect`, `payment.config`, `payments.reconcile`, `refunds.create`, `refund.approve`, `refund.execute` | Owner；Finance 可获收款登记与对账；OrderSupport 默认只能建售后案/查有限信息 | 收款登记与退款审批/执行分开；生产凭证配置不因财务权限自动开放 |
 | `shipping.manage`, `notifications.read`, `notifications.manage`, `notifications.retry` | Owner、Admin；Shipping/Operations 岗位按职责授权 | 配送规则有版本；重发只重试通知，不重做业务动作 |
 | `reports.view`, `reports.export` | Owner、Admin、ReportsReadOnly | ReportsReadOnly 仅聚合结果，不能查看顾客/订单 PII |

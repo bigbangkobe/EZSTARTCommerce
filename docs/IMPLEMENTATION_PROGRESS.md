@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进库存与优惠（M12/M11）：`InventoryMovement` 本批只为退货入库建表，接下来把库存调整（人工增减、盘点、不可 set `onHand`）、流水查询与低库存阈值补齐，让售后入库和人工调整共用同一条流水口径；随后做优惠引擎（当前结账折扣恒为 0，优惠码只返回警告），它决定订单折扣分摊与退款返券规则。再往后是会员 OTP 与积分（M10）、报表（M14）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+推进优惠引擎（M11）：当前结账折扣恒为 0、优惠码只返回警告，优惠决定订单折扣分摊与退款返券规则，是前台可见的最大缺口；随后是会员 OTP 与积分（M10）、报表（M14）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -285,3 +285,21 @@
 关键对抗用例：无 `aftersales.approve` 不能批准案件 403、批准无 If-Match/版本过期 409、行不属于该订单 422、同一案件累计申请量超额 422、取消类批准同时取消订单并释放预留、已收款订单走取消类 409 `PAID_ORDER_REQUIRES_REFUND`、申请人自己批退款 403 `SELF_APPROVAL_FORBIDDEN`、超过可退余额 422 `REFUND_EXCEEDS_BALANCE`、案件内退款超批准额 422、同幂等键重放不产生第二笔退款、同键不同金额 409 `IDEMPOTENCY_CONFLICT`、在途退款时结案 409 `REFUND_IN_PROGRESS`、COD 未收款无款可退 422 `NOTHING_TO_REFUND`、线上渠道无适配器 503、线下渠道无凭据 422、质检数量超收件量 422 `INSPECTION_QUANTITY_EXCEEDED`、只有 `sellable` 让 `onHand` +1（损坏处置后账面不变）、案件响应改写订单总额字段被 schema 拒绝、`refunded` 无执行人写不进数据库。
 
 边界：本批没有线上支付/退款适配器（`online` 渠道只到 `503 PAYMENT_ADAPTER_UNAVAILABLE`）、没有换货发货（`exchange` 案件可建案与批准，但没有补发包裹接口）、没有顾客自助售后入口（只有后台建案）、没有退货物流回传与逆向运费、没有退款重试/自动对账与 `unknown` 重查任务、没有部分质检后自动拆分处置；`InventoryMovement` 本批只由退货入库产生，库存调整与调拨仍在 M12 未做。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 13 条迁移）。
+
+## 2026-11-16：库存调整、流水与低库存阈值（M12）
+
+本批程序：
+
+- 第十四条迁移：`InventoryItem` 增加 `version` 与 `updatedAt`（并发调整的凭据）；`InventoryMovement` 增加 `reasonCode`/`reference`/`requestFingerprint`，并放开类型闭集。数据库继续兜底形状：退货入库的 `stockDelta` 必须等于 `quantity` 且为正，人工调整的 `abs(stockDelta)` 必须等于 `quantity` 且不为 0，两种类型都必须写 `onHandAfter`；`onHand`/`reserved` 不得为负，`version` 不得小于 1，调整流水的请求指纹只能是 64 位小写十六进制。新增 `InventoryThreshold`（按变体唯一，0–1,000,000）。
+- `packages/domain/src/inventory.ts`：`normalizeAdjustment`（非零整数、绝对值 ≤100,000、原因/编码/凭据规范化、拒绝控制字符）、`assertAdjustmentAllowed`（`onHand + delta ≥ 0` 且 `available ≥ 0`，即不能吃掉已预留）、`adjustmentMovement`（带符号 delta + 绝对值 quantity）、`adjustmentDedupeKey`、`assertInventoryVersion`（0 表示“尚无库存行”）、`lowStockState`（按可售数判定 `ok|low|out_of_stock`，阈值为 0 时只关心售罄）。
+- 读接口：`GET /admin/inventory`（`inventory.read`）用一条显式 SQL 从变体出发左连库存与阈值，把从未入库的 SKU 也列出来（onHand 0、version 0），`available = onHand − reserved` 由服务端算，游标是上一页最后一个 `sku`；支持 `q`（SKU 或商品名）、`variantId`、`lowStock`。`GET /admin/inventory/movements` 支持 `variantId`/`type`/`orderId`/`caseId`/时间区间筛选，按 `createdAt desc, id desc` 游标分页。
+- 写接口：`POST /admin/inventory/adjustments`（`inventory.adjust` + CSRF + Origin + `Idempotency-Key`）。事务内按变体加 advisory lock、核对期望版本、校验可售下限、写流水并推进库存版本；没有库存行时 `expectedVersion=0` 才允许创建。同键重放返回原流水（`replay: true`）且不重复记账，同键换内容 409 `IDEMPOTENCY_CONFLICT`，旧版本 409 `VERSION_CONFLICT`，调减吃掉预留 409 `INSUFFICIENT_ON_HAND`。`PATCH /admin/inventory/thresholds`（`inventory.manage` + CSRF）用 body 里的 `expectedVersion`（0 = 新建），阈值版本与库存版本互不干扰。
+- 库存流水从此有两个来源：退货质检的 `return_restock`（只有 `sellable` 才动 `onHand`）与人工 `adjustment`；两者的形状约束写在同一张表上，可售数的任何变化都能追到一条流水。
+- 权限：`inventory` 预设组为 `read`+`adjust`+`manage`；ProductOps 只有 `read`；Warehouse 拿 `read`+`adjust`（能盘点、不能改阈值）。`docs/DEVELOPMENT_SPEC.md` 7.1 与 `docs/API_SPEC.md` 3.5/3.6.7 同步。
+- apps/admin 新增 /admin/inventory：库存列表（搜索、只看低库存、点选 SKU）、调整表单（带当前版本）、阈值表单（带阈值版本）、按 SKU 的流水表与类型筛选；商品目录、订单、付款、配送、售后、店铺设置页补入口。
+
+验证：pnpm check 通过（Node 96 项：库存域 7 项 + 真实 PostgreSQL 库存 HTTP 用例 + 售后/订单/付款/结账/目录/身份回归；Python 契约 32 项，新增库存调整形状与流水/阈值闭集两项断言），管理端类型检查与生产构建通过（新增 /admin/inventory 路由）；本地 Edge 的 pnpm test:browser 58 项桌面/手机用例通过（新增库存页 2 项×2 项目）。
+
+关键对抗用例：无 `inventory.read` 看不到列表 403、只有 `inventory.adjust` 改不了阈值 403、`delta=0`/字符串/小数/超上限 422、未建库存行的 SKU 以 version 0 出现且可首次入库、旧版本 409 `VERSION_CONFLICT` 且库存不变、同键重放 `replay:true` 且不产生第二条流水、同键换内容 409、现存 8 预留 4 时减 5 被拒（`INSUFFICIENT_ON_HAND`）、减 4 后 `available=0`、形状不符的调整流水被数据库拒绝、阈值旧版本 409、阈值不影响 `available`、`lowStock=1` 同时命中低库存与售罄、`type=purchase` 422、`from` 晚于 `to` 422、退货入库与人工调整共用同一张流水表。
+
+边界：库存调整只覆盖单 SKU 增量，没有批量盘点单、导入盘点表或按仓库/库位分账；`InventoryMovement` 仍不记录发货出库（发货的扣减写在订单履约事务里，未生成流水），因此「所有库存变化都有流水」这件事还差发货与预留两条；低库存阈值只存数值，没有告警任务、通知订阅或阈值变更历史（只有审计记录）；没有库存预留的可视化与手工释放接口（只能等清理任务）。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 14 条迁移）。

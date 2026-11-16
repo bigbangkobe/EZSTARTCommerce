@@ -438,6 +438,53 @@ class ContractTests(unittest.TestCase):
                                                                 items=[{"orderItemId": UUID, "quantity": 1,
                                                                         "amountMinor": 1}])))
 
+    def test_inventory_adjustments_are_signed_append_only_movements(self):
+        adjust = SPEC["paths"]["/admin/inventory/adjustments"]["post"]
+        self.assertEqual("inventory.adjust", adjust["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], adjust["security"])
+        self.assertIn({"$ref": "#/components/parameters/IdempotencyKey"}, adjust["parameters"])
+        # 调整只接受增量：没有“把现存量设成 X”的字段。
+        body = {"variantId": UUID, "delta": -3, "reason": "Stocktake loss", "expectedVersion": 2}
+        self.assertEqual([], errors("InventoryAdjustmentRequest", body))
+        self.assertEqual([], errors("InventoryAdjustmentRequest", dict(body, reasonCode="stocktake")))
+        self.assertTrue(errors("InventoryAdjustmentRequest", dict(body, delta=0)))
+        self.assertTrue(errors("InventoryAdjustmentRequest", dict(body, delta="3")))
+        self.assertTrue(errors("InventoryAdjustmentRequest", dict(body, delta=-100001)))
+        self.assertTrue(errors("InventoryAdjustmentRequest", dict(body, onHand=10)))
+        self.assertTrue(errors("InventoryAdjustmentRequest", dict(body, reason="")))
+        # 版本 0 表示该 SKU 还没有库存行；负版本没有意义。
+        self.assertEqual([], errors("InventoryAdjustmentRequest", dict(body, expectedVersion=0)))
+        self.assertTrue(errors("InventoryAdjustmentRequest", dict(body, expectedVersion=-1)))
+        self.assertTrue(errors("InventoryAdjustmentRequest", dict(body, reasonCode="Stocktake Loss")))
+
+    def test_inventory_movements_and_thresholds_share_one_closed_vocabulary(self):
+        self.assertEqual(["return_restock", "return_damaged", "return_quarantine", "return_scrap", "adjustment"],
+                         SPEC["components"]["schemas"]["InventoryMovementType"]["enum"])
+        movement = {"id": UUID, "variantId": UUID, "type": "adjustment", "quantity": 3, "stockDelta": -3,
+                    "onHandAfter": 7, "reason": "Stocktake loss", "createdAt": NOW}
+        self.assertEqual([], errors("AdminStockMovement", movement))
+        self.assertTrue(errors("AdminStockMovement", dict(movement, type="purchase")))
+        self.assertTrue(errors("AdminStockMovement", dict(movement, quantity=0)))
+        self.assertTrue(errors("AdminStockMovement", dict(movement, stockDelta=3.5)))
+        item = {"variantId": UUID, "sku": "SKU-1", "productId": UUID, "productName": "Linen Shirt",
+                "productStatus": "active", "variantStatus": "active", "onHand": 10, "reserved": 4, "available": 6,
+                "lowStockLevel": 5, "lowStockVersion": 2, "lowStockState": "ok", "version": 3, "updatedAt": NOW}
+        self.assertEqual([], errors("AdminInventoryItem", item))
+        # 可售数由服务端算，客户端不能只给 onHand 就声称自己知道可售数。
+        self.assertTrue(errors("AdminInventoryItem", {k: v for k, v in item.items() if k != "available"}))
+        self.assertTrue(errors("AdminInventoryItem", dict(item, lowStockState="warning")))
+        # 阈值写入用 body 里的版本（0 = 尚不存在），不占用库存版本。
+        threshold = SPEC["paths"]["/admin/inventory/thresholds"]["patch"]
+        self.assertEqual("inventory.manage", threshold["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], threshold["security"])
+        self.assertEqual([], errors("InventoryThresholdsPatchRequest",
+                                    {"variantId": UUID, "lowStockLevel": 0, "expectedVersion": 0}))
+        self.assertTrue(errors("InventoryThresholdsPatchRequest",
+                               {"variantId": UUID, "lowStockLevel": -1, "expectedVersion": 0}))
+        self.assertTrue(errors("InventoryThresholdsPatchRequest", {"variantId": UUID, "lowStockLevel": 5}))
+        for path in ("/admin/inventory", "/admin/inventory/movements"):
+            self.assertEqual("inventory.read", SPEC["paths"][path]["get"]["x-permission"])
+
 
 if __name__ == "__main__":
     unittest.main()
