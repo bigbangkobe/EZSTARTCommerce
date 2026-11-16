@@ -851,7 +851,7 @@ paths:
       security: [{ AdminSession: [] }]
       x-permission: catalog.read
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CategoryListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -867,7 +867,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CategoryWriteRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/CategorySuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -882,7 +882,7 @@ paths:
       security: [{ AdminSession: [] }]
       x-permission: catalog.read
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CategorySuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -900,7 +900,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CategoryPatchRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CategorySuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -915,7 +915,7 @@ paths:
       security: [{ AdminSession: [] }]
       x-permission: catalog.read
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/BrandListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -931,7 +931,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/BrandWriteRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/BrandSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -946,7 +946,7 @@ paths:
       security: [{ AdminSession: [] }]
       x-permission: catalog.read
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/BrandSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -964,7 +964,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/BrandPatchRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/BrandSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3378,6 +3378,58 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/OrderDetailEnvelope' }
+    CategoryListSuccess:
+      description: Category tree in stable position order
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CategoryListEnvelope'
+    CategorySuccess:
+      description: Category with translations
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+        ETag:
+          schema:
+            type: string
+            pattern: ^"[1-9][0-9]*"$
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CategoryEnvelope'
+    BrandListSuccess:
+      description: Brand list
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/BrandListEnvelope'
+    BrandSuccess:
+      description: Brand with translations
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+        ETag:
+          schema:
+            type: string
+            pattern: ^"[1-9][0-9]*"$
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/BrandEnvelope'
     Created:
       description: Resource created
       headers:
@@ -4583,6 +4635,75 @@ components:
       required: [data, meta]
       properties:
         data: { $ref: '#/components/schemas/AdminOrder' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    Category:
+      type: object
+      additionalProperties: false
+      required: [id, parentId, position, enabled, translations, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        parentId: { type: [string, 'null'], format: uuid }
+        position: { type: integer, minimum: 0 }
+        enabled: { type: boolean }
+        translations:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/LabelTranslationInput' }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CategoryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/Category' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    CategoryListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/Category' } }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    Brand:
+      type: object
+      additionalProperties: false
+      required: [id, logoMediaId, enabled, translations, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        logoMediaId: { type: [string, 'null'], format: uuid }
+        enabled: { type: boolean }
+        translations:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/LabelTranslationInput' }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    BrandEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/Brand' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    BrandListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/Brand' } }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
     AdminProduct:
       type: object

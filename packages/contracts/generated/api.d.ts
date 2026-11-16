@@ -2674,6 +2674,53 @@ export interface components {
             data: components["schemas"]["AdminOrder"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        Category: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            parentId: string | null;
+            position: number;
+            enabled: boolean;
+            translations: components["schemas"]["LabelTranslationInput"][];
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CategoryEnvelope: {
+            data: components["schemas"]["Category"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        CategoryListEnvelope: {
+            data: {
+                items: components["schemas"]["Category"][];
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        Brand: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            logoMediaId: string | null;
+            enabled: boolean;
+            translations: components["schemas"]["LabelTranslationInput"][];
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        BrandEnvelope: {
+            data: components["schemas"]["Brand"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        BrandListEnvelope: {
+            data: {
+                items: components["schemas"]["Brand"][];
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
         AdminProduct: {
             /** Format: uuid */
             id: string;
@@ -3923,6 +3970,48 @@ export interface components {
                 "application/json": components["schemas"]["OrderDetailEnvelope"];
             };
         };
+        /** @description Category tree in stable position order */
+        CategoryListSuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CategoryListEnvelope"];
+            };
+        };
+        /** @description Category with translations */
+        CategorySuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CategoryEnvelope"];
+            };
+        };
+        /** @description Brand list */
+        BrandListSuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["BrandListEnvelope"];
+            };
+        };
+        /** @description Brand with translations */
+        BrandSuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["BrandEnvelope"];
+            };
+        };
         /** @description Resource created */
         Created: {
             headers: {
@@ -4842,7 +4931,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CategoryListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             default: components["responses"]["UnexpectedError"];
@@ -4861,7 +4950,7 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["CategorySuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
@@ -4880,7 +4969,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CategorySuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -4905,7 +4994,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CategorySuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -4923,7 +5012,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["BrandListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             default: components["responses"]["UnexpectedError"];
@@ -4942,7 +5031,7 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["BrandSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
@@ -4961,7 +5050,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["BrandSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -4986,7 +5075,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["BrandSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

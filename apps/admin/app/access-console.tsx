@@ -66,7 +66,7 @@ export function AccessConsole() {
       ...(has('roles.manage') && !editingUser.roleIds.some(id => roles.find(role => role.id === id)?.kind === 'owner') ? { roleIds: values.getAll('editRoleIds') } : {}),
     }, editingUser.version); setEditingUser(null); setNotice('员工资料已保存，旧会话和邀请凭据已失效。'); });
   }
-  return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div><header><div><p className="eyebrow">店铺管理</p><h1>员工与角色</h1></div><div className="actions">{has('store.settings.manage') && <a href="/admin/settings">店铺设置</a>}{has('audit.read') && <a href="/admin/audit">查看审计记录</a>}<button disabled={busy} onClick={() => void run(async () => { setEditingUser(null); setEditingRole(null); })}>刷新资料</button></div></header>
+  return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div><header><div><p className="eyebrow">店铺管理</p><h1>员工与角色</h1></div><div className="actions">{has('catalog.read') && <a href="/admin/catalog">商品目录</a>}{has('store.settings.manage') && <a href="/admin/settings">店铺设置</a>}{has('audit.read') && <a href="/admin/audit">查看审计记录</a>}<button disabled={busy} onClick={() => void run(async () => { setEditingUser(null); setEditingRole(null); })}>刷新资料</button></div></header>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {!ready && !error && <p>正在检查会话与权限…</p>}
     {ready && !has('staff.read') && !has('roles.manage') && <section><h2>没有管理权限</h2><p>请联系店主分配员工读取或角色管理权限。</p></section>}

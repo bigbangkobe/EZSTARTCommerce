@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进商品、分类与品牌（M03），再进入媒体与前台（M02）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+推进媒体上传与前台展示（M02），再进入购物车与结账（M06）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -164,3 +164,22 @@
 关键对抗用例：默认语言不在启用语言内 422、伪造时区 422、未知功能开关 422、无 If-Match 422、并发修改 409、无权限读写 403、未审核即启用 422、审核人与确认市场不符 422、过去有效期 422、审核通过后市场仍为关闭、撤销后立即不可交易、数据库层强制改写过期时间后读取即 expired、有交易后改本位币 409、审计含配置与审核动作且不含审核依据以外的凭据。
 
 边界：市场只是业务参数，不构成法律判断；商品可售清单（eligibleProductIds）当前只校验 UUID 格式，商品存在性与发布时的市场资格校验随 M03 落地。品牌媒体 ID 未有媒体模块（M02/M03 媒体）时无法上传，仅能写入引用。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 7 条迁移）。
+
+## 2026-11-16：商品分类、品牌与商品目录（M03）
+
+本批程序：
+
+- 第八条迁移新增 Category/CategoryTranslation、Brand/BrandTranslation、Product/ProductTranslation/ProductVariant/ProductMedia/ProductAttribute/ProductCategory 与 InventoryItem。约束覆盖：状态枚举、价格非负整数、SKU 形状与全店唯一、slug 按语言唯一、分类父子不得自指、库存 reserved ≤ onHand。
+- `packages/domain/src/catalog.ts`：翻译集规范化（启用语言外拒绝、同一语言重复拒绝、slug 无空白/斜杠）、规格校验（SKU 形状、提交内唯一、价格整数最小单位、币种必须等于店铺本位币）、发布门禁（每种启用语言必须有名称与 slug，至少一个 active 规格）、市场资格（市场必须已审核启用，配置了可售清单时商品必须在清单内）、分类成环检查。
+- 分类：GET /admin/categories（catalog.read）、POST（catalog.write）、GET/PATCH /admin/categories/:id（版本校验，父链改动做成环检查）。翻译整组替换；slug 冲突由数据库唯一约束映射为 409。
+- 品牌：GET/POST /admin/brands、GET/PATCH /admin/brands/:id，含 logoMediaId（媒体模块未上线，仅保存引用）。
+- 商品：GET /admin/products（catalog.read，游标分页 + 名称/基础 SKU/规格 SKU 搜索）、POST（catalog.write，建草稿）、GET/PATCH /admin/products/:id（catalog.write + If-Match）；PATCH 按 SKU 增量维护规格，删除有库存的规格返回 422；翻译/图片/属性/分类整组替换；响应不包含属性字段（契约未定义，避免额外字段破坏校验）。
+- 发布：POST /admin/products/:id/publish（catalog.publish），校验版本、三语完整性与市场资格；未来 publishedAt 返回 scheduled 且商品保持 draft；POST /admin/products/:id/unpublish 记录原因、立即下架。
+- 契约：分类与品牌原先只指向通用 Success/Created，现改为具名 CategoryEnvelope/CategoryListEnvelope/BrandEnvelope/BrandListEnvelope，响应字段受 additionalProperties: false 约束。
+- apps/admin 新增 /admin/catalog：商品搜索、草稿创建（三语名称/slug、分类、市场代码、规格）、编辑基础资料、发布/下架，以及分类与品牌的快速建档。
+
+验证：pnpm check 通过（36 项顶层 Node 测试：7 项目录领域单测 + 真实 PostgreSQL 目录 HTTP 用例 + 既有身份/店铺回归，21 项 Python 契约测试），管理端类型检查与生产构建通过（新增 /admin/catalog 路由）；本地 Edge 的 pnpm test:browser 30 项桌面/手机用例通过（新增目录页 2 项）。
+
+关键对抗用例：重复 slug 409、分类成环 422、版本过期 409、跨商品重复 SKU 409、非本位币 422、未知分类/市场 422、缺语言发布 422、未审核市场发布 422、过期版本发布 409、下架后重新发布、搜索命中、无权限 403、审计记录 catalog.* 操作。
+
+边界：媒体上传、库存调整、前台展示与导入（M02/M05/M12）尚未实现，商品图片仅有媒体引用；规格编辑 UI 只读，规格增删需经 API；商品状态只用到 draft/active（archived 留给后续归档流程）；`attributes` 目前只写不读。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 8 条迁移）。

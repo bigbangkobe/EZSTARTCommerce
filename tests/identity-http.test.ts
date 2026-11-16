@@ -56,7 +56,7 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
     app = await createApp(identity); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     await t.test('migration history and dependency readiness are real', async () => {
       const migrated = await db.$queryRaw<{ count: bigint }[]>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
-      assert.equal(Number(migrated[0]!.count), 7);
+      assert.equal(Number(migrated[0]!.count), 8);
       const ready = await call('health/ready', undefined, new Map(), {}, 'ReadinessStatusEnvelope');
       assert.equal(ready.status, 200);
       const zone = await db.$queryRaw<{ zone: string }[]>`SELECT current_setting('TimeZone') AS zone`;
@@ -480,6 +480,109 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
       assert.ok(actions.length >= 5);
       assert.ok(actions.every(row => row.actorId === userId));
       assert.ok(actions.every(row => !JSON.stringify(row).includes('LEGAL-') || row.action === 'store.market.reviewed'), '依据只随审核记录保存，不进入审计摘要以外的字段');
+      await db.identityRateLimit.deleteMany();
+    });
+    await t.test('catalog categories, brands and products are versioned and publish gated', async () => {
+      await db.identityRateLimit.deleteMany();
+      const headers = { 'X-CSRF-Token': csrf };
+      const post = (path: string, body: unknown, schema?: string) => call(path, body, jar, headers, schema, base, 'POST');
+      const patch = (path: string, body: unknown, version: number) =>
+        call(path, body, jar, { ...headers, 'If-Match': `"${version}"` }, undefined, base, 'PATCH');
+
+      const parent = await post('admin/categories', { translations: [
+        { locale: 'zh-CN', name: '雪茄', slug: 'cigars' }, { locale: 'en', name: 'Cigars', slug: 'cigars-en' }] }, 'CategoryEnvelope');
+      assert.equal(parent.status, 201);
+      assert.equal(parent.body.data.version, 1);
+      assert.equal(parent.response.headers.get('etag'), '"1"');
+      const parentId = parent.body.data.id as string;
+      const child = await post('admin/categories', { parentId, translations: [{ locale: 'zh-CN', name: '手捲', slug: 'hand-rolled' }] }, 'CategoryEnvelope');
+      assert.equal(child.status, 201);
+      // 重复 slug 由数据库唯一约束兜底，映射为 409 而不是 500。
+      assert.equal((await post('admin/categories', { translations: [{ locale: 'zh-CN', name: '重复', slug: 'cigars' }] })).status, 409);
+      // 父子成环必须拒绝。
+      assert.equal((await patch(`admin/categories/${parentId}`, { parentId: child.body.data.id }, 1)).status, 422);
+      assert.equal((await patch(`admin/categories/${parentId}`, { enabled: false }, 9)).status, 409);
+      const categories = await call('admin/categories', undefined, jar, {}, 'CategoryListEnvelope');
+      assert.equal(categories.body.data.items.length, 2);
+
+      const brand = await post('admin/brands', { translations: [{ locale: 'en', name: 'Casa', slug: 'casa' }] }, 'BrandEnvelope');
+      assert.equal(brand.status, 201);
+      assert.equal((await patch(`admin/brands/${brand.body.data.id}`, { enabled: false }, 1)).status, 200);
+      assert.equal((await call('admin/brands', undefined, jar, {}, 'BrandListEnvelope')).body.data.items.length, 1);
+
+      // 发布需要“审核通过且已启用”的市场：先补审核再开启 HK。
+      const store = await call('admin/store-config', undefined, jar, {}, 'StoreConfigurationEnvelope');
+      const storeVersion = store.body.data.version as number;
+      assert.equal((await call('admin/store-config/markets/HK/reviews', { decision: 'approved', evidenceReference: 'LEGAL-2', reason: '客户确认', validUntil: null,
+        confirmedMarketCode: 'HK' }, jar, { ...headers, 'If-Match': `"${storeVersion}"` }, 'MarketReviewRecordEnvelope', base, 'POST')).status, 200);
+      assert.equal((await patch('admin/store-config', { marketProfiles: [{ marketCode: 'HK', enabled: true }] }, storeVersion + 1)).status, 200);
+
+      const productBody = { baseSku: 'CIGAR-1', categoryIds: [parentId], marketCodes: ['HK'],
+        translations: [
+          { locale: 'zh-CN', name: '雪茄一號', slug: 'cigar-no-1' },
+          { locale: 'zh-HK', name: '雪茄一號', slug: 'cigar-no-1-hk' },
+          { locale: 'en', name: 'Cigar No.1', slug: 'cigar-no-1-en' }],
+        variants: [
+          { sku: 'CIGAR-1-50', optionValues: { size: '50ml' }, priceMinor: 12_800, currency: 'HKD' },
+          { sku: 'CIGAR-1-100', optionValues: { size: '100ml' }, priceMinor: 19_800, currency: 'HKD' }] };
+      const product = await post('admin/products', productBody, 'ProductEnvelope');
+      assert.equal(product.status, 201);
+      assert.equal(product.body.data.status, 'draft');
+      assert.equal(product.body.data.variants.length, 2);
+      assert.equal(product.body.data.variants[0].onHand, 0);
+      assert.equal(product.body.data.variants[0].available, 0);
+      assert.equal(product.body.data.translations.length, 3);
+      const productId = product.body.data.id as string;
+
+      // 跨商品重复 SKU → 409；非本位币与未知分类 → 422。
+      assert.equal((await post('admin/products', { ...productBody, translations: [{ locale: 'en', name: 'X', slug: 'x-sku-dupe' }],
+        variants: [{ sku: 'CIGAR-1-50', optionValues: { size: '1' }, priceMinor: 1, currency: 'HKD' }] })).status, 409);
+      assert.equal((await post('admin/products', { ...productBody, translations: [{ locale: 'en', name: 'X', slug: 'x-currency' }],
+        variants: [{ sku: 'USD-1', optionValues: { size: '1' }, priceMinor: 1, currency: 'USD' }] })).status, 422);
+      assert.equal((await post('admin/products', { ...productBody, categoryIds: [randomUUID()],
+        translations: [{ locale: 'en', name: 'X', slug: 'x-unknown-cat' }],
+        variants: [{ sku: 'UNKNOWN-1', optionValues: { size: '1' }, priceMinor: 1, currency: 'HKD' }] })).status, 422);
+
+      const publish = (id: string, version: number, marketCodes = ['HK']) =>
+        post(`admin/products/${id}/publish`, { expectedVersion: version, marketCodes }, 'ProductPublishEnvelope');
+      const published = await publish(productId, 1);
+      assert.equal(published.status, 200);
+      assert.equal(published.body.data.status, 'active');
+      assert.equal(published.body.data.version, 2);
+      // 未审核市场不能发布；版本过期不能发布。
+      assert.equal((await publish(productId, 2, ['MO'])).status, 422);
+      assert.equal((await publish(productId, 1)).status, 409);
+
+      // 缺少任一启用语言翻译的商品可以存草稿，但不能发布。
+      const partial = await post('admin/products', { categoryIds: [parentId], marketCodes: ['HK'],
+        translations: [{ locale: 'en', name: 'Only English', slug: 'only-en' }],
+        variants: [{ sku: 'PARTIAL-1', optionValues: { size: '1' }, priceMinor: 100, currency: 'HKD' }] }, 'ProductEnvelope');
+      assert.equal(partial.status, 201);
+      assert.equal((await publish(partial.body.data.id, 1)).status, 422);
+
+      const unpublished = await post(`admin/products/${productId}/unpublish`, { reason: '缺货整理' });
+      assert.equal(unpublished.status, 200);
+      assert.equal(unpublished.body.data.status, 'draft');
+      assert.equal((await publish(productId, 3)).status, 200);
+
+      const search = await call(`admin/products?q=${encodeURIComponent('雪茄')}`, undefined, jar, {}, 'ProductListEnvelope');
+      assert.equal(search.status, 200);
+      assert.equal(search.body.data.items.length, 1);
+      assert.equal(search.body.data.items[0].id, productId);
+      assert.equal((await call('admin/products?limit=101')).status, 422);
+      assert.equal((await call('admin/products?cursor=' + randomUUID())).status, 422);
+
+      const actions = await db.auditLog.findMany({ where: { action: { startsWith: 'catalog.' } } });
+      assert.ok(actions.length >= 7);
+      assert.ok(actions.every(row => row.actorId === userId));
+
+      const outsiderRole = await db.adminRole.create({ data: { name: 'Catalog outsider', kind: 'custom', permissionCodes: ['staff.read'] } });
+      const outsider = await db.adminUser.create({ data: { email: 'catalog-outsider@example.test', displayName: 'Outsider', locale: 'en',
+        passwordHash: 'unused', mfaRequired: false, roles: { create: { roleId: outsiderRole.id } } } });
+      const outsiderSecret = randomBytes(32).toString('base64url');
+      await db.adminSession.create({ data: { userId: outsider.id, tokenDigest: digest(outsiderSecret), mfaVerified: false, lastSeenAt: new Date(),
+        idleExpiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 120_000) } });
+      assert.equal((await call('admin/products', undefined, new Map([['ez_admin_session', outsiderSecret]]))).status, 403);
       await db.identityRateLimit.deleteMany();
     });
     await t.test('password reset is uniformly accepted, single-use, revokes sessions and keeps MFA', async () => {

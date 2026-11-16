@@ -675,6 +675,21 @@ export class IdentityService {
     }, true);
   }
 
+  // ---- 供其他管理模块复用的授权/审计边界 -------------------------------------
+  // 目录等业务模块不复制会话校验逻辑：统一经此进入，权限与会话规则只有一处实现。
+
+  async withPermission<T>(supplied: string, csrfValue: string | null, permission: string,
+    fn: (tx: Tx, actor: User, session: Prisma.AdminSessionGetPayload<{}>, now: Date) => Promise<T>, serializeAccess = false): Promise<T> {
+    return this.authenticated(supplied, csrfValue, async (tx, user, session, now) => {
+      this.requirePermission(user, permission);
+      return fn(tx, user, session, now);
+    }, serializeAccess);
+  }
+
+  async recordAudit(tx: Tx, ctx: RequestContext, actorId: string | null, action: string, objectId: string | null, result = 'success', reason?: string) {
+    await this.audit(tx, ctx, actorId, action, objectId, result, reason);
+  }
+
   // ---- 商店设置（M01）--------------------------------------------------------
   // 单实例单店铺：StoreConfig 恒为 id=1。读取/写入都先确保该行存在，
   // 因此即使实例尚未初始化配置，管理端也能看到可编辑的默认值。

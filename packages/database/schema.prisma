@@ -229,3 +229,143 @@ model MarketReviewRecord {
   storeConfigVersion Int
   @@index([marketCode, reviewedAt])
 }
+
+// ---- 商品目录（M03）---------------------------------------------------------
+// 多语言按翻译实体管理；金额为整数最小货币单位并带币种；SKU 全店唯一。
+// 图片只保存媒体引用与顺序，媒体对象本身由媒体模块（M02/M03 媒体）管理。
+
+model Category {
+  id String @id @default(uuid()) @db.Uuid
+  parentId String? @db.Uuid
+  parent Category? @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Category[] @relation("CategoryTree")
+  position Int @default(0)
+  enabled Boolean @default(true)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  translations CategoryTranslation[]
+  products ProductCategory[]
+}
+
+model CategoryTranslation {
+  id String @id @default(uuid()) @db.Uuid
+  categoryId String @db.Uuid
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  locale String
+  name String
+  slug String?
+  description String?
+  @@unique([categoryId, locale])
+  @@unique([locale, slug])
+}
+
+model Brand {
+  id String @id @default(uuid()) @db.Uuid
+  logoMediaId String? @db.Uuid
+  enabled Boolean @default(true)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  translations BrandTranslation[]
+  products Product[]
+}
+
+model BrandTranslation {
+  id String @id @default(uuid()) @db.Uuid
+  brandId String @db.Uuid
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  locale String
+  name String
+  slug String?
+  description String?
+  @@unique([brandId, locale])
+  @@unique([locale, slug])
+}
+
+model Product {
+  id String @id @default(uuid()) @db.Uuid
+  status String @default("draft")
+  baseSku String?
+  brandId String? @db.Uuid
+  brand Brand? @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  taxClassRef String?
+  marketCodes String[]
+  /// 未来时间表示定时发布；status 仍为 draft，直到发布时刻生效。
+  publishedAt DateTime? @db.Timestamptz(3)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  translations ProductTranslation[]
+  variants ProductVariant[]
+  media ProductMedia[]
+  attributes ProductAttribute[]
+  categories ProductCategory[]
+  @@index([status, createdAt])
+}
+
+model ProductTranslation {
+  id String @id @default(uuid()) @db.Uuid
+  productId String @db.Uuid
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  locale String
+  name String
+  slug String
+  shortDescription String?
+  description String?
+  seoTitle String?
+  seoDescription String?
+  @@unique([productId, locale])
+  @@unique([locale, slug])
+}
+
+model ProductVariant {
+  id String @id @default(uuid()) @db.Uuid
+  productId String @db.Uuid
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku String @unique
+  optionValues Json
+  priceMinor Int
+  compareAtMinor Int?
+  currency String
+  status String @default("active")
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  inventory InventoryItem?
+}
+
+model ProductMedia {
+  id String @id @default(uuid()) @db.Uuid
+  productId String @db.Uuid
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  mediaId String @db.Uuid
+  position Int
+  altByLocale Json @default("{}")
+  @@unique([productId, mediaId])
+}
+
+model ProductAttribute {
+  id String @id @default(uuid()) @db.Uuid
+  productId String @db.Uuid
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  code String
+  value String
+  @@unique([productId, code])
+}
+
+model ProductCategory {
+  productId String @db.Uuid
+  categoryId String @db.Uuid
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  @@id([productId, categoryId])
+}
+
+// 库存先只保存数量，变更流水由 M12 引入；当前没有写入库存的接口。
+model InventoryItem {
+  id String @id @default(uuid()) @db.Uuid
+  variantId String @unique @db.Uuid
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  onHand Int @default(0)
+  reserved Int @default(0)
+}
