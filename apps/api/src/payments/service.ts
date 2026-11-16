@@ -1,3 +1,4 @@
+import { redeemCouponInTx } from '../promotions/redeem.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import {
@@ -293,6 +294,10 @@ export class PaymentsService {
       const orderPaymentStatus = orderPaymentStatusFor(nextStatus);
       const updatedOrder = await tx.shopOrder.update({ where: { id: order.id },
         data: { paymentStatus: orderPaymentStatus, version: { increment: 1 } } });
+      // 收款成功才把券从预占转核销；拒收/取消保持原状，由订单取消或超时清理负责释放。
+      if (nextStatus === 'collected' || nextStatus === 'succeeded') {
+        await redeemCouponInTx(tx, order.id, { id: actor.id, type: 'admin' }, now);
+      }
       const event = await tx.paymentEvent.create({ data: { paymentId: payment.id, orderId: order.id, type: input.outcome,
         fromStatus: payment.status, toStatus: nextStatus, source: 'admin', actorId: actor.id,
         dedupeKey: `admin:${idempotencyKey}`, payload: { amountMinor: input.amountMinor, currency: payment.currency,

@@ -9,6 +9,7 @@ import {
 } from '../../../../packages/domain/src/orders.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import type { ShippingService } from '../shipping/service.js';
+import { releaseCouponInTx, expireCouponInTx } from '../promotions/redeem.js';
 import { releaseOrderReservations } from './reservations.js';
 
 type Tx = Prisma.TransactionClient;
@@ -202,6 +203,8 @@ export class OrdersService {
       this.rule(() => assertCancellable(row.orderStatus, row.paymentStatus));
       await this.releaseReservations(tx, id);
       const now = new Date();
+      // 取消是“明确不会再收款”的一种：券额度立即释放，付款未知的订单不会走到这里。
+      await releaseCouponInTx(tx, id, input.reasonCode ?? 'admin_cancelled', { id: actor.id, type: 'admin' }, now);
       await tx.shopOrder.update({ where: { id }, data: { orderStatus: 'cancelled', cancelledAt: now,
         cancelReasonCode: input.reasonCode, cancelReason: input.reason, customerNotified: input.customerNotified,
         version: { increment: 1 } } });
@@ -431,6 +434,8 @@ export class OrdersService {
         if (!order) continue;
         if (order.orderStatus !== 'awaiting_confirmation' && order.orderStatus !== 'cancelled') continue;
         released += await this.releaseReservations(tx, orderId, true);
+        // 库存预留与券额度同时到期：只释放一边会让券永远卡在预占里。
+        await expireCouponInTx(tx, orderId, { id: null, type: 'system' }, now);
         if (order.orderStatus !== 'cancelled') {
           await tx.shopOrder.update({ where: { id: orderId }, data: { orderStatus: 'cancelled', cancelledAt: now,
             cancelReasonCode: 'reservation_expired',

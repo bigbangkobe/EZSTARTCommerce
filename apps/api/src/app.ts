@@ -21,6 +21,8 @@ import { createMediaStorage, type MediaStorage } from './media/storage.js';
 import { AfterSalesController } from './aftersales/controller.js';
 import { InventoryController } from './inventory/controller.js';
 import { InventoryService } from './inventory/service.js';
+import { PromotionsController } from './promotions/controller.js';
+import { PromotionsService } from './promotions/service.js';
 import { AfterSalesService } from './aftersales/service.js';
 import { OrdersController } from './orders/controller.js';
 import { PaymentsController } from './payments/controller.js';
@@ -89,13 +91,15 @@ export async function createApp(identity: IdentityService | null = null, options
   const shipping = identity ? new ShippingService(identity) : null;
   const cart = identity ? new CartService(identity) : null;
   const payments = identity ? new PaymentsService(identity) : null;
-  const checkout = identity && cart && shipping && payments ? new CheckoutService(identity, cart, shipping, payments) : null;
+  const promotions = identity ? new PromotionsService(identity) : null;
+  const checkout = identity && cart && shipping && payments && promotions
+    ? new CheckoutService(identity, cart, shipping, payments, promotions) : null;
   const orders = identity && shipping ? new OrdersService(identity, shipping) : null;
   const afterSales = identity ? new AfterSalesService(identity) : null;
   const inventory = identity ? new InventoryService(identity) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
-    OrdersController, PaymentsController, AfterSalesController, InventoryController],
+    OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
@@ -106,7 +110,8 @@ export async function createApp(identity: IdentityService | null = null, options
       { provide: 'ORDERS', useValue: orders },
       { provide: 'PAYMENTS', useValue: payments },
       { provide: 'AFTERSALES', useValue: afterSales },
-      { provide: 'INVENTORY', useValue: inventory }] })
+      { provide: 'INVENTORY', useValue: inventory },
+      { provide: 'PROMOTIONS', useValue: promotions }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

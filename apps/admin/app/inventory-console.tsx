@@ -130,14 +130,14 @@ export function InventoryConsole() {
     return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
       <header><div><p className="eyebrow">店铺管理</p><h1>库存</h1></div>
         <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a>
-          <a href="/admin/aftersales">售后</a><a href="/admin/settings">店铺设置</a></div></header>
+          <a href="/admin/aftersales">售后</a><a href="/admin/coupons">优惠券</a><a href="/admin/settings">店铺设置</a></div></header>
       <p className="error">当前账号没有库存读取权限（inventory.read）。</p></main>;
   }
 
   return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
     <header><div><p className="eyebrow">店铺管理</p><h1>库存</h1></div>
       <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a>
-        <a href="/admin/payments">付款</a><a href="/admin/aftersales">售后</a><a href="/admin/settings">店铺设置</a>
+        <a href="/admin/payments">付款</a><a href="/admin/aftersales">售后</a><a href="/admin/coupons">优惠券</a><a href="/admin/settings">店铺设置</a>
         <button disabled={busy} onClick={() => void run(async () => '已刷新。')}>刷新</button></div></header>
     {error && <p className="error" role="alert">{error}</p>}{notice && <p className="notice" role="status">{notice}</p>}
     <p><small>可售数 = 现存 − 预留。没有“把现存改成 X”的入口：所有变化都是带原因的调整流水。</small></p>

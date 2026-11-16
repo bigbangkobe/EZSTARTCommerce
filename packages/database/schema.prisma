@@ -497,6 +497,9 @@ model CheckoutQuote {
   shippingMinor Int
   taxMinor Int
   totalMinor Int
+  couponId String? @db.Uuid
+  coupon Coupon? @relation(fields: [couponId], references: [id], onDelete: Restrict)
+  couponSnapshot Json?
   couponCode String?
   couponSummary Json?
   ruleVersions Json
@@ -552,6 +555,8 @@ model ShopOrder {
   contact Json
   shippingAddress Json?
   shippingMethodSnapshot Json
+  couponId String? @db.Uuid
+  coupon Coupon? @relation(fields: [couponId], references: [id], onDelete: Restrict)
   couponSnapshot Json?
   customerNote String?
   paymentMethodCode String
@@ -575,6 +580,7 @@ model ShopOrder {
   paymentEvents PaymentEvent[]
   afterSalesCases AfterSalesCase[]
   refunds Refund[]
+  couponRedemption CouponRedemption?
   @@index([orderStatus, placedAt])
   @@index([placedAt])
 }
@@ -858,6 +864,7 @@ model Refund {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   events RefundEvent[]
+  couponReturns CouponQuotaReturn[]
   @@index([orderId, createdAt])
   @@index([paymentId, status])
   @@index([status, createdAt])
@@ -973,6 +980,87 @@ model InventoryThreshold {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   @@index([lowStockLevel])
+}
+
+/// 优惠券规则模板。码不可重复；规则只被报价引用，修改不影响既有订单快照。
+model Coupon {
+  id String @id @default(uuid()) @db.Uuid
+  code String @unique
+  status String @default("active")
+  discountType String
+  discountValue Int
+  currency String
+  validFrom DateTime @db.Timestamptz(3)
+  validUntil DateTime @db.Timestamptz(3)
+  minSubtotalMinor Int?
+  totalLimit Int?
+  perCustomerLimit Int?
+  eligibleProductIds String[] @default([]) @db.Uuid
+  eligibleCategoryIds String[] @default([]) @db.Uuid
+  memberTierIds String[] @default([]) @db.Uuid
+  /// none = 退款不返额度；restore = 整单退款后新建返还记录，不改原核销记录。
+  refundPolicy String @default("none")
+  version Int @default(1)
+  createdBy String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  quotes CheckoutQuote[]
+  orders ShopOrder[]
+  redemptions CouponRedemption[]
+  @@index([status, validFrom, validUntil])
+  @@index([createdAt, id])
+}
+
+/// 一张订单最多一条核销记录：下单预占，收款成功核销，取消释放，超时过期。
+model CouponRedemption {
+  id String @id @default(uuid()) @db.Uuid
+  couponId String @db.Uuid
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Restrict)
+  orderId String @unique @db.Uuid
+  order ShopOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  status String @default("reserved")
+  discountMinor Int
+  currency String
+  /// 实例密钥 HMAC(规范化邮箱或电话)，用于访客单顾客限额；不落原联系方式。
+  customerKey String?
+  codeSnapshot String
+  ruleSnapshot Json
+  dedupeKey String @unique
+  reservedAt DateTime @default(now()) @db.Timestamptz(3)
+  redeemedAt DateTime? @db.Timestamptz(3)
+  releasedAt DateTime? @db.Timestamptz(3)
+  expiresAt DateTime? @db.Timestamptz(3)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  events CouponRedemptionEvent[]
+  quotaReturn CouponQuotaReturn?
+  @@index([couponId, status])
+  @@index([couponId, customerKey])
+}
+
+model CouponRedemptionEvent {
+  id String @id @default(uuid()) @db.Uuid
+  redemptionId String @db.Uuid
+  redemption CouponRedemption @relation(fields: [redemptionId], references: [id], onDelete: Cascade)
+  fromStatus String?
+  toStatus String
+  reason String
+  actorType String
+  actorId String? @db.Uuid
+  dedupeKey String? @unique
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([redemptionId, createdAt, id])
+}
+
+model CouponQuotaReturn {
+  id String @id @default(uuid()) @db.Uuid
+  redemptionId String @unique @db.Uuid
+  redemption CouponRedemption @relation(fields: [redemptionId], references: [id], onDelete: Cascade)
+  refundId String? @db.Uuid
+  refund Refund? @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  reason String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 }
 
 model AfterSalesEvent {

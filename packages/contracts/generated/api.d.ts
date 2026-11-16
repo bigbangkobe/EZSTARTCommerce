@@ -3840,6 +3840,90 @@ export interface components {
             /** Format: uuid */
             exportJobId?: string | null;
         };
+        /** @description usedCount = reserved + redeemed - returned. Only reserved and redeemed consume quota. */
+        CouponUsage: {
+            reservedCount: number;
+            redeemedCount: number;
+            releasedCount: number;
+            expiredCount: number;
+            returnedCount: number;
+            usedCount: number;
+        };
+        AdminCoupon: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            /** @description Safe to show in logs and storefront responses. */
+            codeMasked: string;
+            /** @enum {string} */
+            status: "active" | "disabled";
+            /** @enum {string} */
+            discountType: "fixed" | "percent";
+            discountValue: number;
+            currency: string;
+            /** Format: date-time */
+            validFrom: string;
+            /** Format: date-time */
+            validUntil: string;
+            minSubtotalMinor: number | null;
+            totalLimit: number | null;
+            perCustomerLimit: number | null;
+            eligibleProductIds: string[];
+            eligibleCategoryIds: string[];
+            memberTierIds: string[];
+            /** @enum {string} */
+            refundPolicy: "none" | "restore";
+            version: number;
+            /** Format: uuid */
+            createdBy: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            usage: components["schemas"]["CouponUsage"];
+        };
+        CouponEnvelope: {
+            data: components["schemas"]["AdminCoupon"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        CouponListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminCoupon"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        AdminCouponRedemption: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orderId: string;
+            publicOrderNumber: string;
+            /** @enum {string} */
+            status: "reserved" | "redeemed" | "released" | "expired";
+            discountMinor: number;
+            currency: string;
+            /** @description First 8 hex characters of the instance-key HMAC. Opaque, not reversible, no contact data. */
+            customerRef: string | null;
+            /** Format: date-time */
+            reservedAt: string;
+            /** Format: date-time */
+            redeemedAt: string | null;
+            /** Format: date-time */
+            releasedAt: string | null;
+            /** Format: date-time */
+            expiresAt: string | null;
+            ruleVersion: number | null;
+        };
+        CouponRedemptionListEnvelope: {
+            data: {
+                items: components["schemas"]["AdminCouponRedemption"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
         CouponFields: {
             code?: string;
             /** @enum {string} */
@@ -3855,14 +3939,21 @@ export interface components {
             perCustomerLimit?: number | null;
             eligibleProductIds?: string[];
             eligibleCategoryIds?: string[];
+            /** @description Member-tier restriction. Rejected while no member directory exists (M10). */
             memberTierIds?: string[];
+            /**
+             * @description restore returns the coupon quota through a new return record once the order is fully refunded; it never rewrites the original usage row.
+             * @default none
+             * @enum {string}
+             */
+            refundPolicy: "none" | "restore";
             /**
              * @default active
              * @enum {string}
              */
             status: "active" | "disabled";
-        };
-        CouponWriteRequest: components["schemas"]["CouponFields"] & Record<string, never> & unknown;
+        } & unknown;
+        CouponWriteRequest: components["schemas"]["CouponFields"] & Record<string, never>;
         /** @description Partial update; discountType and discountValue are validated together. */
         CouponPatchRequest: components["schemas"]["CouponFields"];
         CouponBatchRequest: {
@@ -4618,6 +4709,53 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["InventoryThresholdEnvelope"];
+            };
+        };
+        /** @description Coupon rule with usage counters */
+        CouponSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                /** @description Coupon rule version; echo as If-Match on updates. */
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CouponEnvelope"];
+            };
+        };
+        /** @description The created coupon rule */
+        CouponCreated: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CouponEnvelope"];
+            };
+        };
+        /** @description Coupon rule page */
+        CouponListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CouponListEnvelope"];
+            };
+        };
+        /** @description Redemptions of one coupon, newest first */
+        CouponRedemptionListSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CouponRedemptionListEnvelope"];
             };
         };
         /** @description Payment ledger page */
@@ -7900,6 +8038,8 @@ export interface operations {
             query?: {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
+                q?: components["parameters"]["SearchQuery"];
+                status?: "active" | "disabled";
             };
             header?: never;
             path?: never;
@@ -7907,7 +8047,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CouponListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             default: components["responses"]["UnexpectedError"];
@@ -7926,7 +8066,7 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["CouponCreated"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
@@ -7945,7 +8085,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CouponSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -7970,7 +8110,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CouponSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -7993,7 +8133,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CouponRedemptionListSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -8018,7 +8158,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["CouponSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

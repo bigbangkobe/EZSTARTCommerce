@@ -217,8 +217,13 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       // 不属于当前购物袋的 cartId 不能借来报价。
       assert.equal((await front('POST', 'storefront/checkout/quote', quoteBody(randomUUID(), methodId))).status, 422);
 
-      const quoted = await front('POST', 'storefront/checkout/quote', { ...quoteBody(cart.id, methodId), couponCode: ' save10 ' },
-        'QuoteEnvelope');
+      // 未知券码不再“静默按原价下单”：报价直接失败，顾客立刻知道优惠没有生效。
+      const unknownCoupon = await front('POST', 'storefront/checkout/quote',
+        { ...quoteBody(cart.id, methodId), couponCode: ' save10 ' });
+      assert.equal(unknownCoupon.status, 409);
+      assert.equal(unknownCoupon.body.error.code, 'COUPON_NOT_FOUND');
+
+      const quoted = await front('POST', 'storefront/checkout/quote', quoteBody(cart.id, methodId), 'QuoteEnvelope');
       assert.equal(quoted.status, 200);
       const quote = quoted.body.data;
       assert.equal(quote.version, 1);
@@ -226,7 +231,8 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       assert.equal(quote.shippingMinor, 3_000, '未达免邮线时按固定运费');
       assert.equal(quote.totalMinor, 13_000);
       assert.equal(quote.discountMinor, 0);
-      assert.deepEqual(quote.warnings, ['COUPON_NOT_APPLIED']);
+      assert.equal(quote.couponSummary, null);
+      assert.deepEqual(quote.warnings, []);
       assert.deepEqual(quote.ruleVersions, { price: 'catalog.v1', promotion: 'none', shipping: 'rate:1', tax: null });
       assert.equal(quote.shippingMethod.code, 'STANDARD');
       assert.ok(new Date(quote.expiresAt).getTime() > Date.now());

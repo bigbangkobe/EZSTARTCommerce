@@ -5,13 +5,79 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { connectDatabase } from '../../packages/database/src/client.js';
 
-export async function testPostgres() {
+export interface TestCluster {
+  url: string;
+  stop(): Promise<void>;
+}
+
+const START_DEADLINE_MS = 60_000;
+
+const redact = (text: string, secrets: string[]) => {
+  let out = text;
+  for (const secret of secrets) if (secret) out = out.replaceAll(secret, '[redacted]');
+  return out;
+};
+
+// When the server dies during boot the driver's start promise can stay pending with no live
+// handles left (Node would then exit silently with code 0), so keep the timer ref'ed and clear
+// it as soon as the real work settles: a hung boot always surfaces as a failure.
+const withDeadline = async <T>(work: Promise<T>, label: string): Promise<T> =>
+  new Promise<T>((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => rejectPromise(new Error(label)), START_DEADLINE_MS);
+    work.then(value => { clearTimeout(timer); resolvePromise(value); },
+      error => { clearTimeout(timer); rejectPromise(error instanceof Error ? error : new Error(String(error))); });
+  });
+
+const migrate = (url: string, secret: string) => {
+  const migrated = spawnSync(process.execPath, [resolve('node_modules/prisma/build/index.js'), 'migrate', 'deploy',
+    '--config', resolve('packages/database/prisma.config.ts')],
+    { env: { ...process.env, DATABASE_URL: url }, encoding: 'utf8', windowsHide: true, timeout: 120_000 });
+  if (migrated.status !== 0) throw new Error(`Disposable database migration failed: ${redact(migrated.stderr, [secret])}`);
+};
+
+const adminBlocked = (detail: string) => detail.includes('administrative permissions')
+  ? `${detail}\n\nPostgreSQL refuses to run under an elevated (administrator) token on Windows. `
+    + `Run "pnpm test" from a normal, non-elevated terminal, or point the suite at an existing server `
+    + `by setting TEST_DATABASE_URL to a PostgreSQL 18 connection string.`
+  : detail;
+
+// When TEST_DATABASE_URL is provided the suite runs against that server instead of the embedded
+// one: every call provisions a disposable database on it so files stay isolated.
+async function externalCluster(): Promise<TestCluster> {
+  const given = new URL(process.env.TEST_DATABASE_URL as string);
+  const secret = decodeURIComponent(given.password);
+  const maintenance = new URL(given.toString());
+  maintenance.pathname = '/postgres';
+  const name = `ezstart_test_${randomUUID().replaceAll('-', '').slice(0, 24)}`;
+  const admin = connectDatabase(maintenance.toString());
+  try {
+    await admin.$executeRawUnsafe(`CREATE DATABASE "${name}"`);
+  } finally {
+    await admin.$disconnect();
+  }
+  const url = new URL(given.toString());
+  url.pathname = `/${name}`;
+  migrate(url.toString(), secret);
+  return { url: url.toString(), async stop() {
+    const dropper = connectDatabase(maintenance.toString());
+    try {
+      await dropper.$executeRawUnsafe(`DROP DATABASE "${name}" WITH (FORCE)`);
+    } finally {
+      await dropper.$disconnect();
+    }
+  } };
+}
+
+export async function testPostgres(): Promise<TestCluster> {
+  if (process.env.TEST_DATABASE_URL) return externalCluster();
   const workspace = resolve('.local-tools');
   await mkdir(workspace, { recursive: true });
   const directory = resolve(workspace, `pg-test-${randomUUID()}`);
   const inside = relative(workspace, directory);
   if (!inside || inside.startsWith('..') || isAbsolute(inside)) throw new Error('Unsafe test database directory');
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   const server = createServer();
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   const address = server.address();
@@ -29,7 +95,7 @@ export async function testPostgres() {
     if (result.status !== 0) throw new Error('Failed to prepare PostgreSQL native links');
   }
   const logs: string[] = [];
-  const capture = (value: unknown) => { logs.push(String(value)); if (logs.length > 8) logs.shift(); };
+  const capture = (value: unknown) => { logs.push(String(value)); if (logs.length > 80) logs.shift(); };
   const pg = new EmbeddedPostgres({ databaseDir: directory, user: 'postgres', password, port, persistent: true,
     createPostgresUser: false, authMethod: 'scram-sha-256', initdbFlags: ['--encoding=UTF8', '--locale=C'],
     // Non-UTC server default deliberately catches adapter timestamp normalization bugs.
@@ -37,24 +103,33 @@ export async function testPostgres() {
   const url = `postgresql://postgres:${password}@127.0.0.1:${port}/postgres`;
   try {
     await pg.initialise();
-    await pg.start();
+    // pg.start() can hang forever when the server process dies during boot (for example when
+    // PostgreSQL refuses to run under an elevated Windows token), so race it against a deadline.
+    await withDeadline(pg.start(), `Embedded PostgreSQL did not accept connections within ${START_DEADLINE_MS / 1000}s`);
     const client = pg.getPgClient('postgres', '127.0.0.1');
     await client.connect();
     const version = await client.query('SHOW server_version_num');
     if (Number(version.rows[0].server_version_num) < 180000 || Number(version.rows[0].server_version_num) >= 190000) throw new Error('Expected PostgreSQL 18');
     await client.end();
-    const migrated = spawnSync(process.execPath, [resolve('node_modules/prisma/build/index.js'), 'migrate', 'deploy',
-      '--config', resolve('packages/database/prisma.config.ts')], { env: { ...process.env, DATABASE_URL: url }, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
-    if (migrated.status !== 0) throw new Error(`Disposable database migration failed: ${migrated.stderr.replaceAll(password, '[redacted]')}`);
+    migrate(url, password);
     return { url, async stop() {
       await pg.stop();
       // The absolute target was checked against the workspace before creating the cluster.
       await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } };
   } catch (error) {
-    await pg.stop().catch(() => {});
+    // The server's final stderr (for example the "administrative permissions" refusal) is
+    // delivered after the start promise rejects, so let the log callbacks drain first.
+    await new Promise<void>(done => setTimeout(done, 250));
+    // EmbeddedPostgres.stop() never settles after a failed start, so bound the cleanup wait;
+    // without this the process exits silently with code 0 and the suite reports a false pass.
+    await Promise.race([pg.stop().catch(() => {}),
+      new Promise<void>(done => setTimeout(done, 5_000))]);
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    const detail = error instanceof Error ? error.message : logs.join('\n');
-    throw new Error(detail.replaceAll(password, '[redacted]'));
+    const message = error instanceof Error && error.message && error.message !== 'undefined' ? error.message : '';
+    const detail = logs.length
+      ? `${message ? message + '\n' : ''}Server log tail:\n${logs.join('\n')}`
+      : message || String(error);
+    throw new Error(adminBlocked(redact(detail, [password])));
   }
 }

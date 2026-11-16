@@ -485,6 +485,102 @@ class ContractTests(unittest.TestCase):
         for path in ("/admin/inventory", "/admin/inventory/movements"):
             self.assertEqual("inventory.read", SPEC["paths"][path]["get"]["x-permission"])
 
+    def test_coupon_admin_operations_are_permissioned_and_idempotent(self):
+        expected = {
+            ("/admin/coupons", "get"): "coupons.read",
+            ("/admin/coupons", "post"): "coupons.manage",
+            ("/admin/coupons/{id}", "get"): "coupons.read",
+            ("/admin/coupons/{id}", "patch"): "coupons.manage",
+            ("/admin/coupons/{id}/redemptions", "get"): "coupons.read",
+            ("/admin/coupons/{id}/disable", "post"): "coupons.manage",
+            ("/admin/coupon-batches", "post"): "coupons.issue",
+            ("/admin/coupon-batches/{id}/issue", "post"): "coupons.issue",
+        }
+        for (path, method), permission in expected.items():
+            operation = SPEC["paths"][path][method]
+            self.assertEqual(permission, operation["x-permission"], path)
+            security = [{"AdminSession": []}] if method == "get" else [{"AdminSession": [], "CsrfToken": []}]
+            self.assertEqual(security, operation["security"], path)
+        # 停用与发放是写操作：必须带幂等键；改券必须证明读到的版本，快照冻结依赖它。
+        for path in ("/admin/coupons/{id}/disable", "/admin/coupon-batches/{id}/issue"):
+            self.assertIn({"$ref": "#/components/parameters/IdempotencyKey"},
+                          SPEC["paths"][path]["post"]["parameters"])
+        self.assertIn({"$ref": "#/components/parameters/IfMatch"},
+                      SPEC["paths"]["/admin/coupons/{id}"]["patch"]["parameters"])
+
+    def test_coupon_write_requests_enforce_closed_discount_types_and_bounds(self):
+        write = {"code": "WELCOME-10", "discountType": "percent", "discountValue": 1000,
+                 "validFrom": NOW, "validUntil": "2026-12-31T23:59:59Z"}
+        self.assertEqual([], errors("CouponWriteRequest", write))
+        # 百分比用基点表示，10000 bps = 100% 是硬上限；超过就不是折扣而是倒贴。
+        self.assertTrue(errors("CouponWriteRequest", dict(write, discountValue=10001)))
+        self.assertEqual([], errors("CouponWriteRequest", dict(write, discountType="fixed", discountValue=500)))
+        self.assertEqual([], errors("CouponWriteRequest", dict(write, discountType="fixed",
+                                                               discountValue=100000000)))
+        for key in ("code", "discountType", "discountValue", "validFrom", "validUntil"):
+            invalid = copy.deepcopy(write)
+            del invalid[key]
+            self.assertTrue(errors("CouponWriteRequest", invalid), key)
+        self.assertTrue(errors("CouponWriteRequest", dict(write, discountType="buy_one_get_one")))
+        self.assertTrue(errors("CouponWriteRequest", dict(write, discountValue=0)))
+        self.assertTrue(errors("CouponWriteRequest", dict(write, code="with space")))
+        self.assertTrue(errors("CouponWriteRequest", dict(write, refundPolicy="rollback")))
+        # 请求体不接受服务端字段：规则快照与核销计数只能由服务端生成。
+        self.assertTrue(errors("CouponWriteRequest", dict(write, couponSnapshot={})))
+        self.assertTrue(errors("CouponWriteRequest", dict(write, usage={"usedCount": 0})))
+        # 补丁是部分更新，但必须至少改一个字段；且不允许任何未声明字段。
+        self.assertEqual([], errors("CouponPatchRequest", {"discountValue": 1200}))
+        self.assertTrue(errors("CouponPatchRequest", {}))
+        self.assertTrue(errors("CouponPatchRequest", {"discountValue": 10001, "discountType": "percent"}))
+        self.assertTrue(errors("CouponPatchRequest", {"reservedCount": 1}))
+
+    def test_coupon_responses_keep_snapshots_and_contacts_out(self):
+        usage = {"reservedCount": 1, "redeemedCount": 2, "releasedCount": 0, "expiredCount": 0,
+                 "returnedCount": 0, "usedCount": 3}
+        coupon = {"id": UUID, "code": "WELCOME-10", "codeMasked": "WE***10", "status": "active",
+                  "discountType": "percent", "discountValue": 1000, "currency": "HKD",
+                  "validFrom": NOW, "validUntil": "2026-12-31T23:59:59Z", "minSubtotalMinor": 5000,
+                  "totalLimit": 100, "perCustomerLimit": 1, "eligibleProductIds": [], "eligibleCategoryIds": [],
+                  "memberTierIds": [], "refundPolicy": "restore", "version": 2, "createdBy": UUID,
+                  "createdAt": NOW, "updatedAt": NOW, "usage": usage}
+        self.assertEqual([], errors("AdminCoupon", coupon))
+        # 快照属于报价/订单，不属于券规则本身：这里一旦出现就说明读模型泄漏了。
+        self.assertTrue(errors("AdminCoupon", dict(coupon, couponSnapshot={})))
+        self.assertTrue(errors("AdminCoupon", dict(coupon, status="expired")))
+        self.assertTrue(errors("AdminCoupon", dict(coupon, refundPolicy="rollback")))
+        self.assertTrue(errors("AdminCoupon", {k: v for k, v in coupon.items() if k != "usage"}))
+        self.assertTrue(errors("CouponUsage", dict(usage, usedCount=-1)))
+        payload = {"data": {"items": [coupon], "nextCursor": None, "hasMore": False},
+                   "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("CouponListEnvelope", payload))
+
+    def test_coupon_redemptions_expose_only_masked_customer_reference(self):
+        redemption = {"id": UUID, "orderId": UUID, "publicOrderNumber": "EZ-20261116-ABC123",
+                      "status": "redeemed", "discountMinor": 1200, "currency": "HKD",
+                      "customerRef": "9f2ab3c1", "reservedAt": NOW, "redeemedAt": NOW,
+                      "releasedAt": None, "expiresAt": None, "ruleVersion": 2}
+        self.assertEqual([], errors("AdminCouponRedemption", redemption))
+        # 游客顾客的联系方式绝不能出现在核销记录里：只有不可逆摘要的前 8 位。
+        for key in ("customerKey", "customerEmail", "customerPhone", "contact"):
+            self.assertTrue(errors("AdminCouponRedemption", dict(redemption, **{key: "leak"})), key)
+        self.assertTrue(errors("AdminCouponRedemption", dict(redemption, status="refunded")))
+        self.assertTrue(errors("AdminCouponRedemption", dict(redemption, discountMinor=0)))
+        payload = {"data": {"items": [redemption], "nextCursor": None, "hasMore": False},
+                   "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("CouponRedemptionListEnvelope", payload))
+
+    def test_coupon_batches_are_reviewed_writes(self):
+        request = {"couponId": UUID, "channel": "email"}
+        self.assertEqual([], errors("CouponBatchRequest", request))
+        self.assertTrue(errors("CouponBatchRequest", dict(request, channel="wechat")))
+        self.assertTrue(errors("CouponBatchRequest", dict(request, couponId="WELCOME-10")))
+        issue = {"confirmedRecipientCount": 120}
+        self.assertEqual([], errors("CouponBatchIssueRequest", issue))
+        self.assertTrue(errors("CouponBatchIssueRequest", {}))
+        self.assertTrue(errors("CouponBatchIssueRequest", dict(issue, confirmedRecipientCount=-1)))
+        # 批量发放确认数不能由“顺便带上收件人列表”替代：收件人只能在建批时声明。
+        self.assertTrue(errors("CouponBatchIssueRequest", dict(issue, recipientMemberIds=[UUID])))
+
 
 if __name__ == "__main__":
     unittest.main()

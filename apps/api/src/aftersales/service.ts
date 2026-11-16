@@ -10,6 +10,7 @@ import {
 import { maskContact, type ContactSnapshot } from '../../../../packages/domain/src/orders.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import { releaseOrderReservations } from '../orders/reservations.js';
+import { releaseCouponInTx, restoreCouponQuotaInTx } from '../promotions/redeem.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -360,6 +361,7 @@ export class AfterSalesService {
       if (row.caseType === 'cancel') {
         this.rule(() => assertCancelCaseOrder(order));
         await releaseOrderReservations(tx, order.id);
+        await releaseCouponInTx(tx, order.id, 'aftersales_cancel', { id: actor.id, type: 'admin' }, now);
         await tx.shopOrder.update({ where: { id: order.id }, data: { orderStatus: 'cancelled', cancelledAt: now,
           cancelReasonCode: reasonCode ?? 'aftersales_cancel', cancelReason: reason, customerNotified: false,
           version: { increment: 1 } } });
@@ -878,6 +880,16 @@ export class AfterSalesService {
         requestDigest: digest, objectId: id } });
       await this.identity.recordAudit(tx, ctx, actor.id, 'refunds.executed', id, 'success',
         `${row.amountMinor} ${row.currency}; ${reference}`);
+
+      // 整单退完且券配置为“退款返额度”时，新建一条返还记录（不改原核销记录）。
+      if (next === 'refunded') {
+        const settled = await tx.refund.aggregate({ where: { orderId: row.orderId, status: 'refunded',
+          id: { not: id } }, _sum: { amountMinor: true } });
+        const order = await tx.shopOrder.findUnique({ where: { id: row.orderId } });
+        if (order && (settled._sum.amountMinor ?? 0) + row.amountMinor >= order.totalMinor) {
+          await restoreCouponQuotaInTx(tx, order.id, id, 'full_refund', now);
+        }
+      }
 
       if (row.caseId) {
         const caseRow = await this.detail(tx, row.caseId);

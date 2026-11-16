@@ -194,6 +194,7 @@ packages/
 - 商品销售价先作为当前商品有效单价；最低消费按销售价汇总、扣优惠码前、税费/配送费前的符合条件商品金额计算；优惠码后计算。订单每单最多一个优惠码，不与其他优惠码叠加。固定金额/百分比优惠不可超过符合条件金额；百分比在 API/数据库以整数 basis points 表示（100 bps = 1%，范围 1–10,000），按最小货币单位四舍五入（half-up）。
 - 下单事务创建 `reserved` 使用记录；线上确认成功或 COD 人工确认时转 `redeemed`；确认前明确取消/失败时释放；付款未知保持预占。已核销后取消/退款不直接删除历史使用记录，是否返券依实例规则通过新的返还记录处理。
 - 单顾客限制优先使用已验证的 Member ID；访客订单以规范化邮箱/电话的实例密钥 HMAC 值检查并限用，不在报表/审计中暴露原联系方式。访客联系方式未经验证不能用于会员合并。
+- 已实现口径（M11）：额度状态机 `reserved → redeemed / released / expired` 只进不退，占额度口径为 `预占 + 已核销 − 已返还`；报价只做只读试算，额度在下单事务内加 advisory lock 复核后预占。报价与订单各存一份 `couponSnapshot`（含 `ruleVersion`）：改券后旧报价下单返回 409 `COUPON_CHANGED`，历史订单金额不变。整单退款且 `refundPolicy=restore` 时新建 `CouponQuotaReturn` 返还记录（含一条 `redeemed→redeemed` 审计事件），绝不改写原核销行；`refundPolicy=none` 或部分退款不返还。未知券码、过期/未开始/停用/币种不符/未达最低消费/范围不适用/总额度或单人限额用尽分别返回 409 与稳定原因码（`COUPON_*`），不再静默按原价结算。
 
 ### 5.6 结账价格与地址变更
 
@@ -257,7 +258,7 @@ packages/
 | `content.read`, `content.write`, `content.preview`, `content.publish`, `content.seo` | Owner、Admin、ProductOps（可由 Owner 拆权） | 草稿编辑、预览和发布分权；只能编辑主题注册区块 |
 | `orders.read`, `orders.update`, `orders.cancel`, `orders.address_change`, `shipments.manage` | Owner、Admin、OrderSupport；Warehouse 只授予受限履约权限 | 地址修改仅未发货；完整联系方式仍需独立 PII 权限；发货数不能超订购量 |
 | `customers.read_masked`, `customers.read_pii`, `customers.manage`, `customers.export` | Owner；OrderSupport 默认 masked；PrivacySpecialist 按任务授权 | 顾客档案、全字段查看和导出分开授权 |
-| `members.manage`, `points.adjust`, `coupons.read`, `coupons.manage`, `coupons.issue` | Owner、Admin；对应运营岗位可授权 | 积分人工调整单独记录原因、审计和限额；营销发放检查同意 |
+| `members.manage`, `points.adjust`, `coupons.read`, `coupons.manage`, `coupons.issue` | Owner、Admin；对应运营岗位可授权 | 积分人工调整单独记录原因、审计和限额；营销发放检查同意。优惠券：读与核销记录是 `coupons.read`（核销记录只见顾客 HMAC 摘要），建/改/停用是 `coupons.manage`（停用须幂等键），批量发放是 `coupons.issue`；在会员目录（M10）落地前，创建会员专属规则返回 422 `MEMBER_TIERS_UNAVAILABLE`，批次创建与发放返回 422 `MEMBER_AUDIENCE_UNAVAILABLE` |
 | `inventory.read`, `inventory.adjust`, `inventory.manage` | Owner 与 Admin 三项全给；ProductOps 只给 `read`；Warehouse 给 `read`+`adjust`（`role-presets.ts` 现状） | 调整记前后数量/原因，只接受增量不做 `set onHand`；阈值只影响提醒，与调整分开授权 |
 
 库存的实际授权形状：`inventory` 预设组固定为 `read`+`adjust`+`manage`；`warehouse` 预设显式只拿 `inventory.read` 与 `inventory.adjust`，改不了阈值；`product_ops` 只有 `inventory.read`。调整需要 `inventory.adjust` + CSRF + `Idempotency-Key` 与期望版本（0 表示该 SKU 尚无库存行），阈值写入需要 `inventory.manage`。

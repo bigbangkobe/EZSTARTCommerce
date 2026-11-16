@@ -2509,9 +2509,16 @@ paths:
       summary: List coupon rules
       security: [{ AdminSession: [] }]
       x-permission: coupons.read
-      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/SearchQuery' }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [active, disabled] }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CouponListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -2527,7 +2534,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CouponWriteRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/CouponCreated' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -2542,7 +2549,7 @@ paths:
       security: [{ AdminSession: [] }]
       x-permission: coupons.read
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CouponSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2560,7 +2567,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CouponPatchRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CouponSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2576,7 +2583,7 @@ paths:
       x-permission: coupons.read
       parameters: [{ $ref: '#/components/parameters/UuidId' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CouponRedemptionListSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2595,7 +2602,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReasonRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/CouponSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3651,6 +3658,51 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/InventoryThresholdEnvelope' }
+    CouponSuccess:
+      description: Coupon rule with usage counters
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+        ETag:
+          schema:
+            type: string
+            pattern: ^"[1-9][0-9]*"$
+          description: Coupon rule version; echo as If-Match on updates.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CouponEnvelope' }
+    CouponCreated:
+      description: The created coupon rule
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+        ETag:
+          schema:
+            type: string
+            pattern: ^"[1-9][0-9]*"$
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CouponEnvelope' }
+    CouponListSuccess:
+      description: Coupon rule page
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CouponListEnvelope' }
+    CouponRedemptionListSuccess:
+      description: Redemptions of one coupon, newest first
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CouponRedemptionListEnvelope' }
     PaymentListSuccess:
       description: Payment ledger page
       headers:
@@ -6278,6 +6330,101 @@ components:
         reason: { type: string, minLength: 1, maxLength: 1000 }
         retentionExceptionRef: { type: [string, 'null'], maxLength: 200 }
         exportJobId: { type: [string, 'null'], format: uuid }
+    CouponUsage:
+      type: object
+      additionalProperties: false
+      required: [reservedCount, redeemedCount, releasedCount, expiredCount, returnedCount, usedCount]
+      description: usedCount = reserved + redeemed - returned. Only reserved and redeemed consume quota.
+      properties:
+        reservedCount: { type: integer, minimum: 0 }
+        redeemedCount: { type: integer, minimum: 0 }
+        releasedCount: { type: integer, minimum: 0 }
+        expiredCount: { type: integer, minimum: 0 }
+        returnedCount: { type: integer, minimum: 0 }
+        usedCount: { type: integer, minimum: 0 }
+    AdminCoupon:
+      type: object
+      additionalProperties: false
+      required: [id, code, codeMasked, status, discountType, discountValue, currency, validFrom, validUntil,
+        minSubtotalMinor, totalLimit, perCustomerLimit, eligibleProductIds, eligibleCategoryIds, memberTierIds,
+        refundPolicy, version, createdBy, createdAt, updatedAt, usage]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        codeMasked: { type: string, description: Safe to show in logs and storefront responses. }
+        status: { type: string, enum: [active, disabled] }
+        discountType: { type: string, enum: [fixed, percent] }
+        discountValue: { type: integer, minimum: 1 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time }
+        minSubtotalMinor: { type: [integer, 'null'], minimum: 0 }
+        totalLimit: { type: [integer, 'null'], minimum: 1 }
+        perCustomerLimit: { type: [integer, 'null'], minimum: 1 }
+        eligibleProductIds: { type: array, items: { type: string, format: uuid } }
+        eligibleCategoryIds: { type: array, items: { type: string, format: uuid } }
+        memberTierIds: { type: array, items: { type: string, format: uuid } }
+        refundPolicy: { type: string, enum: [none, restore] }
+        version: { type: integer, minimum: 1 }
+        createdBy: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        usage: { $ref: '#/components/schemas/CouponUsage' }
+    CouponEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/AdminCoupon' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    CouponListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminCoupon' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    AdminCouponRedemption:
+      type: object
+      additionalProperties: false
+      required: [id, orderId, publicOrderNumber, status, discountMinor, currency, customerRef,
+        reservedAt, redeemedAt, releasedAt, expiresAt, ruleVersion]
+      properties:
+        id: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        publicOrderNumber: { type: string }
+        status: { type: string, enum: [reserved, redeemed, released, expired] }
+        discountMinor: { type: integer, minimum: 1 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        customerRef:
+          type: [string, 'null']
+          description: First 8 hex characters of the instance-key HMAC. Opaque, not reversible, no contact data.
+        reservedAt: { type: string, format: date-time }
+        redeemedAt: { type: [string, 'null'], format: date-time }
+        releasedAt: { type: [string, 'null'], format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        ruleVersion: { type: [integer, 'null'], minimum: 1 }
+    CouponRedemptionListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/AdminCouponRedemption' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     CouponFields:
       type: object
       additionalProperties: false
@@ -6292,13 +6439,12 @@ components:
         perCustomerLimit: { type: [integer, 'null'], minimum: 1 }
         eligibleProductIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
         eligibleCategoryIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
-        memberTierIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
+        memberTierIds: { type: array, uniqueItems: true, items: { type: string, format: uuid },
+          description: Member-tier restriction. Rejected while no member directory exists (M10). }
+        refundPolicy: { type: string, enum: [none, restore], default: none,
+          description: restore returns the coupon quota through a new return record once the order is fully refunded; it never rewrites the original usage row. }
         status: { type: string, enum: [active, disabled], default: active }
-    CouponWriteRequest:
       allOf:
-        - { $ref: '#/components/schemas/CouponFields' }
-        - type: object
-          required: [code, discountType, discountValue, validFrom, validUntil]
         - if:
             properties:
               discountType: { const: percent }
@@ -6306,6 +6452,11 @@ components:
           then:
             properties:
               discountValue: { maximum: 10000 }
+    CouponWriteRequest:
+      allOf:
+        - { $ref: '#/components/schemas/CouponFields' }
+        - type: object
+          required: [code, discountType, discountValue, validFrom, validUntil]
     CouponPatchRequest:
       allOf: [{ $ref: '#/components/schemas/CouponFields' }]
       minProperties: 1

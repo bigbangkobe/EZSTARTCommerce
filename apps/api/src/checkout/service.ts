@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
+import { assertCouponUsable } from '../../../../packages/domain/src/promotions.js';
 import { assertQuoteActive, assertQuoteMath, assertQuoteVersion, CheckoutRuleError,
   normalizeAddress, normalizeContact, normalizeCouponCode, normalizePolicyAcceptances, orderRequestFingerprint,
   publicOrderNumber, quoteExpiry, QUOTE_TTL_SECONDS, type Address, type Contact } from '../../../../packages/domain/src/checkout.js';
 import { effectiveReviewStatus, normalizeMarketCode } from '../../../../packages/domain/src/store.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import type { PaymentsService } from '../payments/service.js';
+import type { PricedCoupon, PromotionsService } from '../promotions/service.js';
 import type { ShippingService } from '../shipping/service.js';
 import { CartService, type CartRow } from './cart-service.js';
 
@@ -36,7 +38,8 @@ interface Settings {
  */
 export class CheckoutService {
   constructor(private readonly identity: IdentityService, private readonly cartService: CartService,
-    private readonly shipping: ShippingService, private readonly payments: PaymentsService) {}
+    private readonly shipping: ShippingService, private readonly payments: PaymentsService,
+    private readonly promotions: PromotionsService) {}
   private get db() { return this.identity.db; }
 
   private rule<T>(fn: () => T): T {
@@ -72,6 +75,10 @@ export class CheckoutService {
     const rows = await tx.cartItem.findMany({ where: { cartId: cart.id }, include: CART_ITEM_INCLUDE, orderBy: [{ createdAt: 'asc' }] });
     if (!rows.length) throw new AuthError(422, 'VALIDATION_ERROR');
     if (rows.length > 50) throw new AuthError(422, 'VALIDATION_ERROR');
+    // 优惠范围要按商品与分类判定：一次取齐，避免逐行查询。
+    const categories = await tx.productCategory.findMany({ where: { productId: { in: rows.map(row => row.variant.productId) } } });
+    const categoryIds = new Map<string, string[]>();
+    for (const link of categories) categoryIds.set(link.productId, [...(categoryIds.get(link.productId) ?? []), link.categoryId]);
     const now = Date.now();
     return rows.map((row: CartItemRow) => {
       const variant = row.variant;
@@ -84,7 +91,8 @@ export class CheckoutService {
       const translation = product.translations.find(item => item.locale === locale)
         ?? product.translations.find(item => item.locale === fallback) ?? product.translations[0] ?? null;
       const variantName = Object.values((variant.optionValues ?? {}) as Record<string, string>).join(' / ') || null;
-      return { variant, productName: translation?.name ?? product.baseSku ?? variant.sku, variantName,
+      return { variant, productId: product.id, categoryIds: categoryIds.get(product.id) ?? [],
+        productName: translation?.name ?? product.baseSku ?? variant.sku, variantName,
         quantity: row.quantity, unitPriceMinor: variant.priceMinor, lineSubtotalMinor: variant.priceMinor * row.quantity };
     });
   }
@@ -121,11 +129,15 @@ export class CheckoutService {
       const methods = await this.shipping.methodsFor(tx, address, subtotal, cart.currency, body.locale, settings.defaultLocale);
       const method = methods.find(item => item.id === body.shippingMethodId);
       if (!method) throw new AuthError(422, 'VALIDATION_ERROR');
-      // 优惠引擎属于 M11：现在不静默“假装打折”，而是明确告诉顾客本次未使用优惠码。
-      const warnings = couponCode ? ['COUPON_NOT_APPLIED'] : [];
-      const amounts = { subtotalMinor: subtotal, discountMinor: 0, shippingMinor: method.feeMinor, taxMinor: 0 };
-      this.rule(() => assertQuoteMath({ ...amounts, totalMinor: amounts.subtotalMinor - amounts.discountMinor
-        + amounts.shippingMinor + amounts.taxMinor }));
+      // 优惠码算不出来就明确失败：静默按原价下单比拒绝更糟。
+      const priced = await this.promotions.priceQuote(tx, { code: couponCode, currency: cart.currency, contact,
+        lines: lines.map(line => ({ key: line.variant.id, productId: line.productId, categoryIds: line.categoryIds,
+          amountMinor: line.lineSubtotalMinor, quantity: line.quantity })), now: new Date() });
+      const warnings: string[] = [];
+      const amounts = { subtotalMinor: subtotal, discountMinor: priced?.discountMinor ?? 0,
+        shippingMinor: method.feeMinor, taxMinor: 0,
+        totalMinor: subtotal - (priced?.discountMinor ?? 0) + method.feeMinor };
+      this.rule(() => assertQuoteMath(amounts));
       await tx.checkoutQuote.updateMany({ where: { cartId: cart.id, status: 'active' }, data: { status: 'superseded' } });
       const rate = await tx.shippingRate.findUnique({ where: { id: method.id } });
       const row = await tx.checkoutQuote.create({ data: {
@@ -135,14 +147,18 @@ export class CheckoutService {
           estimatedMinDays: method.estimatedMinDays, estimatedMaxDays: method.estimatedMaxDays,
           fixedFeeMinor: rate?.fixedFeeMinor ?? method.feeMinor, freeAboveMinor: rate?.freeAboveMinor ?? null },
         subtotalMinor: amounts.subtotalMinor, discountMinor: amounts.discountMinor, shippingMinor: amounts.shippingMinor,
-        taxMinor: amounts.taxMinor, totalMinor: amounts.subtotalMinor + amounts.shippingMinor,
-        couponCode, ruleVersions: { price: 'catalog.v1', promotion: 'none',
+        taxMinor: amounts.taxMinor, totalMinor: amounts.totalMinor,
+        couponCode, ...(priced ? { couponId: priced.couponId,
+          couponSnapshot: priced.snapshot as unknown as Prisma.InputJsonValue,
+          couponSummary: priced.summary as unknown as Prisma.InputJsonValue } : {}),
+        ruleVersions: { price: 'catalog.v1', promotion: priced?.ruleVersion ?? 'none',
           shipping: `rate:${rate?.version ?? 1}`, tax: null },
         warnings, policyAcceptances: policyAcceptances as unknown as Prisma.InputJsonValue,
         expiresAt: quoteExpiry(new Date()),
         lines: { create: lines.map(line => ({ variantId: line.variant.id, sku: line.variant.sku, productName: line.productName,
           variantName: line.variantName, quantity: line.quantity, unitPriceMinor: line.unitPriceMinor,
-          lineSubtotalMinor: line.lineSubtotalMinor, lineDiscountMinor: 0, lineTotalMinor: line.lineSubtotalMinor })) },
+          lineSubtotalMinor: line.lineSubtotalMinor, lineDiscountMinor: priced?.lineDiscounts.get(line.variant.id) ?? 0,
+          lineTotalMinor: line.lineSubtotalMinor - (priced?.lineDiscounts.get(line.variant.id) ?? 0) })) },
       }, include: { lines: true } });
       await tx.guestCart.update({ where: { id: cart.id }, data: { marketCode: market.marketCode, locale: body.locale } });
       await this.identity.recordAudit(tx, ctx, null, 'checkout.quote.created', row.id);
@@ -232,6 +248,16 @@ export class CheckoutService {
               || !product.marketCodes.includes(quote.marketCode)) throw new AuthError(409, 'CART_ITEM_UNAVAILABLE');
           }
 
+          const expiresAt = new Date(now.getTime() + RESERVATION_MINUTES * 60_000);
+          // 券必须在报价版本上仍然成立：规则被改过就要求重新报价，而不是沿用旧折扣。
+          let couponRow: Awaited<ReturnType<typeof tx.coupon.findUnique>> = null;
+          if (quote.couponId) {
+            couponRow = await tx.coupon.findUnique({ where: { id: quote.couponId } });
+            const snapshot = quote.couponSnapshot as { ruleVersion?: number } | null;
+            if (!couponRow || !snapshot || snapshot.ruleVersion !== couponRow.version) throw new AuthError(409, 'COUPON_CHANGED');
+            this.rule(() => assertCouponUsable(couponRow!, now, quote.currency));
+          }
+
           const settings = await this.settings(tx);
           const created = await tx.shopOrder.create({ data: {
             publicOrderNumber: publicOrderNumber(this.day(settings.timezone, now),
@@ -242,6 +268,8 @@ export class CheckoutService {
             taxMinor: quote.taxMinor, totalMinor: quote.totalMinor, locale: quote.locale, marketCode: quote.marketCode,
             contact: quote.contact as Prisma.InputJsonValue, shippingAddress: quote.shippingAddress as Prisma.InputJsonValue,
             shippingMethodSnapshot: quote.shippingMethodSnapshot as Prisma.InputJsonValue,
+            ...(quote.couponId ? { couponId: quote.couponId,
+              couponSnapshot: quote.couponSnapshot as Prisma.InputJsonValue } : {}),
             customerNote: body.customerNote ?? null, paymentMethodCode: methodCode,
             policyAcceptances: quote.policyAcceptances as Prisma.InputJsonValue, placedAt: now,
           } });
@@ -251,8 +279,16 @@ export class CheckoutService {
             lineDiscountMinor: line.lineDiscountMinor, lineTotalMinor: line.lineTotalMinor })) });
           // 台账与订单同事务：下单即有一条待收流水，收款登记只推进状态，不补造记录。
           await this.payments.openLedger(tx, created, method.definition, method.row);
-          const expiresAt = new Date(now.getTime() + RESERVATION_MINUTES * 60_000);
           for (const line of quote.lines) await this.reserve(tx, created.id, line, expiresAt);
+          if (quote.couponId && couponRow) {
+            await this.promotions.reserve(tx, { orderId: created.id,
+              customerKey: this.promotions.customerKey(quote.contact as unknown as Contact), now, expiresAt,
+              priced: { coupon: couponRow, couponId: couponRow.id, couponCode: couponRow.code,
+                discountMinor: quote.discountMinor, lineDiscounts: new Map(),
+                summary: { codeMasked: '', discountMinor: quote.discountMinor },
+                snapshot: quote.couponSnapshot as unknown as PricedCoupon['snapshot'],
+                ruleVersion: `coupon:${couponRow.id}:v${couponRow.version}` } });
+          }
           await tx.checkoutQuote.update({ where: { id: quote.id }, data: { status: 'consumed' } });
           await tx.guestCart.update({ where: { id: cart.id }, data: { status: 'converted' } });
           await tx.orderStatusEvent.create({ data: { orderId: created.id, fromStatus: null,

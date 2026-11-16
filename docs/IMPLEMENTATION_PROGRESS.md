@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进优惠引擎（M11）：当前结账折扣恒为 0、优惠码只返回警告，优惠决定订单折扣分摊与退款返券规则，是前台可见的最大缺口；随后是会员 OTP 与积分（M10）、报表（M14）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+推进会员 OTP 与积分（M10）：优惠引擎（M11）已完成但核销的顾客限额目前依赖 HMAC(联系方式)，会员目录落地后会员侧限额改走已验证 Member ID，批量发放（`coupons.issue` 当前一律 422 `MEMBER_AUDIENCE_UNAVAILABLE`）随之解锁；随后是报表（M14）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -303,3 +303,21 @@
 关键对抗用例：无 `inventory.read` 看不到列表 403、只有 `inventory.adjust` 改不了阈值 403、`delta=0`/字符串/小数/超上限 422、未建库存行的 SKU 以 version 0 出现且可首次入库、旧版本 409 `VERSION_CONFLICT` 且库存不变、同键重放 `replay:true` 且不产生第二条流水、同键换内容 409、现存 8 预留 4 时减 5 被拒（`INSUFFICIENT_ON_HAND`）、减 4 后 `available=0`、形状不符的调整流水被数据库拒绝、阈值旧版本 409、阈值不影响 `available`、`lowStock=1` 同时命中低库存与售罄、`type=purchase` 422、`from` 晚于 `to` 422、退货入库与人工调整共用同一张流水表。
 
 边界：库存调整只覆盖单 SKU 增量，没有批量盘点单、导入盘点表或按仓库/库位分账；`InventoryMovement` 仍不记录发货出库（发货的扣减写在订单履约事务里，未生成流水），因此「所有库存变化都有流水」这件事还差发货与预留两条；低库存阈值只存数值，没有告警任务、通知订阅或阈值变更历史（只有审计记录）；没有库存预留的可视化与手工释放接口（只能等清理任务）。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 14 条迁移）。
+
+## 2026-11-16：优惠码引擎与额度生命周期（M11）
+
+本批程序：
+
+- 第十五条迁移 `202611160014_promotions`：`Coupon`（券码唯一、格式 `^[A-Z0-9][A-Z0-9_-]{0,79}$`、百分比 1–10000 bps / 固定额 1–100,000,000、`validUntil > validFrom`、范围数组上限、退款策略闭集）、`CouponRedemption`（每单一行 `orderId` 唯一、`dedupeKey` 唯一、状态闭集 `reserved|redeemed|released|expired`、`redeemedAt`/`releasedAt` 与状态互锁、核销行不得再带 `expiresAt`、访客限额键必须是 64 位小写十六进制 HMAC）、`CouponRedemptionEvent`（追加写审计）、`CouponQuotaReturn`（`redemptionId` 唯一：一次核销最多返还一次）；`CheckoutQuote` 增加 `couponId`+`couponSnapshot`，`ShopOrder` 增加 `couponId`+`couponSnapshot`。
+- `packages/domain/src/promotions.ts`（纯规则，不含 IO）：券码归一化与打码、规则整体校验与补丁合并后重校验（避免只改类型留下巨额面值）、有效区间（`valid_from <= now < valid_until`）、币种与最低消费校验、范围适用性（商品或分类为「或」，空 = 全场）、折扣计算（BigInt half-up 舍入到最小货币单位，固定额与百分比都不超过符合条件金额）、按行金额比例分摊且余数按行序 +1（各行折扣和恒等于总折扣）、限额断言（`usedCount = 预占+已核销−已返还`）、额度状态机只进不退、规则快照（含 `ruleVersion`）。
+- `apps/api/src/promotions/redeem.ts` 是三个事务内钩子，供订单/支付/售后复用：收款成功 `redeemCouponInTx`、取消/售后取消批准 `releaseCouponInTx`、过期清理 `expireCouponInTx`；整单退款且 `refundPolicy=restore` 时 `restoreCouponQuotaInTx` 新建返还记录并写一条 `redeemed→redeemed` 审计事件，不改写原核销行。
+- 报价与下单：报价只做只读试算（`priceQuote`），金额里真实计入折扣与行级 `lineDiscountMinor/lineTotalMinor`，快照与 `ruleVersions.promotion` 一起冻结；下单前复核券版本与可用性（旧报价遇到改券 409 `COUPON_CHANGED`），下单事务内 `pg_advisory_xact_lock` + 限额复核后预占，券版本与库存版本、阈值版本各自独立。未知/过期/未开始/停用/币种不符/未达最低消费/不适用/限额用尽都返回 409 与稳定原因码，不再静默按原价结算。
+- 访客顾客限额键为 `HMAC-SHA256(instanceId:coupon:规范化邮箱或电话)`（实例 `encryptionKey` 作密钥），不落原联系方式；管理端核销记录只给摘要前 8 位（`customerRef`）。
+- 后台 API：`GET/POST /admin/coupons`（`coupons.read/manage`，`q`/`status` 筛选与游标分页）、`GET/PATCH /admin/coupons/:id`（PATCH 须 `If-Match`）、`GET /admin/coupons/:id/redemptions`、`POST /admin/coupons/:id/disable`（原因 + `Idempotency-Key`）；`POST /admin/coupon-batches` 与 `POST /admin/coupon-batches/:id/issue`（`coupons.issue`）在会员目录落地前一律 422 `MEMBER_AUDIENCE_UNAVAILABLE`，会员专属规则同理 422 `MEMBER_TIERS_UNAVAILABLE`——不建一张永远用不了的券或空批次。
+- 契约：`CouponFields`/`CouponWriteRequest`/`CouponPatchRequest`（百分比 1–10000 bps 的 if/then 约束对写入与补丁同时生效）、`AdminCoupon`（含 `usage` 与 `codeMasked`，不含快照）、`AdminCouponRedemption`（只有 `customerRef`）、批次请求/确认；Python 契约测试新增 5 项（权限与幂等形状、闭集与上限、快照不进入规则响应、核销记录脱敏、批次确认数）。
+- apps/admin 新增 /admin/coupons：券列表（搜索/状态筛选）、创建（百分比按 % 输入、内部换算 bps）、用量六口径（预占/已核销/已释放/已过期/已返还/占额度）、核销记录表（脱敏顾客摘要）、带原因的停用表单；商品目录、订单、付款、售后、库存、配送、媒体、店铺设置页补入口。
+- 测试脚手架修正：`tests/helpers/postgres.ts` 此前在 Windows 提权 shell 下会让整个 Node 进程静默以退出码 0 结束（`pg.start()` 悬挂后事件排空 + 失败后 `pg.stop()` 永不返回），`pnpm test` 会把数据库回归报告为通过。现在启动有 60 秒超时、失败路径的清理有 5 秒护栏，并明确报错提示「用非提权终端运行，或设置 `TEST_DATABASE_URL` 指向既有 PostgreSQL 18」；`TEST_DATABASE_URL` 模式下每次运行在该服务器上创建一次性数据库并在结束后 DROP。
+
+验证：契约 37 项全绿（含优惠 5 项）且生成物与 OpenAPI 一致；Node 域测试 10 项（优惠纯规则）全绿；管理端类型检查与生产构建通过（新增 /admin/coupons 路由）；本地 Edge 的浏览器测试新增优惠页 2 项×2 项目全绿（建券归一化大写与 bps 换算、用量口径、脱敏摘要、停用只带原因）。**本机当前 shell 为提权令牌，PostgreSQL 18 拒绝在管理员权限下启动，沙箱又不允许降权派生进程，因此真实 PostgreSQL HTTP 回归（含优惠 9 个子测试与全部存量回归）本机未运行**：脚手架已改为诚实失败，须在非提权终端运行 `pnpm check` 完成最终验收，或提供 `TEST_DATABASE_URL`。
+
+边界：会员专属券与批量发放要等 M10；部分退款不返还额度（只有整单退款且 `refundPolicy=restore` 才返还）；优惠只支持单品/分类范围与单券每单，不支持阶梯满减、买赠、叠加券或定时启停（停用是手动的）；核销记录页没有导出。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 15 条迁移）。
