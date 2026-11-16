@@ -1,0 +1,161 @@
+generator client {
+  provider = "prisma-client"
+  output = "./src/generated"
+  moduleFormat = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model AdminUser {
+  id String @id @default(uuid()) @db.Uuid
+  email String @unique
+  displayName String
+  locale String
+  status String @default("active")
+  passwordHash String
+  mfaRequired Boolean @default(true)
+  version Int @default(1)
+  lastLoginAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  invitation AdminInvitation? @relation("InvitationTarget")
+  invitationsSent AdminInvitation[] @relation("InvitationIssuer")
+  roles AdminUserRole[]
+  factor MfaFactor?
+  recoveryCodes RecoveryCode[]
+  sessions AdminSession[]
+  challenges AdminChallenge[]
+}
+
+model AdminRole {
+  id String @id @default(uuid()) @db.Uuid
+  name String @unique
+  kind String
+  description String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  permissionCodes String[]
+  version Int @default(1)
+  users AdminUserRole[]
+}
+
+model AdminUserRole {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+  user AdminUser @relation(fields:[userId], references:[id], onDelete:Restrict)
+  role AdminRole @relation(fields:[roleId], references:[id], onDelete:Restrict)
+  @@id([userId,roleId])
+}
+
+model BootstrapState {
+  id Int @id
+  tokenDigest String @unique
+  expiresAt DateTime @db.Timestamptz(3)
+  consumedAt DateTime? @db.Timestamptz(3)
+}
+
+model AdminChallenge {
+  id String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user AdminUser @relation(fields:[userId], references:[id], onDelete:Restrict)
+  purpose String
+  tokenDigest String @unique
+  factorVersion Int
+  userVersion Int
+  failures Int @default(0)
+  expiresAt DateTime @db.Timestamptz(3)
+  consumedAt DateTime? @db.Timestamptz(3)
+  enrollmentId String? @unique @db.Uuid
+  pendingSecret String?
+  @@index([expiresAt])
+}
+
+model MfaFactor {
+  userId String @id @db.Uuid
+  user AdminUser @relation(fields:[userId], references:[id], onDelete:Restrict)
+  encryptedSecret String
+  version Int @default(1)
+  lastUsedStep BigInt @default(-1)
+}
+
+model RecoveryCode {
+  id String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user AdminUser @relation(fields:[userId], references:[id], onDelete:Restrict)
+  digest String @unique
+  consumedAt DateTime? @db.Timestamptz(3)
+}
+
+model AdminSession {
+  id String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user AdminUser @relation(fields:[userId], references:[id], onDelete:Restrict)
+  tokenDigest String @unique
+  mfaVerified Boolean
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  lastSeenAt DateTime @db.Timestamptz(3)
+  idleExpiresAt DateTime @db.Timestamptz(3)
+  absoluteExpiresAt DateTime @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  @@index([userId,revokedAt])
+}
+
+model IdentityRateLimit {
+  key String @id
+  count Int @default(0)
+  windowStart DateTime @db.Timestamptz(3)
+  blockedUntil DateTime? @db.Timestamptz(3)
+}
+
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String? @db.Uuid
+  action String
+  objectId String?
+  result String
+  requestId String
+  reason String?
+  occurredAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([occurredAt])
+}
+
+model AdminInvitation {
+  id String @id @db.Uuid
+  userId String @unique @db.Uuid
+  user AdminUser @relation("InvitationTarget", fields: [userId], references: [id], onDelete: Restrict)
+  inviterId String @db.Uuid
+  inviter AdminUser @relation("InvitationIssuer", fields: [inviterId], references: [id], onDelete: Restrict)
+  version Int @default(1)
+  status String @default("pending")
+  tokenDigest String @unique
+  expiresAt DateTime @db.Timestamptz(3)
+  lastSentAt DateTime @db.Timestamptz(3)
+  sendWindowStartedAt DateTime @db.Timestamptz(3)
+  sendsInWindow Int
+  notificationJobId String? @db.Uuid
+  resendReceipts Json @default("{}")
+  notificationJobs IdentityNotificationJob[]
+}
+
+model IdentityNotificationJob {
+  id String @id @db.Uuid
+  invitationId String @db.Uuid
+  invitationVersion Int
+  attempts Int @default(0)
+  availableAt DateTime @default(now()) @db.Timestamptz(3)
+  leaseToken String? @db.Uuid
+  leaseExpiresAt DateTime? @db.Timestamptz(3)
+  lastErrorCode String?
+  sentAt DateTime? @db.Timestamptz(3)
+  invitation AdminInvitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  encryptedPayload String?
+  expiresAt DateTime @db.Timestamptz(3)
+  status String @default("pending")
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([status, expiresAt])
+  @@index([status, availableAt, leaseExpiresAt])
+}

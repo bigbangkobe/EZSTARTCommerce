@@ -1,0 +1,34 @@
+{
+  "name": "ezstartcommerce",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@8.15.9",
+  "engines": {
+    "node": ">=24.15.0 <25"
+  },
+  "scripts": {
+    "contracts:generate": "node scripts/generate-contract.mjs",
+    "contracts:check": "node scripts/check-generated-contract.mjs",
+    "contracts:validate": "node scripts/validate-contract.mjs",
+    "db:generate": "pnpm --filter @ezstart/database exec prisma generate --config prisma.config.ts",
+    "db:validate": "pnpm --filter @ezstart/database exec prisma validate --config prisma.config.ts",
+    "db:migrate": "node --env-file-if-exists=.env node_modules/prisma/build/index.js migrate deploy --config packages/database/prisma.config.ts",
+    "build": "pnpm db:generate && tsc -p tsconfig.json",
+    "typecheck": "pnpm db:generate && tsc -p tsconfig.json --noEmit",
+    "test": "pnpm build && node --test dist/tests/*.test.js",
+    "dev:api": "pnpm build && node --env-file-if-exists=.env dist/apps/api/src/main.js",
+    "check": "pnpm contracts:validate && pnpm contracts:check && pnpm db:validate && pnpm test && pnpm --filter @ezstart/admin typecheck",
+    "dev:worker": "pnpm build && node --env-file-if-exists=.env dist/apps/worker/src/main.js",
+    "dev:admin": "pnpm --filter @ezstart/admin dev",
+    "build:admin": "pnpm --filter @ezstart/admin build",
+    "test:browser": "node scripts/browser-tests.mjs test",
+    "browser:install": "node scripts/browser-tests.mjs install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/node": "24.0.0",
+    "embedded-postgres": "18.4.0-beta.17",
+    "typescript": "6.0.3"
+  }
+}

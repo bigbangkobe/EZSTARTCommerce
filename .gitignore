@@ -1,0 +1,15 @@
+.local-tools/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+coverage/
+packages/database/src/generated/
+
+.next/
+playwright-report/
+test-results/
+*.tsbuildinfo
