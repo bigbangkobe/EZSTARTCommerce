@@ -13,3 +13,6 @@ packages/database/src/generated/
 playwright-report/
 test-results/
 *.tsbuildinfo
+
+# 本地工作区记忆与代理数据
+.workbuddy/
