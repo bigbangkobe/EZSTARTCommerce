@@ -265,6 +265,8 @@ packages/
 | `privacy.read`, `privacy.manage`, `privacy.verify`, `privacy.process`, `privacy.export` | Owner、PrivacySpecialist 按任务授权 | 核验、处理、导出分权；申请人不得审批自己处理的请求 |
 | `aftersales.read`, `aftersales.manage`, `aftersales.approve`, `aftersales.inspect`, `audit.read` | Owner；客服/仓库/审计人员按职责授权 | 售后审批/质检/审计权限分开；审计记录不可编辑/删除 |
 
+本表的代码投影是 `packages/config/src/role-presets.ts`（服务启动时幂等补齐缺失的预设角色，已存在的预设不被覆盖）；新增权限码时先改契约 x-permission，再同步该文件，否则启动会因预设引用未知权限码而失败。
+
 授权方式是“角色拥有权限集合，用户绑定角色”；API 每次请求检查用户状态、有效会话、MFA 要求及当前权限版本。接口、按钮、列表字段、导出、异步任务下载均执行同一权限规则；读取完整 PII 也记录 `AuditLog`。
 
 ## 8. 页面、发布、导入、通知和统计的端到端流程

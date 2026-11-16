@@ -5,6 +5,7 @@ import type { Prisma, PrismaClient } from '../../../../packages/database/src/cli
 import { issueInvitation, resendInvitation, revokeInvitation, acceptInvitation, issuePasswordReset, rotatePasswordReset, completePasswordReset,
   IdentityConflict, type Invitation, type PasswordReset, digest } from '../../../../packages/domain/src/identity.js';
 import { expiresAt, securityPolicy as policy } from '../../../../packages/config/src/security-policy.js';
+import { resolveRolePresets } from '../../../../packages/config/src/role-presets.js';
 import { csrf, decrypt, encrypt, equal, newTotpSecret, passwordHash, passwordMatches, recoveryCodes, token, totp, totpStep } from './crypto.js';
 import type { IdentityConfig } from './config.js';
 
@@ -30,6 +31,7 @@ export class IdentityService {
     }
     await this.db.$queryRaw`SELECT 1 FROM "AdminUser" LIMIT 1`;
     this.dummyHash = await passwordHash(token());
+    await this.db.$transaction(async tx => this.ensureRolePresets(tx), { timeout: 10_000 });
     if (this.config.bootstrapToken) {
       await this.db.$transaction(async tx => {
         const now = await this.now(tx);
@@ -47,6 +49,25 @@ export class IdentityService {
         SELECT migration_name, checksum, finished_at, rolled_back_at FROM "_prisma_migrations"`;
       return migrationsMatch(this.migrationManifest, rows);
     } catch { return false; }
+  }
+  /**
+   * 幂等地补齐默认岗位权限包：缺失的预设角色按当前权限矩阵创建，已存在的一律不改
+   * （店主可自行调整预设授权，重启不能被覆盖）。唯一例外是 owner 角色——它不可编辑，
+   * 因此按当前契约权限码单向补齐，保证新增模块上线后店主不会失去新权限。
+   */
+  private async ensureRolePresets(tx: Tx) {
+    const presets = resolveRolePresets(this.permissions);
+    await this.lock(tx, 'role-presets');
+    const existing = await tx.adminRole.findMany({ where: { presetKey: { in: presets.map(preset => preset.key) } } });
+    const present = new Set(existing.map(role => role.presetKey));
+    for (const preset of presets) {
+      if (!present.has(preset.key)) await tx.adminRole.createMany({ data: [preset], skipDuplicates: true });
+    }
+    const owner = await tx.adminRole.findUnique({ where: { presetKey: 'owner' } });
+    const ownerCodes = presets.find(preset => preset.key === 'owner')!.permissionCodes;
+    if (!owner) return;
+    const merged = [...new Set([...owner.permissionCodes, ...ownerCodes])].sort();
+    if (merged.length !== owner.permissionCodes.length) await tx.adminRole.update({ where: { id: owner.id }, data: { permissionCodes: merged } });
   }
   private async now(tx: Tx): Promise<Date> {
     const rows = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
@@ -155,7 +176,8 @@ export class IdentityService {
       const state = await tx.bootstrapState.findUnique({ where: { id: 1 } });
       if (!state || state.expiresAt <= now || !equal(state.tokenDigest, digest(supplied))) throw new AuthError(401, 'UNAUTHORIZED');
       if (state.consumedAt || await tx.adminUser.count() > 0) throw new AuthError(409, 'INSTANCE_INITIALIZED');
-      const role = await tx.adminRole.create({ data: { name: 'Owner', kind: 'owner', permissionCodes: this.permissions } });
+      await this.ensureRolePresets(tx);
+      const role = await tx.adminRole.findUniqueOrThrow({ where: { presetKey: 'owner' } });
       const user = await tx.adminUser.create({ data: { email: body.email.trim().toLowerCase(), displayName: body.displayName,
         locale: body.locale, passwordHash: encoded, mfaRequired: true, roles: { create: { roleId: role.id } } }, include: includeUser });
       await tx.bootstrapState.update({ where: { id: 1 }, data: { consumedAt: now } });
@@ -492,8 +514,8 @@ export class IdentityService {
     }, { timeout: 10_000 });
   }
   private roleSummary(role: Prisma.AdminRoleGetPayload<{}>) {
-    return { id: role.id, name: role.name, description: role.description, permissionCodes: role.permissionCodes,
-      version: role.version, createdAt: role.createdAt.toISOString(), updatedAt: role.updatedAt.toISOString() };
+    return { id: role.id, name: role.name, kind: role.kind, presetKey: role.presetKey, description: role.description,
+      permissionCodes: role.permissionCodes, version: role.version, createdAt: role.createdAt.toISOString(), updatedAt: role.updatedAt.toISOString() };
   }
   private grantable(actor: User, codes: string[]) {
     const owned = new Set(actor.roles.flatMap(link => link.role.permissionCodes));

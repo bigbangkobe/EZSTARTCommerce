@@ -149,7 +149,7 @@
 
 重设申请为 email，完成重设为 resetToken + newPassword，两者共用同一路径并按字段选择校验。申请对存在、停用、冷却中和超限的邮箱一律返回 `{requestAccepted:true}`，不发送即不写重置凭据，响应也不能区分账号是否存在；每次有效申请原子轮换 token 摘要、版本和 30 分钟截止，旧链接立即失效。完成时校验一次性凭据、撤销该员工全部会话与未完成挑战、递增员工版本，但保留 TOTP 因子、恢复码和 MFA 要求；成功不建立登录会话。无效、过期、已消费或已被停用/撤权作废的 token 返回 401。重设通知与邀请共用通知队列，任务在发送前复核目标状态与版本。
 
-安全参数以 [identity-v1](IDENTITY_SECURITY_POLICY.md) 为准，全部 MFA 因子遗失的处理见 [恢复流程](ADMIN_RECOVERY_RUNBOOK.md)。M15 运维、默认岗位权限包、身份审计读取界面和其余电商模块仍待完成。首店主初始化、MFA 登记/替换/验证、邀请、员工/角色管理、密码重设和本人会话接口已接入 PostgreSQL 18/Prisma 7，并通过真实 HTTP 集成测试，详见 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md)。TypeScript 客户端仍只封装登录操作。
+安全参数以 [identity-v1](IDENTITY_SECURITY_POLICY.md) 为准，全部 MFA 因子遗失的处理见 [恢复流程](ADMIN_RECOVERY_RUNBOOK.md)。M15 运维、身份审计读取界面和其余电商模块仍待完成（默认岗位权限包已随服务启动预置）。首店主初始化、MFA 登记/替换/验证、邀请、员工/角色管理、密码重设和本人会话接口已接入 PostgreSQL 18/Prisma 7，并通过真实 HTTP 集成测试，详见 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md)。TypeScript 客户端仍只封装登录操作。
 
 ### 3.2 商品、媒体、内容和陈列（M02–M04）
 

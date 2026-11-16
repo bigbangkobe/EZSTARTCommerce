@@ -56,7 +56,7 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
     app = await createApp(identity); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     await t.test('migration history and dependency readiness are real', async () => {
       const migrated = await db.$queryRaw<{ count: bigint }[]>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
-      assert.equal(Number(migrated[0]!.count), 5);
+      assert.equal(Number(migrated[0]!.count), 6);
       const ready = await call('health/ready', undefined, new Map(), {}, 'ReadinessStatusEnvelope');
       assert.equal(ready.status, 200);
       const zone = await db.$queryRaw<{ zone: string }[]>`SELECT current_setting('TimeZone') AS zone`;
@@ -297,6 +297,51 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
       assert.equal((await call('admin/roles', { name: 'Allowed delegation', permissionCodes: ['catalog.read'] }, delegated, delegatedHeaders)).status, 201);
       const userList = await call('admin/users?limit=1', undefined, jar, {}, 'AdminUserListEnvelope');
       assert.equal(userList.body.data.items.length, 1); assert.equal(userList.body.data.hasMore, true);
+      await db.identityRateLimit.deleteMany();
+    });
+    await t.test('default role presets are seeded, scoped and healed without overwriting customisation', async () => {
+      await db.identityRateLimit.deleteMany();
+      const headers = { 'X-CSRF-Token': csrf };
+      const patch = (path: string, body: unknown, version: number, target = jar, customHeaders = headers) =>
+        call(path, body, target, { ...customHeaders, 'If-Match': `"${version}"` }, undefined, base, 'PATCH');
+      const presets = await db.adminRole.findMany({ where: { presetKey: { not: null } } });
+      assert.equal(presets.length, 8, 'every default job preset must exist exactly once');
+      const byKey = new Map(presets.map(role => [role.presetKey!, role]));
+      assert.deepEqual([...byKey.keys()].sort(), ['admin', 'finance', 'order_support', 'owner', 'privacy_specialist', 'product_ops', 'reports_readonly', 'warehouse']);
+      assert.deepEqual(byKey.get('owner')!.permissionCodes, [...contracts.ownerPermissions].sort());
+      assert.equal(byKey.get('owner')!.kind, 'owner');
+      assert.equal(byKey.get('admin')!.kind, 'admin', 'store managers keep the MFA requirement through the admin kind');
+      assert.deepEqual(byKey.get('reports_readonly')!.permissionCodes, ['reports.view']);
+      const warehouse = byKey.get('warehouse')!.permissionCodes;
+      assert.ok(!warehouse.includes('refunds.create') && !warehouse.includes('payments.read') && !warehouse.includes('staff.manage'));
+      const listed = await call('admin/roles?limit=100', undefined, jar, {}, 'AdminRoleListEnvelope');
+      const listedAdmin = listed.body.data.items.find((role: { presetKey: string | null }) => role.presetKey === 'admin');
+      assert.equal(listedAdmin.kind, 'admin'); assert.equal(listedAdmin.presetKey, 'admin');
+      const custom = listed.body.data.items.find((role: { presetKey: string | null }) => role.presetKey === null);
+      assert.ok(custom); assert.equal(custom.kind, 'custom');
+      // 重启（重复初始化）既不重复建角色，也不覆盖店主对预设的调整。
+      await identity.initialize();
+      assert.equal(await db.adminRole.count({ where: { presetKey: { not: null } } }), 8);
+      assert.equal((await db.adminRole.findUniqueOrThrow({ where: { id: byKey.get('warehouse')!.id } })).version, 1);
+      // 撤销对预设的授权要真正生效，且启动不会把被收回的权限加回来。
+      const trimmed = await patch(`admin/roles/${byKey.get('warehouse')!.id}`, { permissionCodes: ['catalog.read', 'orders.read'] }, 1);
+      assert.equal(trimmed.status, 200); assert.deepEqual(trimmed.body.data.permissionCodes, ['catalog.read', 'orders.read']);
+      await identity.initialize();
+      assert.deepEqual((await db.adminRole.findUniqueOrThrow({ where: { id: byKey.get('warehouse')!.id } })).permissionCodes, ['catalog.read', 'orders.read']);
+      // owner 角色不可编辑，但契约新增权限码后必须自动补齐，否则店主会失去新模块入口。
+      await db.adminRole.update({ where: { id: byKey.get('owner')!.id }, data: { permissionCodes: ['staff.read'] } });
+      await identity.initialize();
+      assert.deepEqual((await db.adminRole.findUniqueOrThrow({ where: { id: byKey.get('owner')!.id } })).permissionCodes, [...contracts.ownerPermissions].sort());
+      assert.equal((await patch(`admin/roles/${byKey.get('owner')!.id}`, { permissionCodes: [] }, (await db.adminRole.findUniqueOrThrow({ where: { id: byKey.get('owner')!.id } })).version)).status, 409);
+      // 权限更高的角色不能被权限更低的角色管理者改写。
+      const managerRole = await db.adminRole.create({ data: { name: 'Preset auditor', kind: 'custom', permissionCodes: ['roles.manage', 'catalog.read'] } });
+      const manager = await db.adminUser.create({ data: { email: 'preset-manager@example.test', displayName: 'Preset manager', locale: 'en', passwordHash: 'unused', mfaRequired: false, roles: { create: { roleId: managerRole.id } } } });
+      const secretValue = randomBytes(32).toString('base64url');
+      await db.adminSession.create({ data: { userId: manager.id, tokenDigest: digest(secretValue), mfaVerified: false, lastSeenAt: new Date(), idleExpiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 120_000) } });
+      const managerJar = new Map([['ez_admin_session', secretValue]]);
+      const managerSession = await call('admin/auth/session', undefined, managerJar);
+      assert.equal((await patch(`admin/roles/${byKey.get('admin')!.id}`, { permissionCodes: ['staff.manage'] }, byKey.get('admin')!.version, managerJar,
+        { 'X-CSRF-Token': managerSession.body.data.csrfToken })).status, 403);
       await db.identityRateLimit.deleteMany();
     });
     await t.test('password reset is uniformly accepted, single-use, revokes sessions and keeps MFA', async () => {

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('roles, invitations and staff changes send CSRF and current versions', async ({ page }, info) => {
   const permissions = ['staff.read', 'staff.manage', 'roles.manage', 'catalog.read', 'catalog.write'];
-  const role = { id: 'role-operator', name: '商品运营', description: '目录查看', permissionCodes: ['catalog.read'], version: 1 };
+  const role = { id: 'role-operator', name: '商品运营', kind: 'preset', presetKey: 'product_ops', description: '目录查看', permissionCodes: ['catalog.read'], version: 1 };
   const roles = [role];
   const users = [{ id: 'staff-1', email: 'staff@example.test', displayName: '小林', status: 'active', roleIds: [role.id], version: 3 }];
   const writes: { path: string; method: string; body: any; version: string | undefined }[] = [];
@@ -26,13 +26,17 @@ test('roles, invitations and staff changes send CSRF and current versions', asyn
   await expect(page.getByRole('heading', { name: '员工与角色', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '小林', exact: true })).toBeVisible();
   await page.getByRole('region', { name: '员工列表' }).screenshot({ path: `.local-tools/staff-${info.project.name}.png` });
+  await expect(page.getByText('默认岗位包', { exact: true })).toHaveCount(1);
   const create = page.getByRole('region', { name: '创建角色', exact: true });
   await create.getByLabel('角色名称', { exact: true }).fill('只读目录');
+  await create.getByRole('combobox', { name: '以默认岗位为模板', exact: true }).selectOption('role-operator');
+  await expect(create.getByLabel('catalog.read', { exact: true })).toBeChecked();
   await create.getByLabel('catalog.read', { exact: true }).check();
   await create.getByLabel('我已核对角色权限并确认保存').check();
   await create.getByRole('button', { name: '保存角色', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('角色已保存');
   await expect(page.getByRole('heading', { name: '只读目录', exact: true })).toBeVisible();
+  await page.getByRole('region', { name: '角色列表' }).screenshot({ path: `.local-tools/roles-${info.project.name}.png` });
   await page.getByRole('button', { name: '编辑角色 商品运营', exact: true }).click();
   const editRole = page.getByRole('region', { name: '编辑角色', exact: true });
   await editRole.getByLabel('catalog.write', { exact: true }).check();

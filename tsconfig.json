@@ -27,6 +27,7 @@
     "node_modules",
     "dist",
     ".local-tools",
-    "apps/admin"
+    "apps/admin",
+    "apps/storefront-mrinhk"
   ]
 }

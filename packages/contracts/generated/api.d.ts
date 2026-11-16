@@ -2472,6 +2472,13 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+            /**
+             * @description owner 为不可编辑的店主角色；admin/preset 为默认岗位权限包；custom 为自建角色。
+             * @enum {string}
+             */
+            kind?: "owner" | "admin" | "preset" | "custom";
+            /** @description 默认岗位权限包的稳定标识，角色改名后不变；自定义角色为 null。 */
+            presetKey?: string | null;
             description: string | null;
             permissionCodes: string[];
             version: number;
