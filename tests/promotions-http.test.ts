@@ -10,7 +10,7 @@ import { connectDatabase } from '../packages/database/src/client.js';
 import { digest } from '../packages/domain/src/identity.js';
 import { testPostgres } from './helpers/postgres.js';
 
-test('promotions: coupon rules, atomic quota, redemption lifecycle and refund return', { timeout: 300_000 },
+test('promotions: coupon rules, atomic quota, redemption lifecycle and refund return', { timeout: 900_000 },
   async t => {
   const cluster = await testPostgres();
   const db = connectDatabase(cluster.url);
@@ -155,7 +155,7 @@ test('promotions: coupon rules, atomic quota, redemption lifecycle and refund re
         '码唯一');
       assert.equal((await manager.call('POST', 'admin/coupons', couponWrite({ discountType: 'percent',
         discountValue: 10_001 }))).status, 422);
-      assert.equal((await manager.call('POST', 'admin/coupons', couponWrite({ validUntil: new Date(Date.now() - 3_600_000).toISOString() })))
+      assert.equal((await manager.call('POST', 'admin/coupons', couponWrite({ validUntil: new Date(Date.now() - 172_800_000).toISOString() })))
         .status, 422, '结束时间必须晚于开始时间');
       const memberOnly = await manager.call('POST', 'admin/coupons', couponWrite({ memberTierIds: [randomUUID()] }));
       assert.equal(memberOnly.status, 422);

@@ -3925,6 +3925,7 @@ export interface components {
             meta: components["schemas"]["ResponseMeta"];
         };
         CouponFields: {
+            /** @description Surrounding whitespace is trimmed and letters are uppercased before storage. */
             code?: string;
             /** @enum {string} */
             discountType?: "fixed" | "percent";

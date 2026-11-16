@@ -6429,7 +6429,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        code: { type: string, minLength: 1, maxLength: 80, pattern: '^[A-Za-z0-9_-]+$' }
+        code:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: '^[ \t]*[A-Za-z0-9][A-Za-z0-9_-]{0,79}[ \t]*$'
+          description: Surrounding whitespace is trimmed and letters are uppercased before storage.
         discountType: { type: string, enum: [fixed, percent] }
         discountValue: { type: integer, minimum: 1, description: Fixed uses currency minor units; percent uses basis points, where 100 bps equals 1 percent and the maximum is 10000 bps. }
         validFrom: { type: string, format: date-time }
