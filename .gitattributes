@@ -1,0 +1,29 @@
+# 统一行尾：仓库一律 LF。
+# 起因：Windows 工作区把 migration.sql 以 CRLF 写入，镜像里算出的 sha256 与数据库里
+# 已应用记录的校验和不同，API 启动时判定"迁移未就绪"直接拒绝启动（线上真发生过）。
+* text=auto eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.css text eol=lf
+Dockerfile* text eol=lf
+.dockerignore text eol=lf
+Caddyfile text eol=lf
+*.pem text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
