@@ -1608,6 +1608,9 @@ paths:
       tags: [Members]
       operationId: getMemberProfile
       summary: Get the authenticated member profile
+      description: >-
+        Returns the member identity, loyalty summary and the session-derived CSRF token.
+        The token is read from the same origin only, so a reloaded page can still log out safely.
       security: [{ MemberSession: [] }]
       responses:
         '200': { $ref: '#/components/responses/Success' }

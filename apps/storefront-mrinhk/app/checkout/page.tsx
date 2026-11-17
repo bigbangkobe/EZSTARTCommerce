@@ -7,6 +7,7 @@ import {
   type ApiOutcome, type CartView, type OrderCreatedView, type ShippingMethodView,
 } from '../../lib/cart-client';
 import { site } from '../../lib/site';
+import MemberNudge from './member-nudge';
 
 /**
  * 结账页：三步一屏（收货资料 → 配送方式 → 付款），全部基于服务端报价，
@@ -210,6 +211,7 @@ export default function CheckoutPage() {
                 <span>運費</span>
                 <strong>{method ? (method.feeMinor === 0 ? '免運' : formatMinor(method.feeMinor)) : '—'}</strong>
               </div>
+              <MemberNudge />
               <p className="form-note">金額以下單時的服務端報價為準。</p>
               <button className="btn btn-primary checkout-btn" type="button" disabled={!canSubmit} onClick={() => void submit()}>
                 {busy ? '處理中…' : '確認下單（貨到付款）'}

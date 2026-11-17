@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { site, whatsappLink } from '../lib/site';
 import CartLink from './cart-link';
+import MemberLink from './member-link';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -40,6 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <nav className="site-nav">
             <Link href="/products">商品</Link>
             <Link href="/contact">聯絡</Link>
+            <MemberLink />
             <CartLink />
           </nav>
         </header>

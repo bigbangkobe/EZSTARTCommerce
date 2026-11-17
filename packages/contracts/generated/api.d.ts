@@ -1183,7 +1183,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get the authenticated member profile */
+        /**
+         * Get the authenticated member profile
+         * @description Returns the member identity, loyalty summary and the session-derived CSRF token. The token is read from the same origin only, so a reloaded page can still log out safely.
+         */
         get: operations["getMemberProfile"];
         put?: never;
         post?: never;

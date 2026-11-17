@@ -78,6 +78,11 @@ export class MembersService {
       const recent = await tx.memberOtpChallenge.findMany({ where: { emailDigest, createdAt: { gte: new Date(now.getTime() - 3_600_000) } },
         select: { createdAt: true } });
       this.rule(() => assertOtpRequestAllowed(recent, now));
+      // 重发即作废旧码：同一邮箱同时只保留一个有效挑战。
+      // 否则用户重发后，上一封邮件里的验证码仍然可用，等于把有效码多留了一份在外。
+      // worker 只投递 pending 挑战，被取代的旧挑战连同它的通知任务一起失效。
+      await tx.memberOtpChallenge.updateMany({ where: { emailDigest, status: 'pending' },
+        data: { status: 'expired', updatedAt: now } });
       const challengeId = randomUUID();
       const code = otpCode();
       const expiresAt = new Date(now.getTime() + memberPolicy.otpTtlSeconds * 1_000);
@@ -180,12 +185,21 @@ export class MembersService {
         member.tierId === null ? null : tx.membershipTier.findUnique({ where: { id: member.tierId } }),
         tx.loyaltySetting.findUnique({ where: { id: 1 } }),
       ]);
-      return { ...this.memberSummary(member, customer), loyalty: { balance: account?.balance ?? 0,
-        accountStatus: account?.status ?? 'active', lifetimeSpendMinor: Number(member.lifetimeSpendMinor),
-        tier: tier === null ? null : { code: tier.code, rank: tier.rank, nameByLocale: tier.nameByLocale,
-          benefits: tier.benefits },
-        minorPerPoint: tier?.minorPerPoint ?? setting?.minorPerPoint ?? 100,
-        pointsEnabled: setting?.enabled ?? false } };
+      return {
+        ...this.memberSummary(member, customer),
+        // 会话 CSRF 由会话 token 派生，只有持有 cookie 的同源请求能读到这里。
+        // 下发一次即可：页面刷新后前端不必重新登录也能携带它登出（登出是 revocation，必须防跨站）。
+        csrfToken: csrf(token, this.config, 'member'),
+        loyalty: {
+          balance: account?.balance ?? 0,
+          accountStatus: account?.status ?? 'active',
+          lifetimeSpendMinor: Number(member.lifetimeSpendMinor),
+          tier: tier === null ? null : { code: tier.code, rank: tier.rank, nameByLocale: tier.nameByLocale,
+            benefits: tier.benefits },
+          minorPerPoint: tier?.minorPerPoint ?? setting?.minorPerPoint ?? 100,
+          pointsEnabled: setting?.enabled ?? false,
+        },
+      };
     });
   }
 

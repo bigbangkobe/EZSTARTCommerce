@@ -270,6 +270,8 @@ test('members: verified email login, guest order linkage and admin customer reco
       assert.equal(profile.status, 200);
       assert.equal(profile.body.data.email, memberEmail);
       assert.equal(profile.body.data.memberNo, (await db.memberProfile.findUniqueOrThrow({ where: { id: memberId } })).memberNo);
+      // 与会话绑定的 CSRF 也在这里下发：页面刷新后不用重新登录也能安全登出。
+      assert.equal(profile.body.data.csrfToken, memberCsrf);
       // 会员 cookie 不能当后台会话用。
       const asAdmin = await request('GET', 'admin/customers', undefined, { Cookie: `ez_member_session=${memberCookie}` });
       assert.equal(asAdmin.status, 401);
@@ -444,6 +446,37 @@ test('members: verified email login, guest order linkage and admin customer reco
       // 作废之后即使给出正确验证码也不再受理。
       assert.equal((await front('POST', 'storefront/member/otp/verify', { challengeId, code: payload.code })).status, 401);
       assert.equal(await db.customer.count({ where: { emailNormalized: 'exhaust@example.com' } }), 0);
+    });
+
+    await t.test('resending a code retires the previous one', async () => {
+      await resetLimits();
+      const first = await front('POST', 'storefront/member/otp/request', { email: 'resend@example.com', locale: 'en',
+        purpose: 'member_login' }, 'OtpChallengeEnvelope');
+      assert.equal(first.status, 202, JSON.stringify(first.body));
+      const firstId = first.body.data.challengeId as string;
+      // 60 秒冷却没有可推进的时钟：把第一条挑战挪到窗口外，等价于“等了一分钟再重发”。
+      await db.memberOtpChallenge.update({ where: { id: firstId }, data: { createdAt: new Date(Date.now() - 120_000) } });
+      const second = await front('POST', 'storefront/member/otp/request', { email: 'resend@example.com', locale: 'en',
+        purpose: 'member_login' }, 'OtpChallengeEnvelope');
+      assert.equal(second.status, 202, JSON.stringify(second.body));
+      const secondId = second.body.data.challengeId as string;
+      assert.notEqual(secondId, firstId);
+
+      // 重发即作废旧码：上一封邮件里的验证码不能再用来登录。
+      const retired = await db.memberOtpChallenge.findUniqueOrThrow({ where: { id: firstId } });
+      assert.equal(retired.status, 'expired');
+      const { payload: oldPayload } = await otpCodeOf(firstId);
+      assert.equal((await front('POST', 'storefront/member/otp/verify',
+        { challengeId: firstId, code: oldPayload.code })).status, 401);
+      // worker 只投递 pending 挑战，因此旧码对应的通知任务也不会被发出。
+      assert.equal(await db.customer.count({ where: { emailNormalized: 'resend@example.com' } }), 0);
+
+      // 新码照常可用，且只建一个会员。
+      const { payload: newPayload } = await otpCodeOf(secondId);
+      await resetLimits();
+      const verified = await front('POST', 'storefront/member/otp/verify', { challengeId: secondId, code: newPayload.code });
+      assert.equal(verified.status, 200, JSON.stringify(verified.body));
+      assert.equal(await db.customer.count({ where: { emailNormalized: 'resend@example.com' } }), 1);
     });
   } finally {
     if (app) await app.close();
