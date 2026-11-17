@@ -412,6 +412,8 @@
 - 各后台页页头补「会员与积分」入口（员工与角色、店铺设置两页按 `members.manage` 条件显示），否则新页面没有入口。
 - 契约：新增 `/admin/members/{id}/points`（`operationId: getAdminMemberPoints`；最初写成 `getMemberPoints` 与前台会员积分操作重名，契约测试的 operationId 唯一性检查当场拦下），重新生成 `generated/api.d.ts`，37 项契约测试全绿。
 
-验证：真实 PostgreSQL 18.7 上 `node --test` **237/237 全绿**，新增子测覆盖「`members.manage` 可读账且无 PII 时邮箱为掩码」「只有 `points.adjust` 读账 403」「未知会员 404」「非法 id 422」；契约 37 项、生成物一致、根 `tsc` 与后台 `tsc --noEmit` 通过、后台 `next build` 产出 `/admin/members`。
+验证：真实 PostgreSQL 18.7 上 `node --test` **237/237 全绿**，新增子测覆盖「`members.manage` 可读账且无 PII 时邮箱为掩码」「只有 `points.adjust` 读账 403」「未知会员 404」「非法 id 422」；契约 37 项、生成物一致、根 `tsc` 与后台 `tsc --noEmit` 通过、后台 `next build` 产出 `/admin/members`；新增 `e2e/members.spec.ts` 3 例 × 桌面/移动两个项目，后台端到端 **66/66 通过**（断言提交的是「读到的版本」`If-Match: "4"`、调整带幂等键、无 `points.adjust` 只读不给表单、无 `members.manage` 只见提示）。已部署 mrinhk（`2b744e6`），生产冒烟：`admin.mrinhk.com/admin/members` 200 且页头出现新入口，匿名 `admin/loyalty`、`admin/members`、`admin/members/:id/points`、`storefront/member/points` 均 401。
+
+写 e2e 时踩到的一个测试环境问题（不是产品缺陷）：Edge 的移动模拟在超长页面底部的元素上会把点击坐标算偏——`document.elementFromPoint` 命中的确实是按钮本身，但 CDP 派发的点击落到上方某个 `<small>` 上，于是 `click()` 一直报「被 small 拦截」。调整表单在页面最下方正好触发，桌面项目正常。移动项目改为「聚焦按钮 + 回车」（真人可用路径），并在用例里写明原因，避免以后有人用 `force: true` 把它掩盖过去。
 
 边界：页面只做单店口径，没有等级「删除」（只有退役）；积分兑换、优惠券抵扣、退款按比例扣回与到期清扫仍未接入；会员中心仍只读；worker 与 SMTP 仍未启动。
