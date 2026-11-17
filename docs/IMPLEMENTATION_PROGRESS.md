@@ -350,3 +350,19 @@
 验证：真实 PostgreSQL 18.7 上 `node --test` 183 项全过（含优惠 9 项、结账 11 项、售后 6 项、订单 10 项）；契约 37 项、生成物一致、Prisma schema 有效、管理端 typecheck 通过；Edge 浏览器测试 60 项通过。
 
 边界：本批只修「测试从未运行」暴露的问题，未新增业务能力。仍不可上线；升级已有实例须备份、演练并运行 `pnpm db:migrate`（本次为第 16 条迁移）。
+
+## 2026-11-17：M10 批次一（顾客/会员档案、邮箱 OTP 登录与会员中心）
+
+范围：把「谁是顾客」与「谁是会员」分开建模，并打通一条不依赖密码的会员身份链路；访客结账完全不受影响。
+
+- 第 17 条迁移 `202611170016_members`：新增 `Customer`（规范化邮箱全店唯一，可无会员档案）、`MemberProfile`（一人一会员、会员号 `MB-日期-6位`、closed 终态）、`MemberOtpChallenge`（只存邮箱 HMAC 与验证码 HMAC，邮箱原文只以 AES-GCM 密文存在，且 AAD 绑定挑战行）、`MemberSession`（cookie 只带随机 token，库里只有 SHA-256 摘要，撤销状态与撤销时间必须同时成立）、`OrderMemberLink`（追加事实，主键 `(orderId, memberId)`，不级联删除）。`IdentityNotificationJob` 增加 `otpChallengeId`，并把 `kind` 与目标列的配对约束收紧到三选一。
+- 域规则 `packages/domain/src/members.ts`：邮箱规范化（小写去空白）、OTP 策略（10 分钟有效、60 秒冷却、每小时 5 次、5 次错误作废、会话 12 小时）、挑战响应统一形状、会员号、顾客写入「清空 vs 不修改」语义、会员状态机。
+- API：`POST /storefront/member/otp/{request,verify}`、`POST /storefront/member/logout`、`GET /storefront/member/{profile,orders}`；后台 `GET/POST /admin/customers`、`GET/PATCH /admin/customers/:id`、`GET/POST /admin/members`、`PATCH /admin/members/:id`。后台读需 `customers.read_masked` / `members.manage`，写加 CSRF + Origin + If-Match；完整邮箱、电话与内部备注只在 `customers.read_pii` 下可见，其余账号只看遮蔽值。
+- 会员身份只来自已验证邮箱：挑战通过后按已验证邮箱 find-or-create 顾客与会员，并把同一邮箱的既有访客订单写入 `OrderMemberLink`（`source=email_match`，重复登录不重复链接）；停用会员即撤销其全部会员会话，closed 不可回退。
+- Worker 支持 `member_otp`：验证码与收件人同在一段密文里，发送前用挑战行的 `codeDigest` 校验，绑定不符即不发送；过期未用的挑战随任务清扫一并置为 `expired`。
+
+修正的真实缺陷：验证码校验最初在事务内直接抛 401/429，导致「错误次数 +1」和「第 5 次作废」被一起回滚——等价于允许无限次试错。改为事务内先写结果状态、提交后再按结果返回错误码；消耗挑战与建会话仍在同一事务里，重复提交同一挑战拿不到第二个会话。
+
+验证：真实 PostgreSQL 18.7 上 `node --test` 212 项全过（新增会员纯规则 15 项 + 会员 HTTP 端到端 13 项，后者覆盖游客下单→OTP 登录→订单归集、枚举防护、限速/冷却、重放、越权与遮蔽、版本冲突、审计）；契约 37 项、生成物一致、Prisma schema 有效。已部署到 mrinhk（第 17 条迁移，5 张新表就位；生产冒烟：OTP 申请 202、匿名读会员档案 401）。
+
+边界：会员等级与积分台账（`admin/members/:id/points-adjustments`、`tierId`）尚未落地，带 `tierId` 的写入一律 422 `MEMBER_TIERS_UNAVAILABLE`；会员订单只有摘要没有详情页；前台尚无登录/会员中心页面；worker 与 SMTP 仍未启动，因此验证码邮件目前在队列里等投递。
