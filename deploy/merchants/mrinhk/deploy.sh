@@ -102,9 +102,15 @@ log "API 健康"
 
 # ---------------- 6. 冒烟 ----------------
 if [ -n "$DOMAIN" ]; then
-  # 云服务器访问自己的公网 IP 常被 hairpin NAT 挡住，所以走本地回环 + 强制解析到本机验证 Caddy 链路
-  CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 --resolve "$DOMAIN:443:127.0.0.1" \
-    "https://$DOMAIN/api/v1/health/live" || true)"
+  # 云服务器访问自己的公网 IP 常被 hairpin NAT 挡住，所以走本地回环 + 强制解析到本机验证 Caddy 链路。
+  # Next 容器刚起来时首个请求可能还没就绪（502），所以要重试而不是一次判死。
+  CODE=""
+  for _ in $(seq 1 12); do
+    CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --resolve "$DOMAIN:443:127.0.0.1" \
+      "https://$DOMAIN/api/v1/health/live" || true)"
+    [ "$CODE" = "200" ] && break
+    sleep 5
+  done
   [ "$CODE" = "200" ] || die "冒烟失败：https://$DOMAIN/api/v1/health/live（经 Caddy 本地链路）→ $CODE"
   log "Caddy 链路冒烟通过：https://$DOMAIN/api/v1/health/live → 200"
 
