@@ -86,12 +86,16 @@ function totpCode(secret, stepOffset = 0) {
 
 // ---------------- 会话 ----------------
 async function loginExisting(creds) {
-  const login = await call('POST', '/api/v1/admin/auth/login', { body: { email: creds.email, password: creds.password }, cookies: false });
-  if (login.status === 200) return must(login, '登录').session;
-  if (login.status !== 202) die('登录失败', login.body);
-  const challengeId = must(login, '登录').challengeId;
-  const verify = await call('POST', '/api/v1/admin/auth/mfa/verify', { body: { challengeId, code: totpCode(creds.totpSecret) } });
-  return must(verify, 'MFA 验证').session;
+  // 同一 30 秒窗口内重复登录会撞上 lastUsedStep 去重，因此每个候选步长都重新开一次挑战
+  for (const offset of [0, 1, 2]) {
+    const login = await call('POST', '/api/v1/admin/auth/login', { body: { email: creds.email, password: creds.password }, cookies: false });
+    if (login.status === 200) return must(login, '登录').session;
+    if (login.status !== 202) die('登录失败', login.body);
+    const challengeId = must(login, '登录').challengeId;
+    const verify = await call('POST', '/api/v1/admin/auth/mfa/verify', { body: { challengeId, code: totpCode(creds.totpSecret, offset) } });
+    if (verify.status === 200) return must(verify, 'MFA 验证').session;
+  }
+  die('MFA 验证连续失败：请确认 /secrets/admin.json 里的 TOTP 密钥仍有效，或用恢复码重置');
 }
 
 async function bootstrapOwner() {
@@ -177,7 +181,10 @@ if (exists) {
         { locale: 'zh-CN', name: '手作抹茶碗', slug, shortDescription: '手捏陶土，釉色自然', description: '日本进口陶土手作，每只纹理略有不同。' },
       ],
       variants: [{ sku: 'DEMO-MATCHA-01', optionValues: { 容量: '400ml' }, priceMinor: 32800, currency }],
+      // 契约要求这四项必填（即使为空数组也要显式给出）
       media: [],
+      categoryIds: [],
+      marketCodes: [MARKET],
     },
     csrf,
   }), '创建商品');
@@ -186,17 +193,18 @@ if (exists) {
 }
 
 // 4) 发布到市场
-const detail = must(await call('GET', `/api/v1/admin/products/${productId}`), '读取商品');
-if (detail.status !== 'active') {
+const draft = must(await call('GET', `/api/v1/admin/products/${productId}`), '读取商品');
+if (draft.status !== 'active') {
   must(await call('POST', `/api/v1/admin/products/${productId}/publish`, {
-    body: { expectedVersion: detail.version, marketCodes: [MARKET], publishedAt: null }, csrf,
+    body: { expectedVersion: draft.version, marketCodes: [MARKET], publishedAt: null }, csrf,
   }), '发布商品');
   log('商品已发布');
 } else {
   log('商品已是上架状态');
 }
 
-// 5) 补库存（让前台显示可售）
+// 5) 补库存（让前台显示可售）——发布后重读，避免用旧版本号
+const detail = must(await call('GET', `/api/v1/admin/products/${productId}`), '重读商品');
 const variant = detail.variants[0];
 if ((variant.inventory?.onHand ?? 0) < 1) {
   must(await call('POST', '/api/v1/admin/inventory/adjustments', {
