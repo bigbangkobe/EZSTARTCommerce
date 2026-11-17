@@ -60,7 +60,10 @@ log "已记录回滚点（镜像 tag :prev）"
 
 # ---------------- 2. 备份数据库（migrate 之前） ----------------
 if dc ps --status running --services 2>/dev/null | grep -qx postgres; then
-  mkdir -p "$BACKUP_DIR"
+  if [ ! -d "$BACKUP_DIR" ]; then
+    mkdir -p "$BACKUP_DIR" 2>/dev/null || sudo mkdir -p "$BACKUP_DIR"
+  fi
+  [ -w "$BACKUP_DIR" ] || sudo chown "$(id -u):$(id -g)" "$BACKUP_DIR"
   STAMP="$(date +%Y%m%d-%H%M%S)"
   TARGET="$BACKUP_DIR/ezstart-$STAMP.sql.gz"
   log "备份数据库 → $TARGET"
