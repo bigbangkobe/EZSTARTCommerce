@@ -2537,6 +2537,33 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/privacy-requests:
+    get:
+      tags: [Privacy]
+      operationId: listPrivacyRequests
+      summary: Privacy work queue ordered by due date, with overdue counts and the store-wide due-days setting
+      security: [{ AdminSession: [] }]
+      x-permission: privacy.read
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Limit' }
+        - name: status
+          in: query
+          schema: { type: string, enum: [received, verified, approved, needs_information, rejected, completed] }
+        - name: overdue
+          in: query
+          description: true returns only open requests past their due date; false returns requests not yet due.
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Queue page plus open/overdue counts and the current due-days setting
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequestListEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
     post:
       tags: [Privacy]
       operationId: createPrivacyRequest
@@ -2567,6 +2594,35 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+    patch:
+      tags: [Privacy]
+      operationId: updatePrivacyRequest
+      summary: Reassign the owner or extend the due date; every change needs a reason
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: privacy.manage
+      parameters: [{ $ref: '#/components/parameters/UuidId' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrivacyRequestPatch' }
+      responses:
+        '200':
+          description: Updated request; the response carries the new version in ETag
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+            ETag:
+              schema: { type: string, pattern: '^"[1-9][0-9]*"$' }
+              description: New request version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequestEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/privacy-requests/{id}/verify:
     post:
@@ -2611,6 +2667,35 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
+  /admin/privacy-settings:
+    patch:
+      tags: [Privacy]
+      operationId: updatePrivacySettings
+      summary: Change how many days a privacy request may stay open; only new requests use the new value
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: privacy.manage
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrivacySettingPatchRequest' }
+      responses:
+        '200':
+          description: New setting version; existing requests keep the due date they were accepted with
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+            ETag:
+              schema: { type: string, pattern: '^"[1-9][0-9]*"$' }
+              description: New setting version, not a request version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacySettingEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/coupons:
     get:
       tags: [Promotions]
@@ -6521,6 +6606,10 @@ components:
         verificationMethod: { type: string, maxLength: 80 }
         evidenceRef: { type: string, maxLength: 200, writeOnly: true }
         reason: { type: string, minLength: 1, maxLength: 1000 }
+        customerId:
+          type: [string, 'null']
+          format: uuid
+          description: The customer this identity was verified as. Optional; without it the request stays unlinked.
     PrivacyCompleteRequest:
       type: object
       additionalProperties: false
@@ -6530,6 +6619,127 @@ components:
         reason: { type: string, minLength: 1, maxLength: 1000 }
         retentionExceptionRef: { type: [string, 'null'], maxLength: 200 }
         exportJobId: { type: [string, 'null'], format: uuid }
+    PrivacyActorRef:
+      type: [object, 'null']
+      additionalProperties: false
+      description: Admin who acted on a request. Display name only, never credentials or session data.
+      required: [id, displayName]
+      properties:
+        id: { type: string, format: uuid }
+        displayName: { type: string }
+    PrivacyRequestHistoryEntry:
+      type: object
+      additionalProperties: false
+      description: One audited step. The detail page reads the same audit rows as the audit console.
+      required: [action, actorName, result, reason, occurredAt]
+      properties:
+        action: { type: string }
+        actorName: { type: [string, 'null'] }
+        result: { type: string }
+        reason: { type: [string, 'null'] }
+        occurredAt: { type: string, format: date-time }
+    PrivacyRequest:
+      type: object
+      additionalProperties: false
+      required: [id, requestNumber, requestType, sourceChannel, scope, customerRef, customerId, customerName,
+        verificationState, verificationMethod, verificationEvidenceRef, verifiedAt, verifier, status, receivedAt,
+        dueAt, overdueDays, owner, reviewer, decisionAt, decisionReason, retentionExceptionRef, exportJobRef,
+        completedAt, ruleVersion, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        requestNumber: { type: string, pattern: '^PR-[0-9]{8}-[0-9]{4}$' }
+        requestType: { type: string, enum: [access, export, correct, withdraw_marketing, delete, anonymize] }
+        sourceChannel: { type: string, enum: [email, phone, admin, storefront] }
+        scope: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, minLength: 1, maxLength: 80 } }
+        customerRef: { type: [string, 'null'], maxLength: 200, description: What the requester says about themselves; a lead, not a verified identity. }
+        customerId: { type: [string, 'null'], format: uuid, description: Set only when verification confirmed which customer this is. }
+        customerName: { type: [string, 'null'], description: Hidden unless the caller holds customers.read_masked. }
+        verificationState: { type: string, enum: [pending, verified] }
+        verificationMethod: { type: [string, 'null'] }
+        verificationEvidenceRef: { type: [string, 'null'] }
+        verifiedAt: { type: [string, 'null'], format: date-time }
+        verifier: { $ref: '#/components/schemas/PrivacyActorRef' }
+        status: { type: string, enum: [received, verified, approved, needs_information, rejected, completed] }
+        receivedAt: { type: string, format: date-time }
+        dueAt: { type: string, format: date-time, description: Snapshot taken at acceptance; changing the setting later does not move existing due dates. }
+        overdueDays: { type: integer, minimum: 0 }
+        owner: { $ref: '#/components/schemas/PrivacyActorRef' }
+        reviewer: { $ref: '#/components/schemas/PrivacyActorRef' }
+        decisionAt: { type: [string, 'null'], format: date-time }
+        decisionReason: { type: [string, 'null'], maxLength: 1000 }
+        retentionExceptionRef: { type: [string, 'null'], maxLength: 200 }
+        exportJobRef: { type: [string, 'null'] }
+        completedAt: { type: [string, 'null'], format: date-time }
+        ruleVersion: { type: string }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        history:
+          type: array
+          description: Only present on the detail response.
+          items: { $ref: '#/components/schemas/PrivacyRequestHistoryEntry' }
+    PrivacyRequestEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PrivacyRequest' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PrivacyRequestListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, nextCursor, hasMore, summary, settings]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PrivacyRequest' } }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+            summary:
+              type: object
+              additionalProperties: false
+              required: [open, overdue]
+              properties:
+                open: { type: integer, minimum: 0 }
+                overdue: { type: integer, minimum: 0 }
+            settings: { $ref: '#/components/schemas/PrivacySetting' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PrivacySetting:
+      type: object
+      additionalProperties: false
+      required: [dueDays, version, updatedAt]
+      properties:
+        dueDays: { type: integer, minimum: 1, maximum: 365 }
+        version: { type: integer, minimum: 1 }
+        updatedAt: { type: string, format: date-time }
+    PrivacySettingEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PrivacySetting' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PrivacySettingPatchRequest:
+      type: object
+      additionalProperties: false
+      required: [dueDays]
+      properties:
+        dueDays: { type: integer, minimum: 1, maximum: 365 }
+    PrivacyRequestPatch:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      anyOf: [{ required: [ownerId] }, { required: [dueAt] }]
+      properties:
+        ownerId:
+          type: [string, 'null']
+          format: uuid
+          description: New owner; null clears the assignment.
+        dueAt: { type: string, format: date-time, description: Must be later than the acceptance time and within one year of it. }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
     CouponUsage:
       type: object
       additionalProperties: false

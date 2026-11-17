@@ -1929,7 +1929,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Privacy work queue ordered by due date, with overdue counts and the store-wide due-days setting */
+        get: operations["listPrivacyRequests"];
         put?: never;
         /** Register a privacy request for identity verification */
         post: operations["createPrivacyRequest"];
@@ -1953,7 +1954,8 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /** Reassign the owner or extend the due date; every change needs a reason */
+        patch: operations["updatePrivacyRequest"];
         trace?: never;
     };
     "/admin/privacy-requests/{id}/verify": {
@@ -1988,6 +1990,23 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/admin/privacy-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change how many days a privacy request may stay open; only new requests use the new value */
+        patch: operations["updatePrivacySettings"];
         trace?: never;
     };
     "/admin/coupons": {
@@ -4006,6 +4025,11 @@ export interface components {
             verificationMethod: string;
             evidenceRef: string;
             reason: string;
+            /**
+             * Format: uuid
+             * @description The customer this identity was verified as. Optional; without it the request stays unlinked.
+             */
+            customerId?: string | null;
         };
         PrivacyCompleteRequest: {
             /** @enum {string} */
@@ -4015,6 +4039,117 @@ export interface components {
             /** Format: uuid */
             exportJobId?: string | null;
         };
+        /** @description Admin who acted on a request. Display name only, never credentials or session data. */
+        PrivacyActorRef: {
+            /** Format: uuid */
+            id: string;
+            displayName: string;
+        } | null;
+        /** @description One audited step. The detail page reads the same audit rows as the audit console. */
+        PrivacyRequestHistoryEntry: {
+            action: string;
+            actorName: string | null;
+            result: string;
+            reason: string | null;
+            /** Format: date-time */
+            occurredAt: string;
+        };
+        PrivacyRequest: {
+            /** Format: uuid */
+            id: string;
+            requestNumber: string;
+            /** @enum {string} */
+            requestType: "access" | "export" | "correct" | "withdraw_marketing" | "delete" | "anonymize";
+            /** @enum {string} */
+            sourceChannel: "email" | "phone" | "admin" | "storefront";
+            scope: string[];
+            /** @description What the requester says about themselves; a lead */
+            customerRef: string | null;
+            /**
+             * Format: uuid
+             * @description Set only when verification confirmed which customer this is.
+             */
+            customerId: string | null;
+            /** @description Hidden unless the caller holds customers.read_masked. */
+            customerName: string | null;
+            /** @enum {string} */
+            verificationState: "pending" | "verified";
+            verificationMethod: string | null;
+            verificationEvidenceRef: string | null;
+            /** Format: date-time */
+            verifiedAt: string | null;
+            verifier: components["schemas"]["PrivacyActorRef"];
+            /** @enum {string} */
+            status: "received" | "verified" | "approved" | "needs_information" | "rejected" | "completed";
+            /** Format: date-time */
+            receivedAt: string;
+            /**
+             * Format: date-time
+             * @description Snapshot taken at acceptance; changing the setting later does not move existing due dates.
+             */
+            dueAt: string;
+            overdueDays: number;
+            owner: components["schemas"]["PrivacyActorRef"];
+            reviewer: components["schemas"]["PrivacyActorRef"];
+            /** Format: date-time */
+            decisionAt: string | null;
+            decisionReason: string | null;
+            retentionExceptionRef: string | null;
+            exportJobRef: string | null;
+            /** Format: date-time */
+            completedAt: string | null;
+            ruleVersion: string;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Only present on the detail response. */
+            history?: components["schemas"]["PrivacyRequestHistoryEntry"][];
+        };
+        PrivacyRequestEnvelope: {
+            data: components["schemas"]["PrivacyRequest"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PrivacyRequestListEnvelope: {
+            data: {
+                items: components["schemas"]["PrivacyRequest"][];
+                nextCursor: string | null;
+                hasMore: boolean;
+                summary: {
+                    open: number;
+                    overdue: number;
+                };
+                settings: components["schemas"]["PrivacySetting"];
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PrivacySetting: {
+            dueDays: number;
+            version: number;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        PrivacySettingEnvelope: {
+            data: components["schemas"]["PrivacySetting"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PrivacySettingPatchRequest: {
+            dueDays: number;
+        };
+        PrivacyRequestPatch: {
+            /**
+             * Format: uuid
+             * @description New owner; null clears the assignment.
+             */
+            ownerId?: string | null;
+            /**
+             * Format: date-time
+             * @description Must be later than the acceptance time and within one year of it.
+             */
+            dueAt?: string;
+            reason: string;
+        } | unknown | unknown;
         /** @description usedCount = reserved + redeemed - returned. Only reserved and redeemed consume quota. */
         CouponUsage: {
             reservedCount: number;
@@ -8254,6 +8389,37 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    listPrivacyRequests: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+                status?: "received" | "verified" | "approved" | "needs_information" | "rejected" | "completed";
+                /** @description true returns only open requests past their due date; false returns requests not yet due. */
+                overdue?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queue page plus open/overdue counts and the current due-days setting */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivacyRequestListEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     createPrivacyRequest: {
         parameters: {
             query?: never;
@@ -8289,6 +8455,44 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    updatePrivacyRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrivacyRequestPatch"];
+            };
+        };
+        responses: {
+            /** @description Updated request; the response carries the new version in ETag */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description New request version. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivacyRequestEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -8340,6 +8544,41 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    updatePrivacySettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrivacySettingPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description New setting version; existing requests keep the due date they were accepted with */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description New setting version, not a request version. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivacySettingEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];

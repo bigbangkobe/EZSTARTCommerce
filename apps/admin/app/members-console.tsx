@@ -216,7 +216,7 @@ export function MembersConsole() {
   if (permissions.length > 0 && !canManage) {
     return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
       <header><div><p className="eyebrow">店铺管理</p><h1>会员与积分</h1></div>
-        <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a></div></header>
+        <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a>{permissions.includes('privacy.read') && <a href="/admin/privacy">资料请求</a>}</div></header>
       <p className="error">当前账号没有会员读取权限（members.manage）。</p></main>;
   }
 

@@ -24,6 +24,8 @@ import { InventoryService } from './inventory/service.js';
 import { MemberController, CustomersController } from './members/controller.js';
 import { LoyaltyService } from './members/loyalty-service.js';
 import { MembersService } from './members/service.js';
+import { PrivacyController } from './privacy/controller.js';
+import { PrivacyService } from './privacy/service.js';
 import { PromotionsController } from './promotions/controller.js';
 import { PromotionsService } from './promotions/service.js';
 import { AfterSalesService } from './aftersales/service.js';
@@ -104,9 +106,10 @@ export async function createApp(identity: IdentityService | null = null, options
   const inventory = identity ? new InventoryService(identity) : null;
   const members = identity ? new MembersService(identity) : null;
   const loyalty = identity ? new LoyaltyService(identity) : null;
+  const privacy = identity ? new PrivacyService(identity) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
-    OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController],
+    OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController, PrivacyController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
@@ -119,7 +122,8 @@ export async function createApp(identity: IdentityService | null = null, options
       { provide: 'AFTERSALES', useValue: afterSales },
       { provide: 'INVENTORY', useValue: inventory },
       { provide: 'PROMOTIONS', useValue: promotions },
-      { provide: 'MEMBERS', useValue: members }, { provide: 'LOYALTY', useValue: loyalty }] })
+      { provide: 'MEMBERS', useValue: members }, { provide: 'LOYALTY', useValue: loyalty },
+      { provide: 'PRIVACY', useValue: privacy }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

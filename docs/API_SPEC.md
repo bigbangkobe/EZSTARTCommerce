@@ -265,8 +265,10 @@
 | `GET/POST /admin/customers` / `GET/PATCH /admin/customers/:id` | 客户查询/建立/资料更正 | `customers.read/manage`；敏感字段单独授权审计 |
 | `GET/POST /admin/members` / `PATCH /admin/members/:id` | 会员资料、等级、状态 | `members.manage`；积分变化另走流水接口 |
 | `POST /admin/members/:id/points-adjustments` | 正负积分、原因 | `points.adjust`；幂等且产生账本流水 |
-| `POST /admin/privacy-requests` / `GET /admin/privacy-requests/:id` | 建立/查看资料请求 | `privacy.manage`；待核验不得导出/删除 |
-| `POST /admin/privacy-requests/:id/verify` / `POST /admin/privacy-requests/:id/complete` | 身份核验/批准处理 | 权限分离、保留例外和审计 |
+| `GET/POST /admin/privacy-requests` | 队列（`status`/`overdue`/游标，按到期排序并给出未结案与逾期数）/ 受理 | `privacy.read` / `privacy.manage`；受理只记线索，客户名下不落人 |
+| `GET/PATCH /admin/privacy-requests/:id` | 详情（含审计同源的处理历史）/ 改负责人或延期 | `privacy.read` / `privacy.manage` + `If-Match`；延期须理由且不得早于受理或超一年 |
+| `POST /admin/privacy-requests/:id/verify` / `POST /admin/privacy-requests/:id/complete` | 身份核验/批准处理 | `privacy.verify` / `privacy.process` + `Idempotency-Key`；未核验不得批准或完成，拒绝可；删除/匿名化完成须保留例外依据 |
+| `PATCH /admin/privacy-settings` | 受理后到期天数（1–365） | `privacy.manage` + `If-Match`；只影响新受理的请求 |
 | `GET/POST /admin/coupons` / `GET/PATCH /admin/coupons/:id` | 优惠规则查询（`q`/`status`/游标）/建立/详情/修改 | `coupons.read` / `coupons.manage`；修改须 `If-Match`，改规则不改历史订单快照；券码冲突 409 `COUPON_CODE_TAKEN`，会员专属规则在无会员目录时 422 `MEMBER_TIERS_UNAVAILABLE` |
 | `POST /admin/coupon-batches` / `POST /admin/coupon-batches/:id/issue` | 批次创建/发放 | `coupons.issue`；幂等；营销渠道必须有有效同意；在会员目录（M10）落地前创建与发放一律 422 `MEMBER_AUDIENCE_UNAVAILABLE` |
 | `GET /admin/coupons/:id/redemptions` / `POST /admin/coupons/:id/disable` | 核销记录/停用 | `coupons.read/manage`；停用须原因 + `Idempotency-Key`；核销记录只追加，顾客只给 HMAC 摘要前 8 位（`customerRef`），停用不改历史占位/核销 |

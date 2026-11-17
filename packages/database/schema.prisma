@@ -30,6 +30,9 @@ model AdminUser {
   recoveryCodes RecoveryCode[]
   sessions AdminSession[]
   challenges AdminChallenge[]
+  privacyVerifications CustomerPrivacyRequest[] @relation("PrivacyVerifier")
+  privacyOwned CustomerPrivacyRequest[] @relation("PrivacyOwner")
+  privacyReviewed CustomerPrivacyRequest[] @relation("PrivacyReviewer")
 }
 
 model AdminRole {
@@ -1093,6 +1096,7 @@ model Customer {
   createdAt       DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
   member          MemberProfile?
+  privacyRequests CustomerPrivacyRequest[]
   @@index([createdAt])
 }
 
@@ -1225,4 +1229,51 @@ model PointLedger {
   expiresAt      DateTime? @db.Timestamptz(3)
   @@index([memberId, createdAt])
   @@index([sourceType, sourceRef])
+}
+
+// 顾客资料请求（M10 第六批）：后台受理工作流。
+// 未核验身份不得进入处置阶段（数据库侧有 CHECK 兜底），核验与决定都必须留人与时间。
+model CustomerPrivacyRequest {
+  id                      String      @id @default(uuid()) @db.Uuid
+  requestNumber           String      @unique
+  requestType             String
+  sourceChannel           String
+  requestScope            String[]    @default([])
+  customerRef             String?
+  customerId              String?     @db.Uuid
+  customer                Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  verificationState       String      @default("pending")
+  verificationMethod      String?
+  verificationEvidenceRef String?
+  verifiedAt              DateTime?   @db.Timestamptz(3)
+  verifiedBy              String?     @db.Uuid
+  verifier                AdminUser?  @relation("PrivacyVerifier", fields: [verifiedBy], references: [id], onDelete: Restrict)
+  status                  String      @default("received")
+  receivedAt              DateTime    @db.Timestamptz(3)
+  dueAt                   DateTime    @db.Timestamptz(3)
+  ownerId                 String?     @db.Uuid
+  owner                   AdminUser?  @relation("PrivacyOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  reviewerId              String?     @db.Uuid
+  reviewer                AdminUser?  @relation("PrivacyReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
+  decisionAt              DateTime?   @db.Timestamptz(3)
+  decisionReason          String?
+  retentionExceptionRef   String?
+  exportJobRef            String?
+  completedAt             DateTime?   @db.Timestamptz(3)
+  idempotencyKey          String?     @unique
+  version                 Int         @default(1)
+  createdAt               DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime    @default(now()) @updatedAt @db.Timestamptz(3)
+  @@index([status, dueAt])
+  @@index([dueAt])
+  @@index([receivedAt])
+  @@index([customerId])
+}
+
+// 隐私请求口径：单例，只有到期天数需要店铺自己定。
+model PrivacySetting {
+  id        Int      @id @default(1)
+  dueDays   Int      @default(30)
+  version   Int      @default(1)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 }

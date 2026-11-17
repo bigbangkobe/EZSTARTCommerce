@@ -433,3 +433,20 @@
 验证：真实 PostgreSQL 18.7 上 `node --test` **242/242 全绿**（新增 4 项到期纯规则：快照语义、FIFO 跨笔溢出、expire 冲销自身、孤儿 expire 不误伤；1 项 HTTP 子测：新会员按旧时间入账 → 会员端读到余额 300 且流水首条是 -200 的 expire、档案摘要与流水页一致、重复读不再产生新流水、余额已扣减后扣 400 被 409 拒绝、后台读同一笔账数字一致）；契约 37 项、Prisma schema 有效、根与后台 `tsc` 通过、前台与后台 `next build` 通过。
 
 边界：没有独立的定时清扫任务（懒执行已覆盖所有读/写路径，但「没人访问就不清扫」——余额在库里暂时偏高，下次读取即纠正）；积分兑换、退款按比例扣回仍未接入（要等 M08 退款事件）；worker 与 SMTP 仍未启动。前台会员中心补了一句有效期的中文说明。
+
+## 2026-11-17：M10 批次六（顾客资料请求工作台）
+
+范围：M10 首期范围第 11 条「顾客资料请求处理」此前只有契约、没有任何实现——`/admin/privacy-requests` 四个接口一律 404。这一批把受理与审批的骨架建起来：谁能受理、谁必须核验、什么时候不许处置、超期了怎么看见。
+
+- 第 20 条迁移 `202611170019_privacy_requests`：`CustomerPrivacyRequest` + `PrivacySetting` 单例。四条边界写进数据库 CHECK：核验状态与「方法/时间/核验人」互为充要；`approved`/`completed` 必须已核验；`completed` 与 `completedAt` 互为充要；进入决定状态必须有决定时间与原因。`idempotencyKey` 全表唯一。
+- 状态机（`packages/domain/src/privacy.ts`）：`received` → `verified` → `approved` → `completed`，另有 `needs_information`（等顾客补材料，补完直接决定，**不重新核验**——人还是那个人）与 `rejected`。未核验也能拒绝（明显骚扰件），但拒绝不接触任何资料；终态不回退、不跳级。
+- 到期是**受理时的快照**：`receivedAt + PrivacySetting.dueDays`（默认 30 天）。改口径只影响新受理的请求；逾期只影响排序与提醒，不会自动变成已完成或自动拒绝。
+- 接口（7 个）：队列 `GET /admin/privacy-requests`（`status`/`overdue` 过滤、按到期排序、给出未结案与逾期数、附当前口径）、受理 `POST`、详情 `GET`（含处理历史）、改负责人/延期 `PATCH`（`If-Match` + 理由）、核验 `POST /verify`（`privacy.verify` + 幂等键 + 可选 `customerId`）、决定 `POST /complete`（`privacy.process` + 幂等键）、口径 `PATCH /admin/privacy-settings`。
+- 权限刻意拆成四段互不包含：`privacy.manage`（受理/延期/口径）、`privacy.read`（队列与详情）、`privacy.verify`（核验）、`privacy.process`（决定）。`privacy_specialist` 预设只有前三段——所以隐私专员核验完的请求必须由另一角色批准，这是角色层面的分离。
+- 处理历史不另存一份：详情页读的是 `AuditLog` 里 `privacy.*` 的行，与「审计记录」页是同一份事实，避免两份记录对不上。
+- 删除/匿名化标记完成时必须填 `retentionExceptionRef`：订单、支付、售后是交易事实，不随请求消失；没有依据的「已完成」只是一句话。
+- 后台新增 `/admin/privacy`（`privacy-console.tsx`）：口径、筛选（状态/只看逾期）、队列、受理表单、详情、核验、决定、延期、处理历史；店铺设置、员工与角色、会员与积分三页按 `privacy.read` 条件补入口。
+
+验证：真实 PostgreSQL 18.7 上 `node --test` **264/264 全绿**（新增 12 项纯规则 + 9 个 HTTP 子测：未核验批准/完成 409、拒绝无需核验、核验幂等重放不推高版本、重复核验 409、幂等键跨请求复用 409、删除完成缺保留依据 422、批准与完成分两步且分别记录审批人、口径快照与延期版本控制、逾期排序与计数、详情只给有 `customers.read_masked` 的账号顾客姓名）；契约 37 项、生成物一致、根与后台 `tsc`、后台 `next build` 产出 `/admin/privacy`、后台端到端 **70/70**（新增 `e2e/privacy.spec.ts` 2 例 × 桌面/移动）。
+
+边界：本批只做受理与审批，**数据处置本身仍是人工**——导出文件生成（`ExportJob`）、会员资料更正、删除/匿名化改写都还没接；营销退订也没有结构化同意模型可改（现在只有 `MemberProfile.consentRef` 一个自由文本）。`PrivacyRequest.sourceChannel` 没有 `storefront` 自助入口，前台顾客尚不能自己提交请求（首期只承诺后台受理）。
