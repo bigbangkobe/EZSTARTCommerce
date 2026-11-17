@@ -9,10 +9,11 @@ import { maskEmail, maskPhone } from '../../../../packages/domain/src/orders.js'
 import { SUPPORTED_LOCALES } from '../../../../packages/domain/src/store.js';
 import { csrf, decrypt, encrypt, equal } from '../identity/crypto.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
+import { resolveMemberSession } from './session.js';
 
 type Tx = Prisma.TransactionClient;
 type CustomerRow = Prisma.CustomerGetPayload<{ include: { member: true } }>;
-type MemberRow = Prisma.MemberProfileGetPayload<{ include: { customer: true } }>;
+type MemberRow = Prisma.MemberProfileGetPayload<{ include: { customer: true; tier: true } }>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MEMBER_NO_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -168,19 +169,23 @@ export class MembersService {
   }
 
   /** 会话只认 token 摘要：cookie 被换掉或库被读都拿不到可用会话。 */
-  private async requireSession(tx: Tx, token: string) {
-    const now = await this.clock(tx);
-    const session = await tx.memberSession.findUnique({ where: { tokenDigest: sessionTokenDigest(token) },
-      include: { member: { include: { customer: true } } } });
-    if (!session || session.status !== 'active' || session.expiresAt.getTime() <= now.getTime()) throw new AuthError(401, 'UNAUTHORIZED');
-    if (session.member.status !== 'active') throw new AuthError(401, 'UNAUTHORIZED');
-    return { session, member: session.member, customer: session.member.customer, now };
-  }
+  private requireSession(tx: Tx, token: string) { return resolveMemberSession(tx, token); }
 
   async profile(token: string) {
     return this.db.$transaction(async tx => {
       const { member, customer } = await this.requireSession(tx, token);
-      return this.memberSummary(member, customer);
+      // 会员中心一次拿全：身份、等级、积分余额；流水走 /storefront/member/points。
+      const [account, tier, setting] = await Promise.all([
+        tx.pointAccount.findUnique({ where: { memberId: member.id } }),
+        member.tierId === null ? null : tx.membershipTier.findUnique({ where: { id: member.tierId } }),
+        tx.loyaltySetting.findUnique({ where: { id: 1 } }),
+      ]);
+      return { ...this.memberSummary(member, customer), loyalty: { balance: account?.balance ?? 0,
+        accountStatus: account?.status ?? 'active', lifetimeSpendMinor: Number(member.lifetimeSpendMinor),
+        tier: tier === null ? null : { code: tier.code, rank: tier.rank, nameByLocale: tier.nameByLocale,
+          benefits: tier.benefits },
+        minorPerPoint: tier?.minorPerPoint ?? setting?.minorPerPoint ?? 100,
+        pointsEnabled: setting?.enabled ?? false } };
     });
   }
 
@@ -230,6 +235,8 @@ export class MembersService {
   private memberView(row: MemberRow, pii: boolean) {
     return { id: row.id, memberNo: row.memberNo, status: row.status, joinedAt: row.joinedAt.toISOString(),
       consentRef: row.consentRef, version: row.version,
+      lifetimeSpendMinor: Number(row.lifetimeSpendMinor),
+      tier: row.tier === null ? null : { id: row.tier.id, code: row.tier.code, rank: row.tier.rank, nameByLocale: row.tier.nameByLocale },
       customer: { id: row.customer.id, displayName: row.customer.displayName,
         email: row.customer.emailNormalized === null ? null : pii ? row.customer.emailNormalized : maskEmail(row.customer.emailNormalized) } };
   }
@@ -304,7 +311,7 @@ export class MembersService {
       const pii = this.identity.hasPermission(actor, 'customers.read_pii');
       if (cursor && !await tx.memberProfile.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
       const rows = await tx.memberProfile.findMany({ orderBy: [{ joinedAt: 'desc' }, { id: 'desc' }], take: limit + 1,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: { customer: true } });
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: { customer: true, tier: true } });
       const visible = rows.slice(0, limit); const hasMore = rows.length > limit;
       return { items: visible.map(row => this.memberView(row, pii)), hasMore, nextCursor: hasMore ? visible.at(-1)!.id : null };
     });
@@ -313,7 +320,6 @@ export class MembersService {
   /** 后台建会员只针对已存在顾客；等级目录（M10 后续批次）落地前，tierId 一律拒绝而不是静默丢弃。 */
   async createMember(supplied: string, csrfToken: string | null, body: Record<string, unknown>, ctx: RequestContext) {
     return this.identity.withPermission(supplied, csrfToken, 'members.manage', async (tx, actor, _session, now) => {
-      if (body['tierId'] !== undefined && body['tierId'] !== null) throw new AuthError(422, 'MEMBER_TIERS_UNAVAILABLE');
       const customerId = body['customerId'];
       if (typeof customerId !== 'string' || !UUID.test(customerId)) throw new AuthError(422, 'VALIDATION_ERROR');
       const consentRef = body['consentRef'];
@@ -322,11 +328,23 @@ export class MembersService {
       const customer = await tx.customer.findUnique({ where: { id: customerId } });
       if (!customer) throw new AuthError(404, 'NOT_FOUND');
       if (await tx.memberProfile.findUnique({ where: { customerId } })) throw new AuthError(409, 'MEMBER_EXISTS');
+      const tierId = await this.tierRef(tx, body['tierId']);
       const row = await tx.memberProfile.create({ data: { customerId, memberNo: await this.nextMemberNo(tx, now),
-        consentRef: consentRef.trim(), joinedAt: now, createdAt: now, updatedAt: now }, include: { customer: true } });
+        consentRef: consentRef.trim(), tierId, joinedAt: now, createdAt: now, updatedAt: now },
+        include: { customer: true, tier: true } });
       await this.identity.recordAudit(tx, ctx, actor.id, 'member.created', row.id, 'success', consentRef.trim());
       return this.memberView(row, true);
     });
+  }
+
+  /** 等级引用校验：只认 active 等级；退役等级不能新分配，但已有归属保持不动。 */
+  private async tierRef(tx: Tx, value: unknown): Promise<string | null> {
+    if (value === undefined || value === null) return null;
+    if (typeof value !== 'string' || !UUID.test(value)) throw new AuthError(422, 'VALIDATION_ERROR');
+    const tier = await tx.membershipTier.findUnique({ where: { id: value } });
+    if (!tier) throw new AuthError(422, 'MEMBER_TIER_UNKNOWN');
+    if (tier.status !== 'active') throw new AuthError(422, 'MEMBER_TIER_RETIRED');
+    return tier.id;
   }
 
   /** 等级变更要等会员等级目录；状态迁移必须走闭集，closed 不可回退。停用即撤销全部会员会话。 */
@@ -335,15 +353,17 @@ export class MembersService {
     if (!UUID.test(id)) throw new AuthError(422, 'VALIDATION_ERROR');
     return this.identity.withPermission(supplied, csrfToken, 'members.manage', async (tx, actor, _session, now) => {
       await this.lock(tx, `member:${id}`);
-      const row = await tx.memberProfile.findUnique({ where: { id }, include: { customer: true } });
+      const row = await tx.memberProfile.findUnique({ where: { id }, include: { customer: true, tier: true } });
       if (!row) throw new AuthError(404, 'NOT_FOUND');
       if (row.version !== expectedVersion) throw new AuthError(409, 'VERSION_CONFLICT');
       const patch = this.rule(() => normalizeMemberPatch(body));
-      if (patch.tierRequested) throw new AuthError(422, 'MEMBER_TIERS_UNAVAILABLE');
+      // tierId 缺省 = 不改；显式 null = 清空归属（等级目录停用某档时的退路）。
+      const tierId = patch.tierRequested ? await this.tierRef(tx, body['tierId']) : undefined;
       const status = patch.status ?? (row.status as MemberStatus);
       this.rule(() => assertMemberStatusTransition(row.status as MemberStatus, status));
-      const updated = await tx.memberProfile.update({ where: { id }, data: { status, updatedAt: now, version: { increment: 1 } },
-        include: { customer: true } });
+      const updated = await tx.memberProfile.update({ where: { id },
+        data: { status, ...(tierId === undefined ? {} : { tierId }), updatedAt: now, version: { increment: 1 } },
+        include: { customer: true, tier: true } });
       if (status !== 'active') {
         await tx.memberSession.updateMany({ where: { memberId: id, status: 'active' },
           data: { status: 'revoked', revokedAt: now, updatedAt: now } });

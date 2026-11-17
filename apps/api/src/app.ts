@@ -22,6 +22,7 @@ import { AfterSalesController } from './aftersales/controller.js';
 import { InventoryController } from './inventory/controller.js';
 import { InventoryService } from './inventory/service.js';
 import { MemberController, CustomersController } from './members/controller.js';
+import { LoyaltyService } from './members/loyalty-service.js';
 import { MembersService } from './members/service.js';
 import { PromotionsController } from './promotions/controller.js';
 import { PromotionsService } from './promotions/service.js';
@@ -102,6 +103,7 @@ export async function createApp(identity: IdentityService | null = null, options
   const afterSales = identity ? new AfterSalesService(identity) : null;
   const inventory = identity ? new InventoryService(identity) : null;
   const members = identity ? new MembersService(identity) : null;
+  const loyalty = identity ? new LoyaltyService(identity) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
     OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController],
@@ -117,7 +119,7 @@ export async function createApp(identity: IdentityService | null = null, options
       { provide: 'AFTERSALES', useValue: afterSales },
       { provide: 'INVENTORY', useValue: inventory },
       { provide: 'PROMOTIONS', useValue: promotions },
-      { provide: 'MEMBERS', useValue: members }] })
+      { provide: 'MEMBERS', useValue: members }, { provide: 'LOYALTY', useValue: loyalty }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

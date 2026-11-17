@@ -1832,6 +1832,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/loyalty": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read point earning settings and the membership tier ladder */
+        get: operations["getLoyaltyOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/loyalty/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change point earning settings; only future calculations are affected */
+        patch: operations["updateLoyaltySettings"];
+        trace?: never;
+    };
+    "/admin/loyalty/tiers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add a membership tier to the ladder */
+        post: operations["createMembershipTier"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/loyalty/tiers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change a tier under version control; history keeps its rule version */
+        patch: operations["updateMembershipTier"];
+        trace?: never;
+    };
     "/admin/privacy-requests": {
         parameters: {
             query?: never;
@@ -3857,6 +3927,52 @@ export interface components {
             deltaPoints: number;
             reasonCode: string;
             reason: string;
+        };
+        LoyaltySetting: {
+            enabled: boolean;
+            minorPerPoint: number;
+            pointsExpiryMonths: number | null;
+            version: number;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        LoyaltySettingPatchRequest: {
+            enabled?: boolean;
+            minorPerPoint?: number;
+            pointsExpiryMonths?: number | null;
+        };
+        MembershipTierFields: {
+            code?: string;
+            nameByLocale?: {
+                [key: string]: string;
+            };
+            rank?: number;
+            minLifetimeSpendMinor?: number;
+            minorPerPoint?: number | null;
+            benefits?: string[];
+            /** @enum {string} */
+            status?: "active" | "retired";
+        };
+        MembershipTierWriteRequest: components["schemas"]["MembershipTierFields"] & Record<string, never>;
+        MembershipTierPatchRequest: components["schemas"]["MembershipTierFields"];
+        MembershipTier: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            nameByLocale: {
+                [key: string]: string;
+            };
+            rank: number;
+            minLifetimeSpendMinor: number;
+            minorPerPoint: number | null;
+            benefits: string[];
+            /** @enum {string} */
+            status: "active" | "retired";
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
         PrivacyRequestCreate: {
             /** @enum {string} */
@@ -8004,6 +8120,93 @@ export interface operations {
         };
         responses: {
             201: components["responses"]["Created"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getLoyaltyOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    updateLoyaltySettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoyaltySettingPatchRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    createMembershipTier: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MembershipTierWriteRequest"];
+            };
+        };
+        responses: {
+            201: components["responses"]["Created"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    updateMembershipTier: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MembershipTierPatchRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["Success"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

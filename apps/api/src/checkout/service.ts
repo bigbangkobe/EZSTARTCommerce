@@ -6,6 +6,7 @@ import { assertQuoteActive, assertQuoteMath, assertQuoteVersion, CheckoutRuleErr
   publicOrderNumber, quoteExpiry, QUOTE_TTL_SECONDS, type Address, type Contact } from '../../../../packages/domain/src/checkout.js';
 import { effectiveReviewStatus, normalizeMarketCode } from '../../../../packages/domain/src/store.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
+import { resolveMemberSession } from '../members/session.js';
 import type { PaymentsService } from '../payments/service.js';
 import type { PricedCoupon, PromotionsService } from '../promotions/service.js';
 import type { ShippingService } from '../shipping/service.js';
@@ -221,7 +222,8 @@ export class CheckoutService {
     await tx.inventoryReservation.create({ data: { orderId, variantId: line.variantId, quantity: line.quantity, expiresAt } });
   }
 
-  async placeOrder(token: string, idempotencyKey: string, body: OrderBody, ctx: RequestContext) {
+  async placeOrder(token: string, idempotencyKey: string, body: OrderBody, ctx: RequestContext,
+    memberToken: string | null = null) {
     if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 16 || idempotencyKey.length > 128) throw new AuthError(422, 'VALIDATION_ERROR');
     if (body.customerNote !== undefined && body.customerNote !== null && body.customerNote.length > 1_000) throw new AuthError(422, 'VALIDATION_ERROR');
     await this.identity.limitIp(ctx);
@@ -239,6 +241,8 @@ export class CheckoutService {
           const existing = await tx.shopOrder.findUnique({ where: { idempotencyKey } });
           if (existing) {
             if (existing.requestDigest !== digest || existing.cartId !== cart.id) throw new AuthError(409, 'IDEMPOTENCY_CONFLICT');
+            // 重放也可能补上关联：首次下单时会员 cookie 缺省，重试时才带上。
+            if (memberToken) await this.linkMember(tx, existing.id, memberToken);
             return this.orderView(existing);
           }
           if (cart.status !== 'active') throw new AuthError(401, 'UNAUTHORIZED');
@@ -315,6 +319,8 @@ export class CheckoutService {
           await tx.guestCart.update({ where: { id: cart.id }, data: { status: 'converted' } });
           await tx.orderStatusEvent.create({ data: { orderId: created.id, fromStatus: null,
             toStatus: 'awaiting_confirmation', reason: 'order_placed', actorType: 'customer' } });
+          // 已登录会员下单即建立关联：会员中心要能立刻看到这一单，而不是等下次登录按邮箱补齐。
+          if (memberToken) await this.linkMember(tx, created.id, memberToken);
           await this.identity.recordAudit(tx, ctx, null, 'checkout.order.created', created.id);
           return this.orderView(created, accountSummary);
         }, { timeout: 15_000 });
@@ -326,6 +332,17 @@ export class CheckoutService {
       }
     }
     throw new AuthError(409, 'STATE_CONFLICT');
+  }
+
+  /**
+   * 会员关联是附加事实，不是结账前置条件：会员会话过期、被撤销或会员被停用时，
+   * 订单照常成立，只是不产生关联（访客订单本来就允许存在）。
+   */
+  private async linkMember(tx: Tx, orderId: string, token: string) {
+    let memberId: string;
+    try { memberId = (await resolveMemberSession(tx, token)).member.id; }
+    catch (error) { if (error instanceof AuthError) return; throw error; }
+    await tx.orderMemberLink.createMany({ data: [{ orderId, memberId, source: 'checkout' }], skipDuplicates: true });
   }
 
   /** 报价有效期用于前端倒计时与测试断言，不额外暴露内部字段。 */

@@ -1104,13 +1104,21 @@ model MemberProfile {
   memberNo   String            @unique
   consentRef String?
   status     String            @default("active")
+  // 当前等级只是归属快照；历史等级变更靠审计留痕，规则变更不影响历史流水。
+  tierId     String?           @db.Uuid
+  tier       MembershipTier?   @relation(fields: [tierId], references: [id], onDelete: Restrict)
+  // 累计消费用于等级解析，单位是最小货币单位；只增不减。
+  lifetimeSpendMinor BigInt    @default(0)
   joinedAt   DateTime          @default(now()) @db.Timestamptz(3)
   version    Int               @default(1)
   createdAt  DateTime          @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime          @updatedAt @db.Timestamptz(3)
   sessions   MemberSession[]
   orderLinks OrderMemberLink[]
+  pointAccount PointAccount?
+  pointLedger PointLedger[]
   @@index([status])
+  @@index([tierId])
 }
 
 // 邮箱 OTP 挑战：验证码只存 HMAC 摘要，邮箱只存绑定本行的 AES-GCM 密文。
@@ -1157,4 +1165,63 @@ model OrderMemberLink {
   linkedAt DateTime      @default(now()) @db.Timestamptz(3)
   @@id([orderId, memberId])
   @@index([memberId])
+}
+
+// 店铺级积分口径（单例 id = 1）：开关、多少「分」换 1 点、积分有效期。
+model LoyaltySetting {
+  id                 Int      @id @default(1)
+  enabled            Boolean  @default(false)
+  minorPerPoint      Int      @default(100)
+  pointsExpiryMonths Int?
+  version            Int      @default(1)
+  updatedAt          DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+}
+
+// 会员等级：rank 决定高低且唯一；minorPerPoint 为空表示沿用店铺口径。
+model MembershipTier {
+  id                     String          @id @default(uuid()) @db.Uuid
+  code                   String          @unique
+  nameByLocale           Json
+  rank                   Int             @unique
+  minLifetimeSpendMinor  BigInt          @default(0)
+  minorPerPoint          Int?
+  benefits               Json            @default("[]")
+  status                 String          @default("active")
+  version                Int             @default(1)
+  createdAt              DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime        @default(now()) @updatedAt @db.Timestamptz(3)
+  members                MemberProfile[]
+  @@index([status, rank])
+}
+
+// 积分账户：余额与流水同事务更新，余额永不为负。
+model PointAccount {
+  id        String        @id @default(uuid()) @db.Uuid
+  memberId  String        @unique @db.Uuid
+  member    MemberProfile @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  balance   Int           @default(0)
+  status    String        @default("active")
+  version   Int           @default(1)
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime      @default(now()) @updatedAt @db.Timestamptz(3)
+}
+
+// 积分流水：追加式（触发器拒绝 UPDATE/DELETE），同一业务事件只能记一次账。
+model PointLedger {
+  id             String   @id @db.Uuid
+  memberId       String   @db.Uuid
+  member         MemberProfile @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  deltaPoints    Int
+  balanceAfter   Int
+  entryType      String
+  sourceType     String
+  sourceRef      String?
+  reasonCode     String
+  reason         String?
+  actorId        String?  @db.Uuid
+  ruleVersion    String
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  @@index([memberId, createdAt])
+  @@index([sourceType, sourceRef])
 }

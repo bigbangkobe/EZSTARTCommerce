@@ -2445,6 +2445,79 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/loyalty:
+    get:
+      tags: [Customers]
+      operationId: getLoyaltyOverview
+      summary: Read point earning settings and the membership tier ladder
+      security: [{ AdminSession: [] }]
+      x-permission: members.manage
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/loyalty/settings:
+    patch:
+      tags: [Customers]
+      operationId: updateLoyaltySettings
+      summary: Change point earning settings; only future calculations are affected
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: members.manage
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoyaltySettingPatchRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/loyalty/tiers:
+    post:
+      tags: [Customers]
+      operationId: createMembershipTier
+      summary: Add a membership tier to the ladder
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: members.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MembershipTierWriteRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/loyalty/tiers/{id}:
+    parameters: [{ $ref: '#/components/parameters/UuidId' }]
+    patch:
+      tags: [Customers]
+      operationId: updateMembershipTier
+      summary: Change a tier under version control; history keeps its rule version
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: members.manage
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MembershipTierPatchRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/privacy-requests:
     post:
       tags: [Privacy]
@@ -6360,6 +6433,59 @@ components:
         deltaPoints: { type: integer, not: { const: 0 } }
         reasonCode: { type: string, maxLength: 80 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
+    LoyaltySetting:
+      type: object
+      additionalProperties: false
+      required: [enabled, minorPerPoint, pointsExpiryMonths, version, updatedAt]
+      properties:
+        enabled: { type: boolean }
+        minorPerPoint: { type: integer, minimum: 1, maximum: 1000000 }
+        pointsExpiryMonths: { type: [integer, 'null'], minimum: 1, maximum: 120 }
+        version: { type: integer, minimum: 1 }
+        updatedAt: { type: string, format: date-time }
+    LoyaltySettingPatchRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        enabled: { type: boolean }
+        minorPerPoint: { type: integer, minimum: 1, maximum: 1000000 }
+        pointsExpiryMonths: { type: [integer, 'null'], minimum: 1, maximum: 120 }
+    MembershipTierFields:
+      type: object
+      additionalProperties: false
+      properties:
+        code: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,39}$' }
+        nameByLocale: { type: object, minProperties: 1, additionalProperties: { type: string, minLength: 1, maxLength: 120 } }
+        rank: { type: integer, minimum: 1, maximum: 100 }
+        minLifetimeSpendMinor: { type: integer, minimum: 0 }
+        minorPerPoint: { type: [integer, 'null'], minimum: 1, maximum: 1000000 }
+        benefits: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, minLength: 1, maxLength: 120 } }
+        status: { type: string, enum: [active, retired] }
+    MembershipTierWriteRequest:
+      allOf:
+        - { $ref: '#/components/schemas/MembershipTierFields' }
+        - type: object
+          required: [code, nameByLocale, rank, minLifetimeSpendMinor, benefits, status]
+    MembershipTierPatchRequest:
+      allOf: [{ $ref: '#/components/schemas/MembershipTierFields' }]
+      minProperties: 1
+    MembershipTier:
+      type: object
+      additionalProperties: false
+      required: [id, code, nameByLocale, rank, minLifetimeSpendMinor, minorPerPoint, benefits, status, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        nameByLocale: { type: object, additionalProperties: { type: string } }
+        rank: { type: integer, minimum: 1 }
+        minLifetimeSpendMinor: { type: integer, minimum: 0 }
+        minorPerPoint: { type: [integer, 'null'], minimum: 1 }
+        benefits: { type: array, items: { type: string } }
+        status: { type: string, enum: [active, retired] }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     PrivacyRequestCreate:
       type: object
       additionalProperties: false

@@ -5,6 +5,7 @@ import { header, uuid, type ApiRequest } from '../identity/controller.js';
 import { IdentityContracts } from '../identity/contracts.js';
 import { ManagementHttp } from '../identity/management-http.js';
 import { AuthError, IdentityService } from '../identity/service.js';
+import { LoyaltyService } from './loyalty-service.js';
 import { MembersService } from './service.js';
 
 const MEMBER_COOKIE = 'ez_member_session';
@@ -28,6 +29,7 @@ function sessionCookie(token: string, maxAge: number) {
 export class MemberController extends ManagementHttp {
   private readonly schemas = new IdentityContracts();
   constructor(@Inject('MEMBERS') private readonly members: MembersService | null,
+    @Inject('LOYALTY') private readonly loyalty: LoyaltyService | null,
     @Inject('IDENTITY') identity: IdentityService | null) { super(identity); }
   private membersService() { if (!this.members) throw new AuthError(503, 'SERVICE_NOT_READY'); return this.members; }
 
@@ -68,6 +70,15 @@ export class MemberController extends ManagementHttp {
     const page = this.pagination(limit, cursor);
     this.send(response, request, 200, await this.membersService().memberOrders(memberToken(request), page.limit, page.cursor));
   }
+
+  /** 会员只看自己的账：余额 + 最近流水，金额口径与后台一致。 */
+  @Get('points')
+  async points(@Query('limit') limit: unknown, @Query('cursor') cursor: unknown, @Req() request: ApiRequest,
+    @Res() response: ServerResponse) {
+    if (!this.loyalty) throw new AuthError(503, 'SERVICE_NOT_READY');
+    const page = this.pagination(limit, cursor);
+    this.send(response, request, 200, await this.loyalty.memberPoints(memberToken(request), page.limit, page.cursor));
+  }
 }
 
 /**
@@ -79,6 +90,7 @@ export class MemberController extends ManagementHttp {
 @Controller('admin')
 export class CustomersController extends ManagementHttp {
   constructor(@Inject('MEMBERS') private readonly members: MembersService | null,
+    @Inject('LOYALTY') private readonly loyalty: LoyaltyService | null,
     @Inject('IDENTITY') identity: IdentityService | null) { super(identity); }
   private membersService() { if (!this.members) throw new AuthError(503, 'SERVICE_NOT_READY'); return this.members; }
 
@@ -138,6 +150,47 @@ export class CustomersController extends ManagementHttp {
     this.send(response, request, 200, await this.membersService().updateMember(this.cookieSession(request),
       header(request, 'x-csrf-token'), uuid(id), this.version(request), body, this.context(request)));
   }
+
+  @Get('loyalty')
+  async loyalty_(@Req() request: ApiRequest, @Res() response: ServerResponse) {
+    this.send(response, request, 200, await this.loyaltyService().adminOverview(this.cookieSession(request)));
+  }
+
+  @Patch('loyalty/settings')
+  async updateLoyaltySettings(@Body() body: Record<string, unknown>, @Req() request: ApiRequest,
+    @Res() response: ServerResponse) {
+    await this.write(request, 'LoyaltySettingPatchRequest', body);
+    this.send(response, request, 200, await this.loyaltyService().updateSettings(this.cookieSession(request),
+      header(request, 'x-csrf-token'), this.version(request), body, this.context(request)));
+  }
+
+  @Post('loyalty/tiers')
+  async createTier(@Body() body: Record<string, unknown>, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    await this.write(request, 'MembershipTierWriteRequest', body);
+    this.send(response, request, 201, await this.loyaltyService().createTier(
+      this.cookieSession(request), header(request, 'x-csrf-token'), body, this.context(request)));
+  }
+
+  @Patch('loyalty/tiers/:id')
+  async updateTier(@Param('id') id: string, @Body() body: Record<string, unknown>, @Req() request: ApiRequest,
+    @Res() response: ServerResponse) {
+    await this.write(request, 'MembershipTierPatchRequest', body);
+    this.send(response, request, 200, await this.loyaltyService().updateTier(this.cookieSession(request),
+      header(request, 'x-csrf-token'), uuid(id), this.version(request), body, this.context(request)));
+  }
+
+  /** 人工调整必须带幂等键：重试同一笔不会变成两次加减。 */
+  @Post('members/:id/points-adjustments')
+  async adjustPoints(@Param('id') id: string, @Body() body: Record<string, unknown>, @Req() request: ApiRequest,
+    @Res() response: ServerResponse) {
+    await this.write(request, 'PointsAdjustmentRequest', body);
+    const key = request.headers['idempotency-key'];
+    if (typeof key !== 'string') throw new AuthError(422, 'VALIDATION_ERROR');
+    this.send(response, request, 201, await this.loyaltyService().adjustPoints(this.cookieSession(request),
+      header(request, 'x-csrf-token'), uuid(id), key, body, this.context(request)));
+  }
+
+  private loyaltyService() { if (!this.loyalty) throw new AuthError(503, 'SERVICE_NOT_READY'); return this.loyalty; }
 
   /** 后台会话 cookie 名与身份模块一致；这里只取原文，校验仍由 withPermission 完成。 */
   private cookieSession(request: ApiRequest) {

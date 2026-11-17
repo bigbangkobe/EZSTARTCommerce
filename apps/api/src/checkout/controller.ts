@@ -10,6 +10,7 @@ import { CartService } from './cart-service.js';
 import { CheckoutService, type OrderBody, type QuoteBody } from './service.js';
 
 const CART_COOKIE = 'ez_guest_cart';
+const MEMBER_COOKIE = 'ez_member_session';
 const CSRF_COOKIE = 'ez_cart_csrf';
 const CART_MAX_AGE = 30 * 86_400;
 
@@ -32,6 +33,15 @@ function assertCsrf(request: ApiRequest) {
   const supplied = request.headers['x-csrf-token'];
   if (!expected || typeof supplied !== 'string' || supplied.length !== 43 || expected.length !== 43) throw new AuthError(403, 'FORBIDDEN');
   if (!timingSafeEqual(Buffer.from(expected), Buffer.from(supplied))) throw new AuthError(403, 'FORBIDDEN');
+}
+
+/**
+ * 会员 cookie 是**可选**的：登录了就把订单归到会员，没登录照样能下单。
+ * 形状不对一律当没有——结账不能因为一个坏 cookie 而失败。
+ */
+function optionalMemberToken(request: ApiRequest) {
+  const value = parse(request.headers.cookie ?? '')[MEMBER_COOKIE];
+  return value && /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
 }
 
 function cartCookies(token: string, csrfToken: string) {
@@ -108,6 +118,7 @@ export class CheckoutController extends ManagementHttp {
     this.schemas.assert('CheckoutOrderRequest', body);
     const key = request.headers['idempotency-key'];
     if (typeof key !== 'string') throw new AuthError(422, 'VALIDATION_ERROR');
-    this.send(response, request, 201, await this.checkoutService().placeOrder(cartToken(request), key, body, this.context(request)));
+    this.send(response, request, 201, await this.checkoutService().placeOrder(cartToken(request), key, body,
+      this.context(request), optionalMemberToken(request)));
   }
 }

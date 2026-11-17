@@ -8,6 +8,7 @@ import {
   OrderRuleError, orderStatusAfterDispatch, repriceShipping, type ContactSnapshot, type ShipmentLineRequest,
 } from '../../../../packages/domain/src/orders.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
+import { awardOrderPointsInTx } from '../members/loyalty-service.js';
 import type { ShippingService } from '../shipping/service.js';
 import { releaseCouponInTx, expireCouponInTx } from '../promotions/redeem.js';
 import { releaseOrderReservations } from './reservations.js';
@@ -318,7 +319,7 @@ export class OrdersService {
     const evidenceRef = this.optionalText(body.evidenceRef, 200);
     const digest = this.digest('shipment_dispatch', id, { expectedVersion, dispatchedAt: dispatchedAt.toISOString(),
       trackingNumber, evidenceRef });
-    return this.identity.withPermission(supplied, csrfValue, 'shipments.manage', async (tx, actor) => {
+    return this.identity.withPermission(supplied, csrfValue, 'shipments.manage', async (tx, actor, _session, now) => {
       const shipment = await tx.shipment.findUnique({ where: { id }, include: { items: true } });
       if (!shipment) throw new AuthError(404, 'NOT_FOUND');
       await this.lock(tx, `order:${shipment.orderId}`);
@@ -379,7 +380,7 @@ export class OrdersService {
     const evidenceRef = this.optionalText(body.evidenceRef, 200);
     const note = this.optionalText(body.note, 1_000);
     const digest = this.digest('shipment_deliver', id, { deliveredAt: deliveredAt.toISOString(), evidenceRef, note });
-    return this.identity.withPermission(supplied, csrfValue, 'shipments.manage', async (tx, actor) => {
+    return this.identity.withPermission(supplied, csrfValue, 'shipments.manage', async (tx, actor, _session, now) => {
       const shipment = await tx.shipment.findUnique({ where: { id }, include: { items: true } });
       if (!shipment) throw new AuthError(404, 'NOT_FOUND');
       await this.lock(tx, `order:${shipment.orderId}`);
@@ -404,6 +405,9 @@ export class OrdersService {
           await tx.orderStatusEvent.create({ data: { orderId: row.id, fromStatus: row.orderStatus,
             toStatus: 'completed', reason: 'shipment_delivered', actorType: 'admin' } });
         }
+        // 订单完成才发放积分：只认已经建立的会员关联，访客订单不按邮箱反推。
+        // 同一订单重复触发时由 `order:{id}:earn` 幂等键挡住，不会二次发放。
+        await awardOrderPointsInTx(tx, row.id, now);
       } else if (row.fulfillmentStatus !== 'partially_fulfilled') {
         await tx.shopOrder.update({ where: { id: row.id }, data: { fulfillmentStatus: 'partially_fulfilled' } });
       }
