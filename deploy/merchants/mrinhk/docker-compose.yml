@@ -5,6 +5,13 @@
 
 name: ezstart-mrinhk
 
+# api / migrate / worker 共用同一个镜像（Dockerfile.node）。
+# 关键：migrate 与 worker 必须复用 api 的镜像标签，不能各自 build —— 否则只重建 api 时
+# migrate 会静默沿用旧镜像，出现"迁移没跑，API 却要求新迁移"的启动拒绝。
+x-node-build: &node-build
+  context: ../../..
+  dockerfile: deploy/shared/Dockerfile.node
+
 services:
   # ---------- 数据库（本地 Docker 部署，不暴露公网） ----------
   postgres:
@@ -27,9 +34,7 @@ services:
 
   # ---------- 一次性：数据库迁移（Prisma migrate deploy） ----------
   migrate:
-    build: &node-build
-      context: ../../..
-      dockerfile: deploy/shared/Dockerfile.node
+    image: ezstart-mrinhk-api
     command: ["node", "node_modules/prisma/build/index.js", "migrate", "deploy", "--config", "packages/database/prisma.config.ts"]
     restart: "no"
     environment: &node-env
@@ -41,6 +46,7 @@ services:
   # ---------- 核心 API ----------
   api:
     build: *node-build
+    image: ezstart-mrinhk-api
     command: ["node", "dist/apps/api/src/main.js"]
     restart: unless-stopped
     environment:
@@ -66,7 +72,7 @@ services:
   # ---------- 通知 Worker（需要完整 SMTP 配置，配好后用 --profile smtp 启动） ----------
   worker:
     profiles: ["smtp"]
-    build: *node-build
+    image: ezstart-mrinhk-api
     command: ["node", "dist/apps/worker/src/main.js"]
     restart: unless-stopped
     environment:
