@@ -58,7 +58,11 @@ export class PaymentsController extends ManagementHttp {
   async record(@Param('id') id: string, @Body() body: Record<string, unknown>,
     @Req() request: ApiRequest, @Res() response: ServerResponse) {
     await this.write(request, 'OrderPaymentResultRequest', body);
+    // 契约同时声明了 If-Match 与 body.expectedVersion：两者都表示“我看到的那一版”。
+    // 头部是权威值（与 PATCH 一致的乐观锁语义），body 仅在未带头部时兜底。
+    const version = header(request, 'if-match') ? this.version(request) : undefined;
     this.send(response, request, 200, await this.paymentsService().recordOrderPayment(cookie(request, 'ez_admin_session'),
-      header(request, 'x-csrf-token'), uuid(id), this.idempotency(request), body, this.context(request)));
+      header(request, 'x-csrf-token'), uuid(id), this.idempotency(request),
+      version === undefined ? body : { ...body, expectedVersion: version }, this.context(request)));
   }
 }

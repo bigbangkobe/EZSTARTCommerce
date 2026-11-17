@@ -98,10 +98,11 @@ test('payments: redacted configuration, dispatch-gated COD collection and a sing
     await db.inventoryReservation.create({ data: { orderId: order.id, variantId, quantity,
       expiresAt: new Date(Date.now() + 1_800_000) } });
     if (options.dispatched) {
+      // Shipment 的 CHECK 要求状态与发货时间同时成立：先建「已创建」，再连同时间一起置为已发货。
       const shipment = await db.shipment.create({ data: { orderId: order.id, status: 'created',
-        dispatchedAt: new Date(), carrierCode: 'SF' } });
+        carrierCode: 'SF' } });
       await db.shipmentItem.create({ data: { shipmentId: shipment.id, orderItemId: item.id, quantity } });
-      await db.shipment.update({ where: { id: shipment.id }, data: { status: 'dispatched' } });
+      await db.shipment.update({ where: { id: shipment.id }, data: { status: 'dispatched', dispatchedAt: new Date() } });
     }
     return { order, item };
   };
@@ -255,8 +256,9 @@ test('payments: redacted configuration, dispatch-gated COD collection and a sing
       assert.equal((await ownerCall('GET', 'admin/payments?status=refunded')).status, 422);
       assert.equal((await ownerCall('GET', `admin/payments/${randomUUID()}`)).status, 404);
       // 只有 payments.read 的账号不能登记收款。
-      assert.equal((await sessionFor(['payments.read'])).call('POST', `admin/orders/${order.id}/payment-result`,
-        { ...body, expectedVersion: 2 }, 'SuccessEnvelope', { key: randomUUID(), ifMatch: '"2"' }).then(value => value.status), 403);
+      const readOnly = await sessionFor(['payments.read']);
+      assert.equal((await readOnly.call('POST', `admin/orders/${order.id}/payment-result`,
+        { ...body, expectedVersion: 2 }, 'SuccessEnvelope', { key: randomUUID(), ifMatch: '"2"' })).status, 403);
 
       // 已收款订单不能靠取消接口清账。
       const cancel = await collector.call('POST', `admin/orders/${order.id}/cancel`,

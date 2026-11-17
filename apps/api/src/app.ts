@@ -75,6 +75,8 @@ class ApiExceptionFilter implements ExceptionFilter {
     };
     const [defaultCode, message] = errors[status] ?? ['INTERNAL_ERROR', 'Request could not be completed.'];
     const code = exception instanceof AuthError ? exception.code : defaultCode;
+    // 5xx 必须留下服务端证据：客户端只看到 INTERNAL_ERROR，没有堆栈就无法定位。
+    if (status >= 500) console.error(`[${request.requestId}] ${request.method} ${request.url}`, exception);
     if (status === 429) response.setHeader('Retry-After', '900');
     response.statusCode = status;
     response.setHeader('Content-Type', 'application/json; charset=utf-8');

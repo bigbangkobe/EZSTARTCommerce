@@ -3510,6 +3510,7 @@ export interface components {
         AddressInput: {
             recipientName?: string;
             phone?: string | null;
+            /** @description Case-insensitive on input; the server trims and uppercases it before validation. */
             countryCode: string;
             regionCode?: string | null;
             city?: string | null;
@@ -3734,7 +3735,7 @@ export interface components {
             orderId: string;
             amountMinor: number;
             currency: string;
-            reasonCode: string;
+            reasonCode?: string | null;
             reason: string;
             /** Format: uuid */
             caseId?: string | null;
@@ -4168,7 +4169,7 @@ export interface components {
         AfterSalesRefundRequest: {
             amountMinor: number;
             currency: string;
-            reasonCode: string | null;
+            reasonCode?: string | null;
             reason: string;
         };
         /** @enum {string} */

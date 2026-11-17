@@ -15,9 +15,17 @@ export class IdentityContracts {
     this.schemas = spec.components.schemas;
     addFormats.default(this.ajv); // CJS plugin exposes the same function through .default.
     this.ownerPermissions = [...new Set<string>(Object.values(spec.paths as Record<string, Record<string, unknown>>).flatMap(path =>
-      Object.values(path).flatMap(operation => {
-        if (typeof operation !== 'object' || operation === null || !('x-permission' in operation)) return [];
-        return typeof operation['x-permission'] === 'string' ? [operation['x-permission']] : [];
+      Object.values(path).flatMap(value => {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+        const operation = value as Record<string, unknown>;
+        const codes: string[] = [];
+        // 端点级与字段级权限同属一个闭集：owner 必须两者都持有，否则字段级脱敏对店主也生效。
+        if (typeof operation['x-permission'] === 'string') codes.push(operation['x-permission']);
+        const fieldPermissions = operation['x-field-permissions'];
+        if (Array.isArray(fieldPermissions)) {
+          for (const code of fieldPermissions) if (typeof code === 'string') codes.push(code);
+        }
+        return codes;
       })))].sort();
   }
   assert(name: string, body: unknown): void {
@@ -26,6 +34,12 @@ export class IdentityContracts {
     if (!validate) {
       validate = this.ajv.compile({ $id: key, $ref: `#/components/schemas/${name}`, components: { schemas: this.schemas } });
     }
-    if (!validate(body)) throw new ContractValidationError('Request does not match contract');
+    if (!validate(body)) {
+      // 只保留字段路径与规则名：定位契约缺口时必须知道是哪个字段，而不是只知道“不匹配”。
+      const detail = (validate.errors ?? []).map(error => `${error.instancePath || '/'} ${error.message ?? ''}`.trim()
+        + (error.params && 'additionalProperty' in error.params ? ` (${String(error.params.additionalProperty)})` : ''))
+        .slice(0, 5).join('; ');
+      throw new ContractValidationError(`Request does not match contract: ${detail}`);
+    }
   }
 }

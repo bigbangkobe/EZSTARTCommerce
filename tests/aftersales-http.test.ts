@@ -168,7 +168,7 @@ test('aftersales: cancellable cases, four-eyes refunds and return restock gated 
     await t.test('refunds need settled money, a second approver and a payout reference', async () => {
       await resetLimits();
       const requester = await sessionFor(['aftersales.read', 'aftersales.manage', 'refunds.create', 'payments.read']);
-      const approver = await sessionFor(['aftersales.read', 'refund.approve', 'refund.execute']);
+      const approver = await sessionFor(['aftersales.read', 'aftersales.approve', 'refund.approve', 'refund.execute']);
       const executor = await sessionFor(['payments.read', 'refund.execute']);
       const paid = await makeOrder({ quantity: 2, paid: true });
 
@@ -218,10 +218,12 @@ test('aftersales: cancellable cases, four-eyes refunds and return restock gated 
         { amountMinor: 9_000, currency: 'HKD', reason: 'Partial damage refund' }, 'RefundEnvelope', { key })).status, 409);
       assert.equal(await db.refund.count({ where: { orderId: paid.order.id } }), 1);
 
-      // 申请人不能自己批自己的退款。
+      // 申请人不能自己批自己的退款。用独立订单：这笔退款会一直挂在途，
+      // 若挂在同订单上会把后面「可退余额」断言压低 1,000。
       const selfApproval = await sessionFor(['refunds.create', 'refund.approve']);
-      const selfCreated = await selfApproval.call('POST', 'admin/refunds', { orderId: paid.order.id,
-        paymentId: (await db.payment.findFirstOrThrow({ where: { orderId: paid.order.id } })).id,
+      const selfOrder = await makeOrder({ paid: true });
+      const selfCreated = await selfApproval.call('POST', 'admin/refunds', { orderId: selfOrder.order.id,
+        paymentId: (await db.payment.findFirstOrThrow({ where: { orderId: selfOrder.order.id } })).id,
         amountMinor: 1_000, currency: 'HKD', reasonCode: null, reason: 'self' }, 'RefundEnvelope');
       assert.equal(selfCreated.status, 201);
       assert.equal((await selfApproval.call('POST', `admin/refunds/${selfCreated.body.data.id}/approve`,
@@ -372,8 +374,10 @@ test('aftersales: cancellable cases, four-eyes refunds and return restock gated 
       const requested = await refund.call('POST', `admin/after-sales/${caseId}/refund`,
         { amountMinor: 5_000, currency: 'HKD', reason: 'partial' }, 'RefundEnvelope');
       assert.equal(requested.status, 201);
+      // 申请退款已经把案件推进到 refund_pending（version 也 +1），关案必须基于最新版本。
+      const freshCase = await agent.call('GET', `admin/after-sales/${caseId}`, undefined, 'AfterSalesCaseEnvelope');
       const closeBlocked = await agent.call('POST', `admin/after-sales/${caseId}/close`, { reason: 'done' },
-        'AfterSalesCaseEnvelope', { ifMatch: `"${inspected.body.data.version}"` });
+        'AfterSalesCaseEnvelope', { ifMatch: `"${freshCase.body.data.version}"` });
       assert.equal(closeBlocked.status, 409);
       assert.equal(closeBlocked.body.error.code, 'REFUND_IN_PROGRESS');
     });

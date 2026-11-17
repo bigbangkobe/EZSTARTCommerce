@@ -5929,7 +5929,8 @@ components:
       properties:
         recipientName: { type: string, minLength: 1, maxLength: 120 }
         phone: { type: [string, 'null'], maxLength: 32 }
-        countryCode: { type: string, pattern: '^[A-Z]{2}$' }
+        countryCode: { type: string, pattern: '^[A-Za-z]{2}$',
+          description: Case-insensitive on input; the server trims and uppercases it before validation. }
         regionCode: { type: [string, 'null'], maxLength: 80 }
         city: { type: [string, 'null'], maxLength: 120 }
         district: { type: [string, 'null'], maxLength: 120 }
@@ -6187,13 +6188,13 @@ components:
     RefundCreateRequest:
       type: object
       additionalProperties: false
-      required: [paymentId, orderId, amountMinor, currency, reasonCode, reason]
+      required: [paymentId, orderId, amountMinor, currency, reason]
       properties:
         paymentId: { type: string, format: uuid }
         orderId: { type: string, format: uuid }
         amountMinor: { type: integer, minimum: 1 }
         currency: { type: string, pattern: '^[A-Z]{3}$' }
-        reasonCode: { type: string, minLength: 1, maxLength: 80 }
+        reasonCode: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         caseId: { type: [string, 'null'], format: uuid }
     SettlementImportRequest:
@@ -6227,7 +6228,9 @@ components:
       properties:
         code: { type: string, minLength: 1, maxLength: 80 }
         nameByLocale: { type: object, minProperties: 1, additionalProperties: { type: string, minLength: 1, maxLength: 120 } }
-        countryCodes: { type: array, minItems: 1, uniqueItems: true, items: { type: string, pattern: '^[A-Z]{2}$' } }
+        countryCodes: { type: array, minItems: 1, uniqueItems: true,
+          items: { type: string, pattern: '^[A-Za-z]{2}$',
+            description: Case-insensitive on input; the stored value is uppercased. } }
         regionCodes: { type: array, uniqueItems: true, items: { type: string, maxLength: 80 } }
         priority: { type: integer, minimum: 0 }
         enabled: { type: boolean }
@@ -6741,7 +6744,7 @@ components:
     AfterSalesRefundRequest:
       type: object
       additionalProperties: false
-      required: [amountMinor, currency, reasonCode, reason]
+      required: [amountMinor, currency, reason]
       properties:
         amountMinor: { type: integer, minimum: 1 }
         currency: { type: string, pattern: '^[A-Z]{3}$' }

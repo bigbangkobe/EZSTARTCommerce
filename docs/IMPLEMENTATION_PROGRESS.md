@@ -321,3 +321,32 @@
 验证：契约 37 项全绿（含优惠 5 项）且生成物与 OpenAPI 一致；Node 域测试 10 项（优惠纯规则）全绿；管理端类型检查与生产构建通过（新增 /admin/coupons 路由）；本地 Edge 的浏览器测试新增优惠页 2 项×2 项目全绿（建券归一化大写与 bps 换算、用量口径、脱敏摘要、停用只带原因）。**本机当前 shell 为提权令牌，PostgreSQL 18 拒绝在管理员权限下启动，沙箱又不允许降权派生进程，因此真实 PostgreSQL HTTP 回归（含优惠 9 个子测试与全部存量回归）本机未运行**：脚手架已改为诚实失败，须在非提权终端运行 `pnpm check` 完成最终验收，或提供 `TEST_DATABASE_URL`。
 
 边界：会员专属券与批量发放要等 M10；部分退款不返还额度（只有整单退款且 `refundPolicy=restore` 才返还）；优惠只支持单品/分类范围与单券每单，不支持阶梯满减、买赠、叠加券或定时启停（停用是手动的）；核销记录页没有导出。项目仍不可上线；升级已有实例须备份、演练并运行 pnpm db:migrate（本次为第 15 条迁移）。
+
+## 2026-11-17：数据库回归首次全量真机验收（183/183）与约束/契约修正
+
+背景：此前的 Node 数据库回归在开发者机器上从未真正执行（提权令牌下 `postgres.exe` 无法启动，脚手架失败路径静默退出并报绿）。本批把测试跑在既有部署服务器（mrinhk）的临时 PostgreSQL 18 容器上，逐条修掉被掩盖的真实缺陷。
+
+修正的真实缺陷：
+- 第十五条之后新增第 16 条迁移 `202611170015_constraint_fixes`：`InventoryMovement.stockDelta` 原约束禁止 0，导致 `damaged/quarantine/scrap` 质检入库必然 500——货确实收到但未进可售库存，delta 必须为 0；改为按类型分档。`InventoryReservation.quantity` 原要求 ≥1，导致最后一件发货把剩余置 0 时 500，改为 0–99。
+- 全局异常过滤器此前不记录 5xx：客户端只看到 `INTERNAL_ERROR`，服务端没有任何证据。现在 5xx 输出请求方法与路径 + 异常对象。
+- 契约校验失败时只报「不匹配」：现在附带前 5 条字段路径与规则名（仅进服务端异常，响应文案不变）。
+- `payments/controller` 的 `POST /admin/orders/:id/payment-result` 契约同时声明 `If-Match` 与 body `expectedVersion`，服务端只读 body，导致过期的 `If-Match` 被忽略。现以头部为权威、body 兜底。
+- `shipping/service` 把所有领域规则错误映射 422：`ZONE_OVERLAP` 是业务冲突，改为 409。
+- 退款创建响应的事件列表恒为空：`include` 在 `refundEvent.create` 之前取快照。改为写完后重读。
+- 关案时先判状态机再判在途退款，导致「退款处理中」返回笼统的 `CASE_STATE_CONFLICT`。调换顺序，先报 `REFUND_IN_PROGRESS`。
+- 契约把 `countryCodes`、`AddressInput.countryCode` 限定大写，而服务端约定 trim+uppercase 归一化；放宽为大小写不敏感并注明存储值大写。
+
+测试侧修正（此前从未运行，本身有错或相互污染）：
+- 204 响应被拿去校验 `SuccessEnvelope`，每个 DELETE 都报契约错误。
+- 售后审批角色缺 `aftersales.approve`（规格要求案件批准走该权限，不是 `refund.approve`）。
+- 自批测试用同一订单建了一笔 1,000 在途退款，把后续「可退余额」断言压低 1,000；改用独立订单。
+- 关案前未跟进退款申请带来的版本 +1；补一次读取。
+- 库存阈值子测试注释写「阈值 5」而代码改成 2，断言与数据自相矛盾。
+- 购物车超库存期望 422，与 PATCH 的 409 `OUT_OF_STOCK` 口径不一致。
+- 发货测试的会话缺 `orders.update`，导致「已完成订单不能改址」拿到 403 而非 409。
+- 收款只读账号断言漏 `await`，实际比较的是 Promise。
+- 迁移计数断言、`MarketProfile` 种子（CHECK 禁止 `enabled+pending`）、`Shipment` 创建方式（状态与发货时间必须同时成立）等按现行约束修正。
+
+验证：真实 PostgreSQL 18.7 上 `node --test` 183 项全过（含优惠 9 项、结账 11 项、售后 6 项、订单 10 项）；契约 37 项、生成物一致、Prisma schema 有效、管理端 typecheck 通过；Edge 浏览器测试 60 项通过。
+
+边界：本批只修「测试从未运行」暴露的问题，未新增业务能力。仍不可上线；升级已有实例须备份、演练并运行 `pnpm db:migrate`（本次为第 16 条迁移）。

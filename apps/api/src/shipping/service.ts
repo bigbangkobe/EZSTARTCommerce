@@ -8,6 +8,8 @@ type Tx = Prisma.TransactionClient;
 type ZoneRow = Prisma.ShippingZoneGetPayload<{}>;
 type RateRow = Prisma.ShippingRateGetPayload<{ include: { zones: { include: { zone: true } } } }>;
 const includeRate = { zones: { include: { zone: true } } } as const;
+/** 领域规则里表达「与已有配置冲突」的码：语义是 409，不是 422。 */
+const CONFLICT_CODES = new Set(['ZONE_OVERLAP']);
 
 export interface ZoneBody { code?: string; nameByLocale?: Record<string, string>; countryCodes?: string[]; regionCodes?: string[];
   priority?: number; enabled?: boolean }
@@ -26,7 +28,13 @@ export class ShippingService {
   private get db() { return this.identity.db; }
 
   private rule<T>(fn: () => T): T {
-    try { return fn(); } catch (error) { if (error instanceof ShippingRuleError) throw new AuthError(422, error.code); throw error; }
+    try { return fn(); } catch (error) {
+      if (error instanceof ShippingRuleError) {
+        // 覆盖面重叠是业务冲突（客户端应换一个区），不是格式错误：422 会让调用方以为改字段就能过。
+        throw new AuthError(CONFLICT_CODES.has(error.code) ? 409 : 422, error.code);
+      }
+      throw error;
+    }
   }
 
   private async guarded<T>(fn: () => Promise<T>): Promise<T> {

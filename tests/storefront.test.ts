@@ -22,7 +22,8 @@ test('storefront reads only published, market-eligible data', { timeout: 120_000
       featureFlags: { guestCheckout: true, onlinePayment: false } } });
     await db.marketProfile.createMany({ data: [
       { marketCode: 'HK', enabled: true, reviewStatus: 'approved', eligibleProductIds: [] },
-      { marketCode: 'MO', enabled: true, reviewStatus: 'pending', eligibleProductIds: [] },
+      // 数据库 CHECK 禁止「已启用但未获批」的市场存在；不可售用 enabled:false 表达。
+      { marketCode: 'MO', enabled: false, reviewStatus: 'pending', eligibleProductIds: [] },
       { marketCode: 'TW', enabled: true, reviewStatus: 'approved', reviewValidUntil: new Date(Date.now() + 30 * DAY), eligibleProductIds: [] },
     ] });
 

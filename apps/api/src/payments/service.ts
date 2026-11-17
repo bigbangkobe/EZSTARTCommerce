@@ -16,7 +16,7 @@ type PaymentOrderRow = Prisma.ShopOrderGetPayload<{}>;
 /** 状态冲突是 409，输入问题是 422：与订单模块保持同一套映射。 */
 const CONFLICT_CODES = new Set(['VERSION_CONFLICT', 'PAYMENT_STATE_CONFLICT', 'PAYMENT_OUTCOME_NOT_ALLOWED',
   'ORDER_ALREADY_CANCELLED', 'PAYMENT_STATUS_UNKNOWN_REQUIRES_PROVIDER', 'IDEMPOTENCY_CONFLICT',
-  'PAYMENT_ALREADY_RECORDED']);
+  'PAYMENT_ALREADY_RECORDED', 'ORDER_NOT_SHIPPED']);
 
 const DEFAULT_METHODS = [
   { providerCode: 'cod', environment: 'production', displayName: 'Cash on delivery', enabled: true,

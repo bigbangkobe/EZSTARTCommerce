@@ -281,7 +281,7 @@ test('orders: masked reads, cancel, address repricing, shipping and expired-hold
     await t.test('shipments split the order, dispatch commits stock and delivery completes it', async () => {
       await resetLimits();
       const { order, item } = await makeOrder({ quantity: 2 });
-      const support = await sessionFor(['orders.read', 'shipments.manage']);
+      const support = await sessionFor(['orders.read', 'orders.update', 'orders.address_change', 'shipments.manage']);
       const stockBefore = await db.inventoryItem.findUniqueOrThrow({ where: { variantId } });
 
       assert.equal((await support.call('POST', `admin/orders/${order.id}/shipments`,
@@ -348,6 +348,9 @@ test('orders: masked reads, cancel, address repricing, shipping and expired-hold
 
     await t.test('expired holds are released and unconfirmed orders cancelled by the sweep', async () => {
       await resetLimits();
+      // 前面的子测试已在共享 SKU 上发货扣减过 onHand；先补足两件现货，否则 reserved 增量会撞上
+      // InventoryItem 的 CHECK（reserved <= onHand）。
+      await db.inventoryItem.update({ where: { variantId }, data: { onHand: { increment: 2 } } });
       const { order } = await makeOrder({ quantity: 2, expiresInMs: -60_000 });
       const orders = app!.get<OrdersService>('ORDERS');
       const reservedBefore = (await db.inventoryItem.findUniqueOrThrow({ where: { variantId } })).reserved;

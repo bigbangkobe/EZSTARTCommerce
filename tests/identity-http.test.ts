@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import { createApp } from '../apps/api/src/app.js';
 import { IdentityContracts } from '../apps/api/src/identity/contracts.js';
@@ -56,7 +58,10 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
     app = await createApp(identity); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     await t.test('migration history and dependency readiness are real', async () => {
       const migrated = await db.$queryRaw<{ count: bigint }[]>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
-      assert.equal(Number(migrated[0]!.count), 11);
+      // 迁移数跟着 packages/database/migrations 的目录走，新增迁移不需要回来改这个断言。
+      const migrationDirs = (await readdir(resolve('packages/database/migrations'), { withFileTypes: true }))
+        .filter(entry => entry.isDirectory()).length;
+      assert.equal(Number(migrated[0]!.count), migrationDirs);
       const ready = await call('health/ready', undefined, new Map(), {}, 'ReadinessStatusEnvelope');
       assert.equal(ready.status, 200);
       const zone = await db.$queryRaw<{ zone: string }[]>`SELECT current_setting('TimeZone') AS zone`;
@@ -390,8 +395,9 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
       // 没有 If-Match 的写入一律 422，不能退化成覆盖写。
       assert.equal((await call('admin/store-config', { displayName: 'X' }, jar, headers, undefined, base, 'PATCH')).status, 422);
       // 跨字段与真实时区校验：这些规则静态 schema 表达不了，必须由服务端拒绝。
-      assert.equal((await patch({ locales: ['zh-CN'] }, 1)).status, 422);
-      assert.equal((await patch({ defaultLocale: 'en' }, 1)).status, 422);
+      assert.equal((await patch({ locales: ['zh-CN', 'fr'] }, 1)).status, 422, '不受支持的语言必须拒绝');
+      assert.equal((await patch({ locales: ['zh-CN', 'zh-HK'], defaultLocale: 'en' }, 1)).status, 422,
+        'defaultLocale 必须属于 locales');
       assert.equal((await patch({ timezone: 'Mars/Olympus' }, 1)).status, 422);
       assert.equal((await patch({ featureFlags: { teleportation: true } }, 1)).status, 422);
       assert.equal((await patch({ baseCurrency: 'hkd' }, 1)).status, 422);
@@ -629,9 +635,10 @@ test('PostgreSQL 18 identity HTTP lifecycle and adversarial cases', { timeout: 1
       await db.identityRateLimit.deleteMany();
       assert.equal((await request('reset@example.test')).status, 202);
       const rotated = await db.adminPasswordReset.findUniqueOrThrow({ where: { userId: resetUser.id } });
-      assert.equal(rotated.version, 2);
+      // 版本在每次签发与核销时推进：首发 1 → 核销 2 → 重发 3。
+      assert.equal(rotated.version, 3);
       const rotatedJob = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: rotated.notificationJobId! } });
-      const secondToken = decrypt(rotatedJob.encryptedPayload!, resetUser.id, config, `password-reset:${rotatedJob.id}:2`);
+      const secondToken = decrypt(rotatedJob.encryptedPayload!, resetUser.id, config, `password-reset:${rotatedJob.id}:3`);
       const current = await db.adminUser.findUniqueOrThrow({ where: { id: resetUser.id } });
       const suspended = await call(`admin/users/${resetUser.id}`, { status: 'suspended' }, jar,
         { ...staffHeaders, 'If-Match': `"${current.version}"` }, 'AdminUserEnvelope', base, 'PATCH');

@@ -540,7 +540,12 @@ export class AfterSalesService {
       return { orderItemId: item.orderItemId, quantity: item.quantity as number,
         disposition: item.disposition as Disposition, note: this.rule(() => optionalText(item.note, 1_000)) };
     });
-    if (new Set(requested.map(item => item.orderItemId)).size !== requested.length) throw new AuthError(422, 'VALIDATION_ERROR');
+    // 同一订单行允许出现多次：一次质检可以把一行拆成「可卖 1 件 + 报废 1 件」两条记录。
+    // 数量上限因此必须按行汇总校验，而不是逐条独立校验（两条 2 件各自合法，合计却超收）。
+    const requestedByLine = new Map<string, number>();
+    for (const item of requested) {
+      requestedByLine.set(item.orderItemId, (requestedByLine.get(item.orderItemId) ?? 0) + item.quantity);
+    }
     return this.guarded(() => this.identity.withPermission(supplied, csrf, 'aftersales.inspect', async (tx, actor) => {
       const current = await this.detail(tx, id);
       await this.lock(tx, `order:${current.orderId}`);
@@ -561,10 +566,10 @@ export class AfterSalesService {
       for (const record of row.inspections) {
         inspected.set(record.orderItemId, (inspected.get(record.orderItemId) ?? 0) + record.quantity);
       }
-      for (const item of requested) {
-        if (!received.has(item.orderItemId)) throw new AuthError(422, 'VALIDATION_ERROR');
-        this.rule(() => assertInspectionQuantity(received.get(item.orderItemId) ?? 0,
-          inspected.get(item.orderItemId) ?? 0, item.quantity));
+      for (const [orderItemId, quantity] of requestedByLine) {
+        if (!received.has(orderItemId)) throw new AuthError(422, 'VALIDATION_ERROR');
+        this.rule(() => assertInspectionQuantity(received.get(orderItemId) ?? 0,
+          inspected.get(orderItemId) ?? 0, quantity));
       }
 
       for (const item of requested) {
@@ -614,10 +619,11 @@ export class AfterSalesService {
       }
       const row = await this.detail(tx, id);
       if (expectedVersion !== row.version) throw new AuthError(409, 'VERSION_CONFLICT');
-      this.rule(() => assertCaseAction(row.status, 'close'));
+      // 在途退款先报：它比「状态不允许关案」更具体，调用方直接知道要等钱结算而不是改状态。
       const open = await tx.refund.count({ where: { caseId: id,
         status: { in: ['requested', 'approved', 'processing', 'unknown'] } } });
       if (open > 0) throw new AuthError(409, 'REFUND_IN_PROGRESS');
+      this.rule(() => assertCaseAction(row.status, 'close'));
       await tx.afterSalesCase.update({ where: { id }, data: { status: 'completed', closedAt: now,
         version: { increment: 1 } } });
       await this.recordEvent(tx, id, 'closed', row.status, 'completed', reason, actor.id, `case:${id}:closed`);
@@ -715,7 +721,9 @@ export class AfterSalesService {
     }
     await this.identity.recordAudit(tx, ctx, actorId, 'refunds.requested', created.id, 'success',
       `${input.amountMinor} ${order.currency}`);
-    return created;
+    // 事件在 create 之后才写，create 的 include 拿不到：重读一次，否则响应里的 events 永远是空数组。
+    return tx.refund.findUniqueOrThrow({ where: { id: created.id },
+      include: { events: true, payment: true, order: true } });
   }
 
   /** 订单级退款（不挂案件）：用于没有建案件但确实要退钱的场景。 */

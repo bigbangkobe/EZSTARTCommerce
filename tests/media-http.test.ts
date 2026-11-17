@@ -117,7 +117,8 @@ test('media upload: short-lived target, signed byte transfer and verified comple
 
       assert.equal((await write('admin/media/complete', { objectKey, sha256: 'f'.repeat(64) })).status, 422);
       assert.equal((await write('admin/media/complete', { objectKey, sha256: 'not-a-digest' })).status, 422);
-      assert.equal((await write('admin/media/complete', { objectKey: 'media/2026/11/' + randomUUID() + '.png', sha256: digest })).status, 422);
+      assert.equal((await write('admin/media/complete', { objectKey: 'media/2026/11/' + randomUUID() + '.png', sha256: digest })).status, 404,
+        '不存在的上传对象是 404');
       assert.equal((await write('admin/media/complete', { objectKey, sha256: digest, sizeBytes: 1 })).status, 422, '未知字段按契约拒绝');
       assert.equal((await db.mediaAsset.findUniqueOrThrow({ where: { id: mediaId } })).status, 'pending');
     });

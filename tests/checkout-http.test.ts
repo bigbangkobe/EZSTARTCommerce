@@ -35,8 +35,9 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       if (token) jar.set(key, token); else jar.delete(key);
     }
     const data = response.status === 204 ? null : await response.json();
+    // 204 没有响应体，不能拿 envelope 去校验；否则每个 DELETE 都会报契约错误。
     if (response.status >= 400) contracts.assert('ErrorEnvelope', data);
-    else if (schema) contracts.assert(schema, data);
+    else if (schema && response.status !== 204) contracts.assert(schema, data);
     return { status: response.status, body: data as any, response };
   };
   const admin = (method: string, path: string, body?: unknown, schema = 'SuccessEnvelope') =>
@@ -76,8 +77,8 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
     await db.storeConfig.create({ data: { id: 1, displayName: 'Checkout Store', locales: ['zh-CN', 'zh-HK', 'en'],
       defaultLocale: 'en', baseCurrency: 'HKD', timezone: 'Asia/Hong_Kong', featureFlags: {} } });
     await db.marketProfile.create({ data: { marketCode: 'HK', enabled: true, reviewStatus: 'approved' } });
-    // 未审核通过的市场：可以存在，但不能报价。
-    await db.marketProfile.create({ data: { marketCode: 'MO', enabled: true, reviewStatus: 'pending' } });
+    // 未审核通过的市场：可以存在，但不能报价。CHECK 禁止 enabled+pending 组合，用 enabled:false 表达。
+    await db.marketProfile.create({ data: { marketCode: 'MO', enabled: false, reviewStatus: 'pending' } });
     const product = await db.product.create({ data: { status: 'active', marketCodes: ['HK'],
       translations: { create: [{ locale: 'en', name: 'Test Product', slug: 'test-product' }] } } });
     const variant = await db.productVariant.create({ data: { productId: product.id, sku: 'SKU-1',
@@ -168,7 +169,10 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       await resetLimits();
       assert.equal((await front('POST', 'storefront/cart/items', { variantId, quantity: 0 })).status, 422);
       assert.equal((await front('POST', 'storefront/cart/items', { variantId, quantity: 100 })).status, 422);
-      assert.equal((await front('POST', 'storefront/cart/items', { variantId, quantity: 6 })).status, 422);
+      // 现存 5 件：数量超过可售是业务冲突（409），不是格式错误；与 PATCH 的口径保持一致。
+      const tooMany = await front('POST', 'storefront/cart/items', { variantId, quantity: 6 });
+      assert.equal(tooMany.status, 409);
+      assert.equal(tooMany.body.error.code, 'OUT_OF_STOCK');
       assert.equal((await front('POST', 'storefront/cart/items', { variantId: randomUUID(), quantity: 1 })).status, 422);
       assert.equal((await front('POST', 'storefront/cart/items', { variantId: draftVariantId, quantity: 1 })).status, 422);
       // 契约 additionalProperties:false：客户端递过来的价格字段一律 422，不静默忽略。
@@ -184,7 +188,9 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       await resetLimits();
       const first = { id: cart.id, token: cart.token, csrf: cart.csrf };
       const lineId = (await front('GET', 'storefront/cart')).body.data.items[0].id as string;
-      assert.equal((await front('PATCH', `storefront/cart/items/${lineId}`, { quantity: 5 })).body.data.items[0].quantity, 5);
+      const patched = await front('PATCH', `storefront/cart/items/${lineId}`, { quantity: 5 });
+      assert.equal(patched.status, 200, JSON.stringify(patched.body));
+      assert.equal(patched.body.data.items[0].quantity, 5);
       assert.equal((await front('PATCH', `storefront/cart/items/${lineId}`, { quantity: 6 })).status, 409);
       assert.equal((await front('PATCH', `storefront/cart/items/${lineId}`, { quantity: 0 })).status, 422);
 
@@ -220,7 +226,7 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       // 未知券码不再“静默按原价下单”：报价直接失败，顾客立刻知道优惠没有生效。
       const unknownCoupon = await front('POST', 'storefront/checkout/quote',
         { ...quoteBody(cart.id, methodId), couponCode: ' save10 ' });
-      assert.equal(unknownCoupon.status, 409);
+      assert.equal(unknownCoupon.status, 409, JSON.stringify(unknownCoupon.body));
       assert.equal(unknownCoupon.body.error.code, 'COUPON_NOT_FOUND');
 
       const quoted = await front('POST', 'storefront/checkout/quote', quoteBody(cart.id, methodId), 'QuoteEnvelope');

@@ -128,6 +128,8 @@ export function allocateShipment(items: readonly { id: string; quantity: number 
     seen.add(line.orderItemId);
     const item = items.find(entry => entry.id === line.orderItemId) ?? fail('VALIDATION_ERROR');
     if (!Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99) fail('VALIDATION_ERROR');
+    // 超过订单行总量是输入永远不可能合法的（422）；只是在“已分配”之上超发才是状态冲突（409）。
+    if (line.quantity > item.quantity) fail('VALIDATION_ERROR');
     const remaining = item.quantity - (shipped.get(item.id) ?? 0);
     if (line.quantity > remaining) fail('SHIPMENT_QUANTITY_EXCEEDED');
     return { orderItemId: item.id, quantity: line.quantity };

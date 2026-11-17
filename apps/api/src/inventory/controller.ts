@@ -67,7 +67,7 @@ export class InventoryController extends ManagementHttp {
 
   @Patch('inventory/thresholds')
   async setThreshold(@Body() body: Record<string, unknown>, @Req() request: ApiRequest, @Res() response: ServerResponse) {
-    await this.write(request, 'InventoryThresholdRequest', body);
+    await this.write(request, 'InventoryThresholdsPatchRequest', body);
     this.send(response, request, 200, await this.inventoryService().setThreshold(cookie(request, 'ez_admin_session'),
       header(request, 'x-csrf-token'), body, this.context(request)));
   }

@@ -182,9 +182,10 @@ test('inventory: versioned adjustments, reserved-aware decreases and low-stock t
       assert.equal(stale.body.error.code, 'VERSION_CONFLICT');
 
       const updated = await manager.call('PATCH', 'admin/inventory/thresholds',
-        { variantId, lowStockLevel: 2, expectedVersion: 1 }, 'InventoryThresholdEnvelope');
+        { variantId, lowStockLevel: 5, expectedVersion: 1 }, 'InventoryThresholdEnvelope');
       assert.equal(updated.status, 200);
       assert.equal(updated.body.data.version, 2);
+      assert.equal(updated.body.data.lowStockLevel, 5);
 
       // 现存 4、预留 0、阈值 5 → 可售 4 低于阈值；售罄的 SKU-2 阈值按 0 算，同样在提醒范围内。
       const low = await manager.call('GET', 'admin/inventory?lowStock=1', undefined, 'InventoryListEnvelope');
