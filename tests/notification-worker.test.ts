@@ -74,14 +74,14 @@ test('notification worker leases, retries, expires, cancels and clears secrets i
       const message = delivered.at(-1)!;
       assert.equal(message.kind, 'password_reset'); assert.equal(message.to, fixture.user.email); assert.equal(message.locale, 'zh-CN');
       assert.equal(message.link, `${config.allowedOrigin}/admin/reset-password#${fixture.issued.token}`);
-      assert.equal(new URL(message.link).search, '');
+      assert.equal(new URL(message.link!).search, '');
       const job = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: fixture.jobId } });
       assert.equal(job.status, 'sent'); assert.equal(job.encryptedPayload, null);
       assert.equal(await worker.tick(), false);
     });
     await t.test('failure retries the same credential and terminates after five attempts', async () => {
       const fixture = await queued(); const links: string[] = [];
-      const failing = new NotificationWorker(db, config, { async send(mail) { links.push(mail.link); throw new Error(`provider leaked ${mail.link}`); } });
+      const failing = new NotificationWorker(db, config, { async send(mail) { const link = mail.link ?? ''; links.push(link); throw new Error(`provider leaked ${link}`); } });
       for (let i = 1; i <= 5; i++) {
         await db.identityNotificationJob.update({ where: { id: fixture.jobId }, data: { availableAt: new Date(0) } });
         await failing.tick();

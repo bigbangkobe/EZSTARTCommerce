@@ -164,6 +164,8 @@ model IdentityNotificationJob {
   kind String @default("invitation")
   invitationId String? @db.Uuid
   passwordResetId String? @db.Uuid
+  /// 会员验证码任务绑定到挑战行；与 kind 由数据库 CHECK 严格配对（不建 Prisma 关联，避免双向外键循环）。
+  otpChallengeId String? @db.Uuid
   targetVersion Int
   attempts Int @default(0)
   availableAt DateTime @default(now()) @db.Timestamptz(3)
@@ -576,6 +578,7 @@ model ShopOrder {
   actions OrderAction[]
   shipments Shipment[]
   addressChanges OrderAddressChange[]
+  memberLinks OrderMemberLink[]
   payments Payment[]
   paymentEvents PaymentEvent[]
   afterSalesCases AfterSalesCase[]
@@ -1075,4 +1078,83 @@ model AfterSalesEvent {
   dedupeKey String @unique
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   @@index([caseId, createdAt])
+}
+
+// 顾客档案（M10）：邮箱按规范化小写全店唯一，电话可空；顾客可以没有会员档案。
+model Customer {
+  id              String         @id @default(uuid()) @db.Uuid
+  emailNormalized String?        @unique
+  phone           String?
+  displayName     String
+  tags            String[]       @default([])
+  internalNote    String?
+  status          String         @default("active")
+  version         Int            @default(1)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
+  member          MemberProfile?
+  @@index([createdAt])
+}
+
+// 会员档案：一个顾客最多一个会员；会员号是对外标识，不承载顾客资料。
+model MemberProfile {
+  id         String            @id @default(uuid()) @db.Uuid
+  customerId String            @unique @db.Uuid
+  customer   Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  memberNo   String            @unique
+  consentRef String?
+  status     String            @default("active")
+  joinedAt   DateTime          @default(now()) @db.Timestamptz(3)
+  version    Int               @default(1)
+  createdAt  DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime          @updatedAt @db.Timestamptz(3)
+  sessions   MemberSession[]
+  orderLinks OrderMemberLink[]
+  @@index([status])
+}
+
+// 邮箱 OTP 挑战：验证码只存 HMAC 摘要，邮箱只存绑定本行的 AES-GCM 密文。
+model MemberOtpChallenge {
+  id                String    @id @db.Uuid
+  emailDigest       String
+  emailCipher       String
+  codeDigest        String
+  locale            String
+  purpose           String    @default("member_login")
+  status            String    @default("pending")
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(5)
+  notificationJobId String?   @db.Uuid
+  expiresAt         DateTime  @db.Timestamptz(3)
+  verifiedAt        DateTime? @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(3)
+  @@index([emailDigest, createdAt])
+  @@index([status, expiresAt])
+}
+
+// 会员会话：cookie 只带随机 token，库中只有 SHA-256 摘要。
+model MemberSession {
+  id          String        @id @default(uuid()) @db.Uuid
+  memberId    String        @db.Uuid
+  member      MemberProfile @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  tokenDigest String        @unique
+  status      String        @default("active")
+  expiresAt   DateTime      @db.Timestamptz(3)
+  revokedAt   DateTime?     @db.Timestamptz(3)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
+  @@index([memberId])
+}
+
+// 订单-会员关联：追加事实，不允许级联删除顾客或订单。
+model OrderMemberLink {
+  orderId  String        @db.Uuid
+  order    ShopOrder     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  memberId String        @db.Uuid
+  member   MemberProfile @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  source   String        @default("email_match")
+  linkedAt DateTime      @default(now()) @db.Timestamptz(3)
+  @@id([orderId, memberId])
+  @@index([memberId])
 }
