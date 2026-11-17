@@ -408,11 +408,12 @@ test('members: verified email login, guest order linkage and admin customer reco
       assert.equal(created.body.data.customer.id, customerId);
       assert.equal(created.body.data.consentRef, 'consent-2026-11');
       assert.equal((await admin('POST', 'admin/members', { customerId, consentRef: 'consent-2026-11' })).status, 409);
-      // 等级目录尚未落地：带 tierId 明确拒绝，而不是静默忽略。
-      const tier = await admin('POST', 'admin/members', { customerId: randomUUID(), consentRef: 'c',
+      // 等级目录已落地：未知等级号必须明确拒绝，而不是静默存成 null。
+      const tierTarget = await admin('POST', 'admin/customers', { displayName: 'Tier Target', email: 'tier@example.com' });
+      const tier = await admin('POST', 'admin/members', { customerId: tierTarget.body.data.id, consentRef: 'c',
         tierId: randomUUID() });
       assert.equal(tier.status, 422);
-      assert.equal(tier.body.error.code, 'MEMBER_TIERS_UNAVAILABLE');
+      assert.equal(tier.body.error.code, 'MEMBER_TIER_UNKNOWN');
       const list = await admin('GET', 'admin/members');
       assert.equal(list.status, 200);
       assert.ok(list.body.data.items.some((item: { customer: { id: string } }) => item.customer.id === customerId));
