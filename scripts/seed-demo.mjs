@@ -166,7 +166,18 @@ if (market.reviewStatus !== 'approved' || !market.enabled) {
   log(`市场 ${MARKET} 已启用`);
 }
 
-// 3) 演示商品
+// 3) 演示商品（商品必须有分类：契约与目录规则都不允许空 categoryIds）
+const categories = await call('GET', '/api/v1/admin/categories');
+let categoryId = (categories.body?.data?.items ?? [])[0]?.id;
+if (!categoryId) {
+  const created = must(await call('POST', '/api/v1/admin/categories', {
+    body: { translations: [{ locale: 'zh-HK', name: '家居器物' }, { locale: 'zh-CN', name: '家居器物' }], position: 0, enabled: true },
+    csrf,
+  }), '创建分类');
+  categoryId = created.id;
+  log(`分类已创建：${categoryId}`);
+}
+
 const slug = 'demo-matcha-bowl';
 const existing = await call('GET', `/api/v1/admin/products?q=${encodeURIComponent(slug)}`);
 const exists = (existing.body?.data?.items ?? []).some((item) => (item.translations ?? []).some((t) => t.slug === slug));
@@ -184,7 +195,7 @@ if (exists) {
       variants: [{ sku: 'DEMO-MATCHA-01', optionValues: { 容量: '400ml' }, priceMinor: 32800, currency }],
       // 契约要求这四项必填（即使为空数组也要显式给出）
       media: [],
-      categoryIds: [],
+      categoryIds: [categoryId],
       marketCodes: [MARKET],
     },
     csrf,
