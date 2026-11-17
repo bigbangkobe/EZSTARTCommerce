@@ -9,6 +9,7 @@ import { maskEmail, maskPhone } from '../../../../packages/domain/src/orders.js'
 import { SUPPORTED_LOCALES } from '../../../../packages/domain/src/store.js';
 import { csrf, decrypt, encrypt, equal } from '../identity/crypto.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
+import { sweepExpiredPointsInTx } from './loyalty-service.js';
 import { resolveMemberSession } from './session.js';
 
 type Tx = Prisma.TransactionClient;
@@ -180,6 +181,8 @@ export class MembersService {
     return this.db.$transaction(async tx => {
       const { member, customer } = await this.requireSession(tx, token);
       // 会员中心一次拿全：身份、等级、积分余额；流水走 /storefront/member/points。
+      // 摘要里的余额也要先清到期，否则同一个数字在档案与流水页会对不上。
+      await sweepExpiredPointsInTx(tx, member.id, new Date());
       const [account, tier, setting] = await Promise.all([
         tx.pointAccount.findUnique({ where: { memberId: member.id } }),
         member.tierId === null ? null : tx.membershipTier.findUnique({ where: { id: member.tierId } }),

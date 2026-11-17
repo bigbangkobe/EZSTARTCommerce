@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  applyDelta, earnPoints, LOYALTY_RULE_VERSION, LoyaltyRuleError, loyaltyPolicy, normalizeAdjustment,
-  normalizeSettingPatch, normalizeTierInput, normalizeTierPatch, resolveTier, tierName,
+  applyDelta, dueExpiry, earnPoints, expiryDate, LOYALTY_RULE_VERSION, LoyaltyRuleError, loyaltyPolicy,
+  normalizeAdjustment, normalizeSettingPatch, normalizeTierInput, normalizeTierPatch, resolveTier, tierName,
 } from '../packages/domain/src/loyalty.js';
 
 function rejects(fn: () => unknown, code = 'VALIDATION_ERROR') {
@@ -133,4 +133,60 @@ test('tier names fall back from the requested locale to English to any available
 
 test('the rule version is stable so historical ledger rows stay explainable', () => {
   assert.equal(LOYALTY_RULE_VERSION, 'loyalty-v1');
+});
+
+test('expiry is a snapshot taken at earn time, not a live setting', () => {
+  const earned = new Date('2026-11-17T00:00:00.000Z');
+  // 永不过期：配置为空时入账的积分一直有效。
+  assert.equal(expiryDate(earned, null), null);
+  assert.equal(expiryDate(earned, 3)?.toISOString(), '2027-02-17T00:00:00.000Z');
+  for (const months of [0, 121, 1.5, '3']) rejects(() => expiryDate(earned, months as number));
+});
+
+test('expiry consumes the oldest points first and never expires manual grants', () => {
+  const now = new Date('2026-11-17T00:00:00.000Z');
+  const past = new Date('2026-10-01T00:00:00.000Z');
+  const future = new Date('2027-01-01T00:00:00.000Z');
+  const rows = [
+    { id: 'a', deltaPoints: 100, entryType: 'adjust', sourceRef: null, expiresAt: past },
+    { id: 'b', deltaPoints: 50, entryType: 'earn', sourceRef: 'EZ-1', expiresAt: future },
+    { id: 'c', deltaPoints: -30, entryType: 'adjust', sourceRef: null, expiresAt: null },
+  ];
+  // 扣掉的 30 点先吃掉最早那一笔，于是 a 只剩 70 点该过期；b 还没到期。
+  assert.deepEqual(dueExpiry(rows, now), [{ entryId: 'a', points: 70 }]);
+});
+
+test('a deduction larger than one grant spills into the next grant', () => {
+  const now = new Date('2026-11-17T00:00:00.000Z');
+  const past = new Date('2026-10-01T00:00:00.000Z');
+  const rows = [
+    { id: 'a', deltaPoints: 100, entryType: 'earn', sourceRef: 'EZ-1', expiresAt: past },
+    { id: 'b', deltaPoints: 80, entryType: 'earn', sourceRef: 'EZ-2', expiresAt: past },
+    { id: 'c', deltaPoints: -130, entryType: 'redeem', sourceRef: null, expiresAt: null },
+  ];
+  // 130 点按先进先出扣完 a（100）再扣 b 的 30，b 剩 50 点到期。
+  assert.deepEqual(dueExpiry(rows, now), [{ entryId: 'b', points: 50 }]);
+});
+
+test('an expire entry writes off its own grant instead of consuming the oldest points', () => {
+  const now = new Date('2026-11-17T00:00:00.000Z');
+  const past = new Date('2026-10-01T00:00:00.000Z');
+  // 这正是第一版实现的缺陷：到期流水如果按先进先出扣，会吃掉更早的人工补发，
+  // 于是那笔已过期的发放又被判定为到期，清扫反复插同一条 expire。
+  const rows = [
+    { id: 'grant', deltaPoints: 500, entryType: 'adjust', sourceRef: null, expiresAt: null },
+    { id: 'spend', deltaPoints: -200, entryType: 'adjust', sourceRef: null, expiresAt: null },
+    { id: 'earn', deltaPoints: 200, entryType: 'earn', sourceRef: 'EZ-1', expiresAt: past },
+    { id: 'expire:earn', deltaPoints: -200, entryType: 'expire', sourceRef: 'earn', expiresAt: null },
+  ];
+  assert.deepEqual(dueExpiry(rows, now), []);
+  assert.deepEqual(dueExpiry([], now), []);
+  // 只有永不过期的发放（人工补发）时什么都不做。
+  assert.deepEqual(dueExpiry([{ id: 'x', deltaPoints: 10, entryType: 'adjust', sourceRef: null,
+    expiresAt: null }], now), []);
+  // 找不到原发放的 expire 行不会误伤别人的积分。
+  assert.deepEqual(dueExpiry([
+    { id: 'keep', deltaPoints: 30, entryType: 'adjust', sourceRef: null, expiresAt: null },
+    { id: 'orphan', deltaPoints: -30, entryType: 'expire', sourceRef: 'missing', expiresAt: null },
+  ], now), []);
 });

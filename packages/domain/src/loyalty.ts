@@ -225,3 +225,67 @@ export function tierName(nameByLocale: unknown, locale: string): string | null {
   }
   return null;
 }
+
+// ---- 积分到期 ---------------------------------------------------------------
+
+/**
+ * 发放时的到期快照：months 为空表示这笔积分永不过期（包括人工补发）。
+ * 快照落在 earn 行上，之后改配置不影响已入账的积分——「规则变更只影响未来」。
+ */
+export function expiryDate(earnedAt: Date, months: number | null): Date | null {
+  if (months === null || months === undefined) return null;
+  integer(months, 'pointsExpiryMonths', 1, 120);
+  const expires = new Date(earnedAt.getTime());
+  expires.setUTCMonth(expires.getUTCMonth() + months);
+  return expires;
+}
+
+export interface ExpiryLedgerEntry {
+  id: string; deltaPoints: number; entryType: string; sourceRef: string | null; expiresAt: Date | null;
+}
+export interface DueExpiry { entryId: string; points: number }
+
+/**
+ * 按先进先出计算应作废的积分：扣减永远先消耗最早的积分，所以到期也只作用于
+ * 「最早的、还没被扣掉的那部分」。entries 必须按入账顺序（createdAt, id）传入。
+ *
+ * 到期流水（entryType='expire'）是例外：它不参与先进先出，只冲销 sourceRef 指向的
+ * 那一笔发放。否则它会在队列里吃掉更早的积分，让同一笔发放被反复判定为到期。
+ *
+ * 返回值按原 earn 行分组：每条最多出现一次，points 是该行尚未被扣减且已到期的数量。
+ */
+export function dueExpiry(entries: readonly ExpiryLedgerEntry[], now: Date): DueExpiry[] {
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) fail('now');
+  const queue: { id: string; points: number; expiresAt: Date | null }[] = [];
+  for (const entry of entries) {
+    if (entry.deltaPoints > 0) {
+      queue.push({ id: entry.id, points: entry.deltaPoints, expiresAt: entry.expiresAt });
+      continue;
+    }
+    if (entry.entryType === 'expire') {
+      // 只冲自己那一笔：找不到（已被其他扣减消耗或数据异常）就跳过，绝不动别人的积分。
+      const index = entry.sourceRef === null ? -1 : queue.findIndex(portion => portion.id === entry.sourceRef);
+      if (index >= 0) {
+        const portion = queue[index]!;
+        portion.points += entry.deltaPoints;
+        if (portion.points <= 0) queue.splice(index, 1);
+      }
+      continue;
+    }
+    let remaining = -entry.deltaPoints;
+    while (remaining > 0 && queue.length > 0) {
+      const front = queue[0]!;
+      const take = Math.min(front.points, remaining);
+      front.points -= take;
+      remaining -= take;
+      if (front.points === 0) queue.shift();
+    }
+  }
+  const due: DueExpiry[] = [];
+  for (const portion of queue) {
+    if (portion.expiresAt !== null && portion.expiresAt.getTime() <= now.getTime()) {
+      due.push({ entryId: portion.id, points: portion.points });
+    }
+  }
+  return due;
+}

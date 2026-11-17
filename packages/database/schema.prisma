@@ -1222,6 +1222,7 @@ model PointLedger {
   ruleVersion    String
   idempotencyKey String   @unique
   createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  expiresAt      DateTime? @db.Timestamptz(3)
   @@index([memberId, createdAt])
   @@index([sourceType, sourceRef])
 }

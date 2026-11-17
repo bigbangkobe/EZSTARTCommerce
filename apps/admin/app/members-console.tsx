@@ -237,6 +237,7 @@ export function MembersConsole() {
         {' · '}有效期 {overview.settings.pointsExpiryMonths === null ? '永不过期' : `${overview.settings.pointsExpiryMonths} 个月`}
         {' · '}版本 {overview.settings.version}</p>
       <p><small>口径只按商品金额（小计减折扣）计算，运费与税费不积分；不足 1 点的零头直接舍去，不预支。
+        有效期是入账时的快照：改配置只影响之后发放的积分，到期未用的部分由清扫写成「到期作废」流水，不清零重记。
         暂停发放不会清零已有余额。</small></p>
       <form onSubmit={saveSettings}>
         <label className="check"><input type="checkbox" name="enabled" defaultChecked={overview.settings.enabled}

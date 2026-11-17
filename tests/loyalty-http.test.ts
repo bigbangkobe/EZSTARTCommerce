@@ -123,7 +123,9 @@ test('loyalty: tier ladder, idempotent point ledger and order-completion earning
 
       // 没有 If-Match 的写入不收：乐观并发是硬要求，不是体面的建议。
       assert.equal((await admin('PATCH', 'admin/loyalty/settings', { enabled: true })).status, 422);
-      const enabled = await adminIf('PATCH', 'admin/loyalty/settings', { enabled: true, minorPerPoint: 100 }, '"1"');
+      // 同时开启 1 个月有效期：后面那笔订单发放会带上到期快照，用来验证过期清扫。
+      const enabled = await adminIf('PATCH', 'admin/loyalty/settings',
+        { enabled: true, minorPerPoint: 100, pointsExpiryMonths: 1 }, '"1"');
       assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
       assert.equal(enabled.body.data.enabled, true);
       assert.equal(enabled.body.data.version, 2);
@@ -374,6 +376,81 @@ test('loyalty: tier ladder, idempotent point ledger and order-completion earning
       assert.equal(refused.status, 422);
       assert.equal(refused.body.error.code, 'MEMBER_TIER_RETIRED');
       assert.equal((await db.memberProfile.findUniqueOrThrow({ where: { id: memberId } })).tierId, tierId);
+    });
+
+    await t.test('an expired grant is swept into one append-only expire entry, on read', async () => {
+      // 发放路径写的是快照：这笔订单积分带着到期时间，人工补发没有。
+      const ordered = await db.pointLedger.findFirstOrThrow({ where: { memberId, entryType: 'earn' } });
+      assert.ok(ordered.expiresAt, 'order earning carries an expiry snapshot');
+      assert.equal((await db.pointLedger.findFirstOrThrow({ where: { memberId, entryType: 'adjust' } })).expiresAt, null);
+
+      // 流水不可改（追加式触发器），所以过期场景用一位新会员、直接按旧时间入账来构造。
+      const email = 'expiry@example.com';
+      const customer = await admin('POST', 'admin/customers', { displayName: 'Expiry Member', email });
+      assert.equal(customer.status, 201, JSON.stringify(customer.body));
+      const joined = await admin('POST', 'admin/members', { customerId: customer.body.data.id, consentRef: 'consent-expiry' });
+      assert.equal(joined.status, 201, JSON.stringify(joined.body));
+      const expiringId = joined.body.data.id as string;
+
+      const days = (count: number) => new Date(Date.now() - count * 86_400_000);
+      const row = (id: string, deltaPoints: number, balanceAfter: number, createdAt: Date, extra: Record<string, unknown> = {}) => ({
+        id, memberId: expiringId, deltaPoints, balanceAfter, entryType: 'adjust', sourceType: 'manual',
+        reasonCode: 'goodwill', ruleVersion: 'loyalty-v1', idempotencyKey: `seed-${id}`, createdAt, ...extra });
+      // 时间线：+500（100 天前）→ −200（99 天前）→ +200 订单积分（75 天前，15 天前到期）。
+      // 合计 500 与账户余额一致；FIFO 扣减已吃掉最早那笔 200，剩下到期的正好是订单积分。
+      await db.pointLedger.createMany({ data: [
+        row('11111111-1111-4111-8111-111111111111', 500, 500, days(100)),
+        row('22222222-2222-4222-8222-222222222222', -200, 300, days(99)),
+        row('33333333-3333-4333-8333-333333333333', 200, 500, days(75), { entryType: 'earn', sourceType: 'order',
+          sourceRef: 'EZ-EXPIRY-TEST', reasonCode: 'order_completed', expiresAt: days(15) }),
+      ] });
+      await db.pointAccount.create({ data: { memberId: expiringId, balance: 500 } });
+
+      // 会员端登录这位新会员后读账：读之前先清扫，拿到的就是可用余额。
+      await resetLimits();
+      const requested = await front('POST', 'storefront/member/otp/request', { email, locale: 'en',
+        purpose: 'member_login' }, 'OtpChallengeEnvelope');
+      assert.equal(requested.status, 202);
+      const job = await db.identityNotificationJob.findFirstOrThrow({ where: { kind: 'member_otp',
+        otpChallengeId: requested.body.data.challengeId } });
+      const payload = JSON.parse(decrypt(job.encryptedPayload!, requested.body.data.challengeId, config, 'member-otp')) as
+        { code: string };
+      const verified = await front('POST', 'storefront/member/otp/verify',
+        { challengeId: requested.body.data.challengeId, code: payload.code });
+      assert.equal(verified.status, 200, JSON.stringify(verified.body));
+      assert.equal((await front('GET', 'storefront/member/profile')).body.data.memberNo, joined.body.data.memberNo);
+
+      const points = await front('GET', 'storefront/member/points');
+      assert.equal(points.status, 200, JSON.stringify(points.body));
+      assert.equal(points.body.data.balance, 300);
+      assert.equal(points.body.data.items[0].entryType, 'expire');
+      assert.equal(points.body.data.items[0].deltaPoints, -200);
+      assert.equal(points.body.data.items[0].balanceAfter, 300);
+      assert.equal(points.body.data.items[0].reasonCode, 'points_expired');
+      // 过期不是删除：流水指回原来那笔发放。
+      assert.equal(points.body.data.items[0].sourceRef, '33333333-3333-4333-8333-333333333333');
+
+      // 档案摘要与流水页必须一致：两边读之前都会先清扫。
+      assert.equal((await front('GET', 'storefront/member/profile')).body.data.loyalty.balance, 300);
+
+      // 再读一次不产生新流水：幂等键 expire:{earnId} 与 FIFO 双重保证。
+      await front('GET', 'storefront/member/points');
+      assert.equal(await db.pointLedger.count({ where: { memberId: expiringId, entryType: 'expire' } }), 1);
+      assert.equal((await db.pointLedger.findFirstOrThrow({ where: { memberId: expiringId, entryType: 'expire' } }))
+        .idempotencyKey, 'expire:33333333-3333-4333-8333-333333333333');
+
+      // 余额已经是 300：扣 400 必须被拒，不能拿已过期的点透支。
+      const overdraw = await request('POST', `admin/members/${expiringId}/points-adjustments`,
+        { deltaPoints: -400, reasonCode: 'correction', reason: 'Reverse after expiry' },
+        { Origin: origin, 'X-CSRF-Token': adminCsrf, 'Idempotency-Key': 'loyalty-expiry-0001' });
+      assert.equal(overdraw.status, 409, JSON.stringify(overdraw.body));
+      assert.equal(overdraw.body.error.code, 'POINT_BALANCE_INSUFFICIENT');
+
+      // 后台看同一笔账：同样先清扫，数字与会员端一致。
+      const backoffice = await admin('GET', `admin/members/${expiringId}/points`);
+      assert.equal(backoffice.status, 200);
+      assert.equal(backoffice.body.data.balance, 300);
+      assert.equal(backoffice.body.data.items[0].entryType, 'expire');
     });
   } finally {
     if (app) await app.close();

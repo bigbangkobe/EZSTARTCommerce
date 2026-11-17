@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import {
-  applyDelta, earnPoints, LOYALTY_RULE_VERSION, LoyaltyRuleError, normalizeAdjustment,
+  applyDelta, dueExpiry, earnPoints, expiryDate, LOYALTY_RULE_VERSION, LoyaltyRuleError, normalizeAdjustment,
   normalizeSettingPatch, normalizeTierInput, normalizeTierPatch, resolveTier,
 } from '../../../../packages/domain/src/loyalty.js';
 import { maskEmail } from '../../../../packages/domain/src/orders.js';
@@ -154,6 +154,8 @@ export class LoyaltyService {
       const input = this.rule(() => normalizeAdjustment(body));
       const key = `admin-adjust:${idempotencyKey}`;
       await this.lock(tx, `member-points:${memberId}`);
+      // 先清出到期积分再算可用余额：过期的点不能拿来抵扣。
+      await sweepExpiredPointsInTx(tx, memberId, now);
       const replay = await tx.pointLedger.findUnique({ where: { idempotencyKey: key } });
       if (replay) {
         if (replay.memberId !== memberId || replay.deltaPoints !== input.deltaPoints) {
@@ -195,6 +197,8 @@ export class LoyaltyService {
       const member = await tx.memberProfile.findUnique({ where: { id: memberId },
         include: { customer: true, tier: true } });
       if (!member) throw new AuthError(404, 'NOT_FOUND');
+      // 读也要先清到期：否则「账上 500 点」里有一部分其实已经不能用了。
+      await sweepExpiredPointsInTx(tx, memberId, new Date());
       if (cursor && !await tx.pointLedger.findFirst({ where: { id: cursor, memberId } })) {
         throw new AuthError(422, 'VALIDATION_ERROR');
       }
@@ -225,7 +229,9 @@ export class LoyaltyService {
   /** 会员只看自己的账：余额、等级与最近流水。 */
   async memberPoints(token: string, limit: number, cursor: string | null) {
     return this.db.$transaction(async tx => {
-      const { member } = await resolveMemberSession(tx, token);
+      const { member, now } = await resolveMemberSession(tx, token);
+      // 读到期的账：清扫在同一个事务里完成，前端拿到的余额与流水永远是一致的。
+      await sweepExpiredPointsInTx(tx, member.id, now);
       const setting = await this.setting(tx);
       const tier = member.tierId === null ? null : await tx.membershipTier.findUnique({ where: { id: member.tierId } });
       if (cursor && !await tx.pointLedger.findFirst({ where: { id: cursor, memberId: member.id } })) {
@@ -266,6 +272,8 @@ export async function awardOrderPointsInTx(tx: Tx, orderId: string, now: Date): 
   const setting = await tx.loyaltySetting.findUnique({ where: { id: 1 } });
   if (!setting?.enabled) return { awarded: 0 };
   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'member-points:' + link.memberId}))::text`;
+  // 先把到期积分清掉，再累加本次：否则旧积分已经过期，新账却按虚高的余额入账。
+  await sweepExpiredPointsInTx(tx, link.memberId, now);
   const member = await tx.memberProfile.findUnique({ where: { id: link.memberId } });
   if (!member || member.status !== 'active') return { awarded: 0 };
   const key = `order:${orderId}:earn`;
@@ -285,6 +293,44 @@ export async function awardOrderPointsInTx(tx: Tx, orderId: string, now: Date): 
   await tx.pointAccount.update({ where: { id: account.id }, data: { balance, updatedAt: now, version: { increment: 1 } } });
   await tx.pointLedger.create({ data: { id: randomUUID(), memberId: member.id, deltaPoints: points, balanceAfter: balance,
     entryType: 'earn', sourceType: 'order', sourceRef: order.publicOrderNumber, reasonCode: 'order_completed',
+    // 到期是发放时的快照：之后调整有效期只影响新发的积分。
+    expiresAt: expiryDate(now, setting.pointsExpiryMonths),
     ruleVersion: LOYALTY_RULE_VERSION, idempotencyKey: key, createdAt: now } });
   return { awarded: points };
+}
+
+/**
+ * 积分到期的懒清扫（在调用方事务内执行）。
+ *
+ * 为什么不在定时任务里扫：生产上 worker 可能没起，而「账上还有多少点能用」这件事
+ * 任何时候被读到都必须是对的。所以凡是读余额（会员中心、后台看账）或改余额
+ * （发放、人工调整）的地方，都先跑一遍这里——扫出来的只是应得的那几笔 expire 流水。
+ *
+ * 三条保证：
+ * 1. 幂等：每笔 expire 的幂等键是 `expire:{原 earn 行 id}`，且 FIFO 会先把已有 expire
+ *    当作扣减消耗掉，所以同一笔积分最多过期一次，重复调用不产生新流水。
+ * 2. 可追溯：expire 行用 sourceRef 指回原 earn 行，余额从不清零重记。
+ * 3. 不越过余额：FIFO 的剩余量本身等于账户余额，applyDelta 仍会兜底拒绝负数。
+ */
+export async function sweepExpiredPointsInTx(tx: Tx, memberId: string, now: Date): Promise<number> {
+  // 先锁再读：两个并发的读同时扫到同一笔到期，也不会各写一条 expire。
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'member-points:' + memberId}))::text`;
+  const rows = await tx.pointLedger.findMany({ where: { memberId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+  // 绝大多数会员没有任何带到期时间的发放：不必建账户、不必再查。
+  if (!rows.some(row => row.expiresAt !== null)) return 0;
+  const due = dueExpiry(rows.map(row => ({ id: row.id, deltaPoints: row.deltaPoints, entryType: row.entryType,
+    sourceRef: row.sourceRef, expiresAt: row.expiresAt })), now);
+  if (!due.length) return 0;
+  const existing = await tx.pointAccount.findUnique({ where: { memberId } });
+  const account = existing ?? await tx.pointAccount.create({ data: { memberId, createdAt: now, updatedAt: now } });
+  let balance = account.balance;
+  for (const part of due) {
+    balance = applyDelta(balance, -part.points);
+    await tx.pointLedger.create({ data: { id: randomUUID(), memberId, deltaPoints: -part.points, balanceAfter: balance,
+      entryType: 'expire', sourceType: 'system', sourceRef: part.entryId, reasonCode: 'points_expired',
+      ruleVersion: LOYALTY_RULE_VERSION, idempotencyKey: `expire:${part.entryId}`, createdAt: now } });
+  }
+  await tx.pointAccount.update({ where: { id: account.id }, data: { balance, updatedAt: now, version: { increment: 1 } } });
+  return due.reduce((sum, part) => sum + part.points, 0);
 }

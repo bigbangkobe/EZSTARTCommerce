@@ -154,6 +154,11 @@ export default function MemberPage() {
               ? `每消費 ${formatMinor(profile.loyalty.minorPerPoint, 'HKD')} 可累積 1 分，訂單全部送達後入帳。`
               : '積分功能尚未啟用，你的消費仍會計入會員等級。'}
           </p>
+          {points?.pointsExpiryMonths ? (
+            <p className="form-note">
+              積分自入帳起 {points.pointsExpiryMonths} 個月內有效；到期而未使用的部分會自動扣除，並記在積分記錄裡。
+            </p>
+          ) : null}
           {profile.loyalty.tier && profile.loyalty.tier.benefits.length > 0 && (
             <ul className="member-benefits">
               {profile.loyalty.tier.benefits.map((benefit) => <li key={benefit}>{benefit}</li>)}
