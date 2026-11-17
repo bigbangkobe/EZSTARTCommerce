@@ -3,6 +3,8 @@
 //   2) 配置店铺 + 开通 HK 市场（含合规审核记录）
 //   3) 建一个演示商品、发布到该市场、补库存
 //   4) 校验前台接口确实能看到它
+//   5) 配置运费（HK 区域 + 标准费率，含 COD 开关）
+//   6) 游客完整下单链路：购物袋 → 加购 → 报价 → COD 下单，管理端核对
 //
 // 用法（服务器上，compose 目录内）：
 //   sudo docker compose run --rm --no-deps -T \
@@ -10,7 +12,7 @@
 //     -v "$PWD/../../..:/repo:ro" \
 //     api node /repo/scripts/seed-demo.mjs
 //
-// 幂等：已建过账号则用 /secrets/admin.json 里的凭据登录；已存在的商品/市场会跳过创建。
+// 幂等：已建过账号则用 /secrets/admin.json 里的凭据登录；商品/市场/运费/订单都会查重后跳过。
 import { createHmac, randomBytes, createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 
@@ -254,3 +256,138 @@ must(front, '前台商品列表');
 const visible = (front.body.data.items ?? []).find((item) => item.slug === slug);
 if (!visible) die('前台看不到演示商品', front.body.data);
 log(`✅ 前台可见：${visible.name} / ${visible.variants.length} 个规格 / inStock=${visible.inStock}`);
+
+// 7) 运费配置：HK 区域 + 标准配送费率
+//    COD（货到付款）能否在结账时可用，取决于费率上的 codEnabled，必须显式开启。
+const zoneList = must(await call('GET', '/api/v1/admin/shipping/zones'), '读取运费区域');
+const ZONE_CODE = 'HK-ALL';
+let zoneId = (zoneList.items ?? []).find((z) => z.code === ZONE_CODE)?.id;
+if (!zoneId) {
+  zoneId = must(await call('POST', '/api/v1/admin/shipping/zones', {
+    body: {
+      code: ZONE_CODE,
+      nameByLocale: { 'zh-HK': '香港全境', 'zh-CN': '香港全境', en: 'Hong Kong (all districts)' },
+      countryCodes: ['HK'], regionCodes: [], priority: 0, enabled: true,
+    },
+    csrf,
+  }), '创建运费区域').id;
+  log(`运费区域已创建：${ZONE_CODE}`);
+} else {
+  log(`运费区域已存在：${ZONE_CODE}`);
+}
+
+const RATE_CODE = 'STD-HK';
+const rateList = must(await call('GET', '/api/v1/admin/shipping/rates'), '读取运费费率');
+let rate = (rateList.items ?? []).find((r) => r.code === RATE_CODE);
+if (!rate) {
+  rate = must(await call('POST', '/api/v1/admin/shipping/rates', {
+    body: {
+      code: RATE_CODE,
+      nameByLocale: { 'zh-HK': '標準配送（2-5個工作日）', 'zh-CN': '标准配送（2-5个工作日）', en: 'Standard delivery (2-5 business days)' },
+      zoneIds: [zoneId],
+      fixedFeeMinor: 3000,          // HK$30
+      freeAboveMinor: 80000,        // 满 HK$800 免运
+      currency,
+      estimatedMinDays: 2,
+      estimatedMaxDays: 5,
+      codEnabled: true,             // COD 依赖这个开关
+      enabled: true,
+    },
+    csrf,
+  }), '创建运费费率');
+  log(`运费费率已创建：${RATE_CODE}（HK$30，满 HK$800 免运，支持 COD）`);
+} else if (!rate.codEnabled) {
+  // 已存在但没开 COD：补开，否则结账选不到货到付款
+  must(await call('PATCH', `/api/v1/admin/shipping/rates/${rate.id}`, {
+    body: { codEnabled: true, enabled: true }, csrf, ifMatch: rate.version,
+  }), '开启费率 COD');
+  log(`运费费率 ${RATE_CODE} 已补开 COD`);
+} else {
+  log(`运费费率已存在：${RATE_CODE}`);
+}
+const rateId = rate.id;
+
+// 8) 游客完整下单链路：建购物袋 → 加购 → 报价 → COD 下单
+//    幂等：先查管理端是否已有演示订单（customerNote 唯一标识），有则跳过。
+const DEMO_NOTE = 'seed-demo-order';
+const existingOrders = must(await call('GET', `/api/v1/admin/orders?q=${encodeURIComponent(DEMO_NOTE)}&limit=10`), '查询演示订单');
+const hasDemoOrder = (existingOrders.items ?? []).length > 0;
+
+if (hasDemoOrder) {
+  log('演示订单已存在，跳过下单链路');
+} else {
+  // 游客侧是独立的 cookie 世界，不能混用管理端会话
+  const guestJar = new Map();
+  async function guest(method, path, { body, csrf, idempotency } = {}) {
+    const headers = {};
+    if (body !== undefined) headers['content-type'] = 'application/json';
+    if (method !== 'GET') headers.origin = ORIGIN;
+    if (csrf) headers['x-csrf-token'] = csrf;
+    if (idempotency) headers['idempotency-key'] = idempotency;
+    if (guestJar.size) headers.cookie = [...guestJar].map(([k, v]) => `${k}=${v}`).join('; ');
+    const response = await fetch(`${BASE}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    for (const raw of response.headers.getSetCookie?.() ?? []) {
+      const [pair] = raw.split(';');
+      const index = pair.indexOf('=');
+      const name = pair.slice(0, index).trim();
+      const value = pair.slice(index + 1).trim();
+      if (value === '') guestJar.delete(name); else guestJar.set(name, value);
+    }
+    const text = await response.text();
+    let json;
+    try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
+    return { status: response.status, body: json };
+  }
+
+  // 8.1) 建购物袋（响应里种下 ez_guest_cart + ez_cart_csrf 两个 cookie）
+  const cart = must(await guest('POST', '/api/v1/storefront/cart', { body: {} }), '创建购物袋');
+  const cartCsrf = guestJar.get('ez_cart_csrf');
+  if (!cartCsrf) die('购物袋 CSRF cookie 缺失');
+  log(`购物袋已创建：${cart.cartId}（${cart.currency}）`);
+
+  // 8.2) 加购演示商品 ×1（购物袋 CSRF 是双提交：cookie 值原样放请求头）
+  const added = must(await guest('POST', '/api/v1/storefront/cart/items', {
+    body: { variantId: variant.id, quantity: 1 }, csrf: cartCsrf,
+  }), '加购');
+  if (!added.items.some((item) => item.variantId === variant.id)) die('加购结果异常', added);
+  log(`已加购：${added.items[0].productName} ×1（小计 ${added.subtotalMinor}）`);
+
+  // 8.3) 报价（HK 地址命中 STD-HK 费率；政策同意任意 key，前台上线前应换成真实政策版本）
+  const quote = must(await guest('POST', '/api/v1/storefront/checkout/quote', {
+    body: {
+      cartId: cart.cartId,
+      locale: 'zh-HK',
+      marketCode: MARKET,
+      contact: { fullName: '陳大文', phone: '+85291234567' },
+      shippingAddress: {
+        recipientName: '陳大文', phone: '+85291234567',
+        countryCode: 'HK', city: '香港', district: '油尖旺區',
+        addressLine1: '彌敦道 1 號演示大廈 3 樓 301 室',
+      },
+      shippingMethodId: rateId,
+      policyAcceptances: [{ policyKey: 'terms-of-service', version: 'demo-v1', accepted: true }],
+    },
+    csrf: cartCsrf,
+  }), '报价');
+  log(`报价完成：小計 ${quote.subtotalMinor} / 運費 ${quote.shippingMinor} / 合計 ${quote.totalMinor}（有效期至 ${quote.expiresAt}）`);
+
+  // 8.4) COD 下单（幂等键防重复提交）
+  const order = must(await guest('POST', '/api/v1/storefront/checkout/orders', {
+    body: {
+      quoteId: quote.quoteId,
+      confirmedQuoteVersion: quote.version,
+      paymentMethodCode: 'cod',
+      customerNote: DEMO_NOTE,
+    },
+    csrf: cartCsrf,
+    idempotency: `seed-demo-${quote.quoteId}`,
+  }), '下单');
+  log(`✅ 订单已创建：${order.publicOrderNumber}（${order.orderStatus} / ${order.paymentStatus}，HK$${order.totalMinor / 100}）`);
+  if (order.paymentAction?.instructions) log(`付款说明：${order.paymentAction.instructions}`);
+}
+
+// 9) 管理端核对：订单确实可见
+const ordersFinal = must(await call('GET', `/api/v1/admin/orders?q=${encodeURIComponent(DEMO_NOTE)}&limit=10`), '管理端订单核对');
+const demoOrders = ordersFinal.items ?? [];
+if (demoOrders.length < 1) die('管理端看不到演示订单');
+log(`✅ 管理端可见 ${demoOrders.length} 笔演示订单（最新：${demoOrders[0].publicOrderNumber}，${demoOrders[0].paymentStatus}）`);
