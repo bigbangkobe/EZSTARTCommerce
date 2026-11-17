@@ -29,7 +29,7 @@ const die = (message, detail) => {
 };
 
 // ---------------- HTTP ----------------
-async function call(method, path, { body, csrf, ifMatch, idempotency, cookies = true } = {}) {
+async function call(method, path, { body, csrf, ifMatch, idempotency, bootstrapToken, cookies = true } = {}) {
   const headers = {};
   if (body !== undefined) headers['content-type'] = 'application/json';
   // 写接口会校验 Origin 必须等于 APP_ORIGIN
@@ -37,6 +37,7 @@ async function call(method, path, { body, csrf, ifMatch, idempotency, cookies = 
   if (csrf) headers['x-csrf-token'] = csrf;
   if (ifMatch !== undefined) headers['if-match'] = `"${ifMatch}"`;
   if (idempotency) headers['idempotency-key'] = idempotency;
+  if (bootstrapToken) headers['x-bootstrap-token'] = bootstrapToken;
   if (cookies && jar.size) headers.cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
 
   const response = await fetch(`${BASE}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -96,7 +97,7 @@ async function loginExisting(creds) {
 async function bootstrapOwner() {
   const password = `Demo-${randomBytes(9).toString('base64url')}9aA`;
   const start = await call('POST', '/api/v1/admin/auth/bootstrap',
-    { body: { email: OWNER_EMAIL, password, displayName: 'IN先生 店主', locale: 'zh-HK' }, cookies: false });
+    { body: { email: OWNER_EMAIL, password, displayName: 'IN先生 店主', locale: 'zh-HK' }, bootstrapToken: BOOTSTRAP_TOKEN, cookies: false });
   if (start.status === 409) die('账号已存在但 /secrets/admin.json 缺失，无法继续（需人工恢复 TOTP 或重置）', start.body);
   const challengeId = must(start, '创建店主账号').challengeId;
 
