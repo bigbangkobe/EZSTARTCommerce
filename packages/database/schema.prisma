@@ -178,6 +178,8 @@ model IdentityNotificationJob {
   sentAt DateTime? @db.Timestamptz(3)
   invitation AdminInvitation? @relation(fields: [invitationId], references: [id], onDelete: Restrict)
   passwordReset AdminPasswordReset? @relation(fields: [passwordResetId], references: [id], onDelete: Restrict)
+  /// 自检邮件的收件人掩码：明文只在密文里，发送成功后密文销毁，掩码留作记录。
+  maskedTarget String?
   encryptedPayload String?
   expiresAt DateTime @db.Timestamptz(3)
   status String @default("pending")

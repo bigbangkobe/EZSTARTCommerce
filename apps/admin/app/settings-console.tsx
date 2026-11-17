@@ -6,11 +6,14 @@ type Config = { displayName: string; locales: string[]; defaultLocale: string; b
   featureFlags: Record<string, boolean>; marketProfiles: Market[];
   brandAssets: { logoMediaId: string | null; faviconMediaId: string | null }; version: number; updatedAt: string };
 type Session = { permissionCodes: string[]; csrfToken: string };
+type MailTestJob = { id: string; recipientMasked: string; status: string; attempts: number;
+  lastErrorCode: string | null; createdAt: string; sentAt: string | null };
 
 const LOCALES = [['zh-CN', '简体中文'], ['zh-HK', '繁體中文'], ['en', 'English']] as const;
 const FLAGS = [['guestCheckout', '访客结账'], ['memberOtpLogin', '会员验证码登录'], ['codPayment', '货到付款'],
   ['onlinePayment', '线上支付'], ['ageVerification', '年龄验证']] as const;
 const STATUS: Record<string, string> = { pending: '待审核', approved: '已通过', rejected: '已拒绝', revoked: '已撤销', expired: '已过期' };
+const MAIL_STATUS: Record<string, string> = { pending: '待发送', processing: '发送中', sent: '已送达', failed: '失败', cancelled: '已取消' };
 
 export function SettingsConsole() {
   const session = useRef<Session | null>(null); const [permissions, setPermissions] = useState<string[]>([]);
@@ -18,7 +21,9 @@ export function SettingsConsole() {
   const [ready, setReady] = useState(false); const [busy, setBusy] = useState(false);
   const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const [newMarket, setNewMarket] = useState('');
+  const [tests, setTests] = useState<MailTestJob[]>([]);
   const canManage = permissions.includes('store.settings.manage');
+  const canSeeMail = permissions.includes('notifications.read');
 
   async function request<T>(path: string, method = 'GET', body?: object, version?: number): Promise<{ data: T; etag: string | null }> {
     const response = await fetch(`/api/v1/admin/${path}`, { method, credentials: 'same-origin', cache: 'no-store', headers: {
@@ -45,6 +50,20 @@ export function SettingsConsole() {
     setConfig(config.data); setReady(true);
   }
   useEffect(() => { reload().catch(reason => setError(reason instanceof Error ? reason.message : '加载失败。')); }, []);
+  // 邮件自检与店铺设置是两回事：有 notifications.read 就能看，哪怕没有设置权限。
+  useEffect(() => { if (canSeeMail) request<{ items: MailTestJob[] }>('mail/test?limit=10')
+    .then(current => setTests(current.data.items)).catch(() => {}); }, [canSeeMail]);
+
+  function sendTestMail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    void run(async () => {
+      await request('mail/test', 'POST', { recipient: values.get('recipient'), locale: 'zh-HK' });
+      const current = await request<{ items: MailTestJob[] }>('mail/test?limit=10');
+      setTests(current.data.items);
+      setNotice('测试邮件已入队，由通知 worker 投递；几分钟内未收到的话，请在下方核对任务状态。');
+    });
+  }
 
   async function run(action: () => Promise<void>) {
     if (busy) return; setBusy(true); setError(''); setNotice('');
@@ -151,5 +170,21 @@ export function SettingsConsole() {
         <form onSubmit={addMarket}><label>新增市场代码<input value={newMarket} onChange={event => setNewMarket(event.target.value)} placeholder="如 HK" maxLength={16} /></label><button disabled={busy}>建立市场档案</button></form>
       </section>
     </>}
+    {ready && canSeeMail && <section aria-labelledby="mail-title"><h2 id="mail-title">邮件自检</h2>
+      <p>会员验证码与员工邀请都经同一条通知队列投递。发一封测试邮件即可验证 SMTP 凭据与 worker 是否正常；
+        任务一直停在「待发送」通常意味着 worker 没有启动，或 SMTP 配置仍为空。</p>
+      {permissions.includes('notifications.manage') && <form onSubmit={sendTestMail}>
+        <label>收件邮箱<input name="recipient" type="email" required maxLength={320} placeholder="you@example.com" /></label>
+        <button disabled={busy}>发送测试邮件</button>
+      </form>}
+      {tests.length > 0 && <table><thead><tr><th>时间</th><th>收件人</th><th>状态</th><th>尝试</th><th>结果</th></tr></thead>
+        <tbody>{tests.map(job => <tr key={job.id}>
+          <td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td>
+          <td>{job.recipientMasked ?? '—'}</td>
+          <td>{MAIL_STATUS[job.status] ?? job.status}</td>
+          <td>{job.attempts}</td>
+          <td>{job.sentAt ? new Date(job.sentAt).toLocaleString('zh-CN') : (job.lastErrorCode ?? '')}</td>
+        </tr>)}</tbody></table>}
+    </section>}
   </main>;
 }

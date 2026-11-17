@@ -55,7 +55,7 @@ export class NotificationWorker {
     const where = { id, status: 'processing', leaseToken: lease };
     const cancel = () => this.db.identityNotificationJob.updateMany({ where,
       data: { status: 'cancelled', encryptedPayload: null, leaseToken: null, leaseExpiresAt: null } });
-    let delivery: { to: string; locale: string; expiresAt: Date; kind: 'invitation' | 'password_reset' | 'member_otp'; purpose: string; link?: (secret: string) => string } | null = null;
+    let delivery: { to: string; locale: string; expiresAt: Date; kind: 'invitation' | 'password_reset' | 'member_otp' | 'admin_mail_test'; purpose: string; link?: (secret: string) => string } | null = null;
     if (leased && job.kind === 'invitation' && job.invitation) {
       const invitation = job.invitation; const actor = invitation.inviter; const target = invitation.user;
       const owned = new Set(actor.roles.flatMap(link => link.role.permissionCodes));
@@ -74,6 +74,9 @@ export class NotificationWorker {
       // 目标邮箱只在密文里：这里先拿不到收件人，等解密后再填。
       const valid = challenge.status === 'pending' && challenge.notificationJobId === id && challenge.expiresAt > now;
       if (valid) delivery = { to: '', locale: challenge.locale, kind: 'member_otp', expiresAt: challenge.expiresAt, purpose: `member-otp:${id}` };
+    } else if (leased && job.kind === 'admin_mail_test') {
+      // 自检邮件不绑目标行：收件人与语言都在密文里，解密后再发。
+      if (job.expiresAt > now) delivery = { to: '', locale: 'en', kind: 'admin_mail_test', expiresAt: job.expiresAt, purpose: `admin-mail-test:${id}` };
     }
     if (!delivery) { await cancel(); return true; }
     try {
@@ -86,6 +89,13 @@ export class NotificationWorker {
         if (expected !== challenge!.codeDigest) throw new Error('INVALID_PAYLOAD');
         await this.sender.send({ id, kind: 'member_otp', to: payload.email, locale: challenge!.locale,
           code: payload.code, expiresAt: challenge!.expiresAt });
+      } else if (delivery.kind === 'admin_mail_test') {
+        // 自检邮件的收件人与语言在密文里，AAD 绑任务行本身；密文被换掉就解不开，不发送。
+        const raw = decrypt(job.encryptedPayload!, job.id, this.config, 'admin-mail-test');
+        const payload = JSON.parse(raw) as { email?: unknown; locale?: unknown };
+        if (typeof payload.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) throw new Error('INVALID_PAYLOAD');
+        await this.sender.send({ id, kind: 'admin_mail_test', to: payload.email,
+          locale: typeof payload.locale === 'string' && payload.locale ? payload.locale : 'en', expiresAt: job.expiresAt });
       } else {
         const secret = decrypt(job.encryptedPayload!, job.kind === 'invitation' ? job.invitation!.userId : job.passwordReset!.userId, this.config, delivery.purpose);
         const expected = job.kind === 'invitation' ? job.invitation!.tokenDigest : job.passwordReset!.tokenDigest;

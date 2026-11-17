@@ -2009,6 +2009,24 @@ export interface paths {
         patch: operations["updatePrivacySettings"];
         trace?: never;
     };
+    "/admin/mail/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent mail self-test attempts; the queue is the real delivery path, so a stuck pending job means the worker is not running */
+        get: operations["listMailTests"];
+        put?: never;
+        /** Queue a self-test email; the worker delivers it through the same path as member verification codes */
+        post: operations["createMailTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/coupons": {
         parameters: {
             query?: never;
@@ -4150,6 +4168,39 @@ export interface components {
             dueAt?: string;
             reason: string;
         } | unknown | unknown;
+        MailTestRequest: {
+            /** @description The plaintext address exists only inside the encrypted queue payload; lists only ever show the mask. */
+            recipient: string;
+            /** @enum {string} */
+            locale?: "en" | "zh-CN" | "zh-HK";
+        };
+        MailTestJob: {
+            /** Format: uuid */
+            id: string;
+            recipientMasked: string;
+            /** @enum {string} */
+            status: "pending" | "processing" | "cancelled" | "sent" | "failed";
+            attempts: number;
+            lastErrorCode: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            sentAt: string | null;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        MailTestJobEnvelope: {
+            data: components["schemas"]["MailTestJob"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        MailTestJobListEnvelope: {
+            data: {
+                items: components["schemas"]["MailTestJob"][];
+                hasMore: boolean;
+                nextCursor: string | null;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** @description usedCount = reserved + redeemed - returned. Only reserved and redeemed consume quota. */
         CouponUsage: {
             reservedCount: number;
@@ -8581,6 +8632,63 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    listMailTests: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest test jobs, newest first */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailTestJobListEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    createMailTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Job queued; poll the list endpoint for sent/failed status */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailTestJobEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["UnexpectedError"];
         };
     };

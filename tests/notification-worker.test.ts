@@ -164,3 +164,43 @@ test('notification worker leases, retries, expires, cancels and clears secrets i
     });
   } finally { await db.$disconnect(); await cluster.stop(); }
 });
+
+test('mail self-test jobs are delivered once, keep only the masked recipient, and resist payload swapping', { timeout: 120_000 }, async () => {
+  const cluster = await testPostgres(); const db = connectDatabase(cluster.url);
+  const config = { instanceId: randomUUID(), allowedOrigin: 'https://shop.example.test', encryptionKey: randomBytes(32) };
+  const delivered: NotificationMail[] = [];
+  const worker = new NotificationWorker(db, config, { async send(mail: NotificationMail) { delivered.push(mail); } });
+  try {
+    // 正常投递：收件人与语言只从密文来，发送后密文销毁、掩码留下。
+    const id = randomUUID();
+    const expiresAt = new Date(Date.now() + 600_000);
+    await db.identityNotificationJob.create({ data: { id, kind: 'admin_mail_test', targetVersion: 1, expiresAt,
+      maskedTarget: 'o***@example.test',
+      encryptedPayload: encrypt(JSON.stringify({ email: 'owner@example.test', locale: 'zh-HK' }), id, config, 'admin-mail-test') } });
+    assert.equal(await worker.tick(), true);
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0]!.kind, 'admin_mail_test');
+    assert.equal(delivered[0]!.to, 'owner@example.test');
+    assert.equal(delivered[0]!.locale, 'zh-HK');
+    const job = await db.identityNotificationJob.findUniqueOrThrow({ where: { id } });
+    assert.equal(job.status, 'sent'); assert.equal(job.encryptedPayload, null);
+    assert.equal(job.maskedTarget, 'o***@example.test');
+    assert.equal(await worker.tick(), false);
+
+    // 密文必须 AAD 绑本行：把别的任务行加密过的收件人塞进来，解密必然失败，邮件绝不能发。
+    const tampered = randomUUID();
+    await db.identityNotificationJob.create({ data: { id: tampered, kind: 'admin_mail_test', targetVersion: 1, expiresAt,
+      encryptedPayload: encrypt(JSON.stringify({ email: 'other@example.test' }), id, config, 'admin-mail-test') } });
+    assert.equal(await worker.tick(), true);
+    assert.equal(delivered.length, 1);
+    const retried = await db.identityNotificationJob.findUniqueOrThrow({ where: { id: tampered } });
+    assert.equal(retried.status, 'pending'); assert.equal(retried.lastErrorCode, 'DELIVERY_FAILED');
+    await db.identityNotificationJob.updateMany({ where: { id: tampered }, data: { status: 'cancelled', encryptedPayload: null } });
+
+    // 配对约束：自检任务不能指目标表，验证码任务必须指挑战行。
+    await assert.rejects(db.identityNotificationJob.create({ data: { id: randomUUID(), kind: 'admin_mail_test',
+      otpChallengeId: tampered, targetVersion: 0, expiresAt, encryptedPayload: 'x' } }));
+    await assert.rejects(db.identityNotificationJob.create({ data: { id: randomUUID(), kind: 'member_otp',
+      targetVersion: 0, expiresAt, encryptedPayload: 'x' } }));
+  } finally { await db.$disconnect(); await cluster.stop(); }
+});

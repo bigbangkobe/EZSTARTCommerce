@@ -2696,6 +2696,49 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/mail/test:
+    get:
+      tags: [Notifications]
+      operationId: listMailTests
+      summary: Recent mail self-test attempts; the queue is the real delivery path, so a stuck pending job means the worker is not running
+      security: [{ AdminSession: [] }]
+      x-permission: notifications.read
+      parameters:
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: Latest test jobs, newest first
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MailTestJobListEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+    post:
+      tags: [Notifications]
+      operationId: createMailTest
+      summary: Queue a self-test email; the worker delivers it through the same path as member verification codes
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: notifications.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MailTestRequest' }
+      responses:
+        '202':
+          description: Job queued; poll the list endpoint for sent/failed status
+          headers: { X-Request-Id: { $ref: '#/components/headers/X-Request-Id' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MailTestJobEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/coupons:
     get:
       tags: [Promotions]
@@ -6740,6 +6783,51 @@ components:
           description: New owner; null clears the assignment.
         dueAt: { type: string, format: date-time, description: Must be later than the acceptance time and within one year of it. }
         reason: { type: string, minLength: 1, maxLength: 1000 }
+    MailTestRequest:
+      type: object
+      additionalProperties: false
+      required: [recipient]
+      properties:
+        recipient:
+          type: string
+          minLength: 3
+          maxLength: 320
+          description: The plaintext address exists only inside the encrypted queue payload; lists only ever show the mask.
+        locale: { type: string, enum: [en, zh-CN, zh-HK] }
+    MailTestJob:
+      type: object
+      additionalProperties: false
+      required: [id, recipientMasked, status, attempts, lastErrorCode, createdAt, sentAt, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        recipientMasked: { type: string }
+        status: { type: string, enum: [pending, processing, cancelled, sent, failed] }
+        attempts: { type: integer, minimum: 0 }
+        lastErrorCode: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        sentAt: { type: [string, 'null'], format: date-time }
+        expiresAt: { type: string, format: date-time }
+    MailTestJobEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/MailTestJob' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    MailTestJobListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, hasMore, nextCursor]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/MailTestJob' } }
+            hasMore: { type: boolean }
+            nextCursor: { type: [string, 'null'] }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     CouponUsage:
       type: object
       additionalProperties: false

@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 
-export type MailKind = 'invitation' | 'password_reset' | 'member_otp';
+export type MailKind = 'invitation' | 'password_reset' | 'member_otp' | 'admin_mail_test';
 export interface NotificationMail {
   id: string;
   kind: MailKind;
@@ -34,6 +34,11 @@ const copy: Record<MailKind, Record<string, [subject: string, introduction: stri
     'zh-CN': ['会员验证码', '请输入以下一次性验证码查看会员账户。若非本人操作，请忽略本邮件。'],
     'zh-HK': ['會員驗證碼', '請輸入以下一次性驗證碼查看會員帳戶。若非本人操作，請忽略本郵件。'],
   },
+  admin_mail_test: {
+    en: ['Store mail self-test', 'You asked the store to check its mail delivery. Since you are reading this, delivery works.'],
+    'zh-CN': ['店铺邮件自检', '这是一封店铺自检邮件。你能读到它，说明邮件投递链路正常。'],
+    'zh-HK': ['店舖郵件自檢', '這是一封店舖自檢郵件。你能讀到它，說明郵件投遞鏈路正常。'],
+  },
 };
 export class SmtpMailSender implements MailSender {
   private readonly transport;
@@ -46,11 +51,14 @@ export class SmtpMailSender implements MailSender {
   }
   async send(mail: NotificationMail) {
     const [subject, introduction] = copy[mail.kind][mail.locale] ?? copy[mail.kind]['en']!;
-    const tag = mail.kind === 'invitation' ? 'invitation' : mail.kind === 'password_reset' ? 'password-reset' : 'member-otp';
-    // 会员验证码没有链接：正文只有一次性码与有效期。
+    const tag = mail.kind === 'invitation' ? 'invitation' : mail.kind === 'password_reset' ? 'password-reset'
+      : mail.kind === 'member_otp' ? 'member-otp' : 'mail-test';
+    // 会员验证码没有链接：正文只有一次性码与有效期；自检邮件只有说明文字。
     const body = mail.kind === 'member_otp'
       ? `${introduction}\n\n${mail.code ?? ''}\n\nExpires (UTC): ${mail.expiresAt.toISOString()}`
-      : `${introduction}\n\n${mail.link ?? ''}\n\nExpires (UTC): ${mail.expiresAt.toISOString()}`;
+      : mail.kind === 'admin_mail_test'
+        ? `${introduction}\n\nSent (UTC): ${new Date().toISOString()}`
+        : `${introduction}\n\n${mail.link ?? ''}\n\nExpires (UTC): ${mail.expiresAt.toISOString()}`;
     const result = await this.transport.sendMail({ from: this.from, to: mail.to,
       messageId: `<${tag}-${mail.id}@${this.from.split('@')[1]}>`, subject, text: body });
     if (!result.accepted?.length || result.rejected?.length) throw new Error('SMTP_NOT_ACCEPTED');
