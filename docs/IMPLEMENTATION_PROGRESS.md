@@ -366,3 +366,19 @@
 验证：真实 PostgreSQL 18.7 上 `node --test` 212 项全过（新增会员纯规则 15 项 + 会员 HTTP 端到端 13 项，后者覆盖游客下单→OTP 登录→订单归集、枚举防护、限速/冷却、重放、越权与遮蔽、版本冲突、审计）；契约 37 项、生成物一致、Prisma schema 有效。已部署到 mrinhk（第 17 条迁移，5 张新表就位；生产冒烟：OTP 申请 202、匿名读会员档案 401）。
 
 边界：会员等级与积分台账（`admin/members/:id/points-adjustments`、`tierId`）尚未落地，带 `tierId` 的写入一律 422 `MEMBER_TIERS_UNAVAILABLE`；会员订单只有摘要没有详情页；前台尚无登录/会员中心页面；worker 与 SMTP 仍未启动，因此验证码邮件目前在队列里等投递。
+
+## 2026-11-17：M10 批次二（会员等级与积分台账）
+
+范围：把「会员值多少钱」变成可配置、可审计、可对账的账，而不是散落在订单上的一个数字。
+
+- 第 18 条迁移 `202611170017_loyalty`：`LoyaltySetting`（店铺级单例：开关、多少分换 1 点、积分有效期）、`MembershipTier`（`rank` 与 `code` 各自唯一、按累计消费分档、可覆盖换算率、`retired` 不再参与解析）、`PointAccount`（余额 `CHECK >= 0`）、`PointLedger`（`deltaPoints <> 0`、`balanceAfter >= 0`、`idempotencyKey` 全表唯一，触发器拒绝 UPDATE/DELETE）。`MemberProfile` 增 `tierId` 与 `lifetimeSpendMinor`。
+- 域规则 `packages/domain/src/loyalty.ts`：积分**只用整数**（金额分 ÷ 换算率，向下取整，零头不预支）；等级按 `rank` 解析而不是按金额排序（门槛相同时结果仍然确定）；余额不可为负；调整单必须带原因码与原因文本；等级名按语言回退。
+- API：后台 `GET /admin/loyalty`、`PATCH /admin/loyalty/settings`、`POST/PATCH /admin/loyalty/tiers`（均 `members.manage`，写入要 CSRF + Origin + If-Match）；`POST /admin/members/:id/points-adjustments`（`points.adjust` + `Idempotency-Key` + 审计）。前台 `GET /storefront/member/points`（本人余额 + 流水分页），`GET /storefront/member/profile` 增等级与积分摘要。
+- 发放规则：订单**全部签收完成**时按「当时等级」的换算率发放，只按商品金额（小计减折扣）计算，运费税费不积分；累计消费与等级归属同事务推进，等级升级只影响之后的订单。幂等键 `order:{id}:earn`。
+- 等级写入：`tierId` 只认 `active` 等级，未知 422 `MEMBER_TIER_UNKNOWN`、退役 422 `MEMBER_TIER_RETIRED`、显式 `null` 表示清空归属；退役等级不主动清空既有会员归属。
+
+修正的真实缺陷：**登录后下的单不会归到会员**。批次一只在 OTP 验证成功时按邮箱回填历史订单，结账链路完全不看会员 cookie，于是「先登录再下单」的订单在会员中心看不到、也不积分。现在结账读取可选会员 cookie 并写入 `OrderMemberLink`（`source=checkout`）；会员会话过期或被撤销时静默降级为访客订单，不阻断结账。
+
+验证：真实 PostgreSQL 上 `node --test` **235/235 全绿**（新增等级/积分纯规则 13 项 + HTTP 端到端 9 子测：口径版本冲突、rank/code 冲突、未知等级拒绝、调整幂等与键复用冲突、扣成负数被拒、流水不可改删、缺 `points.adjust` 403、会员只读自己的账、下单→发货→签收→发放→自动升级等级、退役等级不再接受新分配）；契约 37 项、生成物一致、Prisma schema 有效。已部署 mrinhk（第 18 条迁移，4 张新表 + 追加式触发器就位；生产冒烟：`admin/loyalty` 匿名 401、`storefront/member/points` 匿名 401、首页 200）。
+
+边界：积分兑换与优惠券抵扣尚未接入（`entryType` 已留 `redeem`/`expire`/`reversal`，但没有产生它们的业务动作）；退款/取消的按比例扣回要等 M08 退款事件；积分有效期只有配置字段没有到期清扫任务；后台尚无等级与积分页面（接口已就绪）；前台仍无登录/会员中心页面；worker 与 SMTP 未启动，验证码邮件仍在队列里等投递。
