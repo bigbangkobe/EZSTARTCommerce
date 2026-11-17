@@ -100,13 +100,22 @@ done
 [ "${STATUS:-}" = "healthy" ] || { dc logs --tail 40 api; die "API 未通过健康检查（状态：${STATUS:-unknown}）"; }
 log "API 健康"
 
-# ---------------- 6. 公网冒烟 ----------------
+# ---------------- 6. 冒烟 ----------------
 if [ -n "$DOMAIN" ]; then
-  CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/api/v1/health/live" || true)"
-  [ "$CODE" = "200" ] || die "公网接口冒烟失败：https://$DOMAIN/api/v1/health/live → $CODE"
-  log "公网冒烟通过：https://$DOMAIN/api/v1/health/live → 200"
+  # 云服务器访问自己的公网 IP 常被 hairpin NAT 挡住，所以走本地回环 + 强制解析到本机验证 Caddy 链路
+  CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 --resolve "$DOMAIN:443:127.0.0.1" \
+    "https://$DOMAIN/api/v1/health/live" || true)"
+  [ "$CODE" = "200" ] || die "冒烟失败：https://$DOMAIN/api/v1/health/live（经 Caddy 本地链路）→ $CODE"
+  log "Caddy 链路冒烟通过：https://$DOMAIN/api/v1/health/live → 200"
+
+  PUBLIC="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://$DOMAIN/api/v1/health/live" || true)"
+  if [ "$PUBLIC" = "200" ]; then
+    log "公网可达：https://$DOMAIN → 200"
+  else
+    log "⚠ 从服务器自身访问公网域名失败（$PUBLIC），多为 hairpin NAT，请从外部访问确认；不阻断部署"
+  fi
 else
-  log "未读到 SITE_DOMAIN，跳过公网冒烟"
+  log "未读到 SITE_DOMAIN，跳过冒烟"
 fi
 
 log "✅ 部署完成：$(cd "$REPO_ROOT" && git log --oneline -1 2>/dev/null || echo '（非 git 目录）')"
