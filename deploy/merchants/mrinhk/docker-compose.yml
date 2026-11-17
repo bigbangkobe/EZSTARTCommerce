@@ -1,0 +1,131 @@
+# IN先生 实例部署（mrinhk.com · 商户专属）
+# 服务器：AWS Lightsail 东京 35.79.20.20（Amazon Linux 2023，2 vCPU / 4GB）
+# 用法：cp .env.example .env（填好密钥）&& docker compose up -d --build
+# 注意：构建上下文为仓库根目录（../../../），共用 deploy/shared 的 Dockerfile。
+
+name: ezstart-mrinhk
+
+services:
+  # ---------- 数据库（本地 Docker 部署，不暴露公网） ----------
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ezstart}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ezstart}
+    volumes:
+      # PostgreSQL 18+ 建议把卷挂在 /var/lib/postgresql（数据在其子目录内，方便 pg_upgrade）
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ezstart} -d ${POSTGRES_DB:-ezstart}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # 数据库不对公网暴露。如需临时本机调试，取消下一行注释（仅绑定本机回环）：
+    # ports: ["127.0.0.1:5432:5432"]
+
+  # ---------- 一次性：数据库迁移（Prisma migrate deploy） ----------
+  migrate:
+    build: &node-build
+      context: ../../..
+      dockerfile: deploy/shared/Dockerfile.node
+    command: ["node", "node_modules/prisma/build/index.js", "migrate", "deploy", "--config", "packages/database/prisma.config.ts"]
+    restart: "no"
+    environment: &node-env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ezstart}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ezstart}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------- 核心 API ----------
+  api:
+    build: *node-build
+    command: ["node", "dist/apps/api/src/main.js"]
+    restart: unless-stopped
+    environment:
+      <<: *node-env
+      NODE_ENV: production
+      PORT: "3001"
+      HOST: "0.0.0.0"
+      INSTANCE_ID: ${INSTANCE_ID:?请在 .env 设置 INSTANCE_ID}
+      APP_ORIGIN: https://${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      IDENTITY_ENCRYPTION_KEY: ${IDENTITY_ENCRYPTION_KEY:?请在 .env 设置 IDENTITY_ENCRYPTION_KEY}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # ---------- 通知 Worker（需要完整 SMTP 配置，配好后用 --profile smtp 启动） ----------
+  worker:
+    profiles: ["smtp"]
+    build: *node-build
+    command: ["node", "dist/apps/worker/src/main.js"]
+    restart: unless-stopped
+    environment:
+      <<: *node-env
+      NODE_ENV: production
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # ---------- 管理后台 ----------
+  admin:
+    build:
+      context: ../../..
+      dockerfile: deploy/shared/Dockerfile.next
+      args:
+        APP_DIR: apps/admin
+        APP_NAME: "@ezstart/admin"
+        # 必须与下面 environment 里的 API_INTERNAL_ORIGIN 一致：该地址会被写进构建产物
+        API_INTERNAL_ORIGIN: http://api:3001
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_ORIGIN: http://api:3001
+    depends_on:
+      - api
+
+  # ---------- IN先生 顾客前台 ----------
+  storefront:
+    build:
+      context: ../../..
+      dockerfile: deploy/shared/Dockerfile.next
+      args:
+        APP_DIR: apps/storefront-mrinhk
+        APP_NAME: "@ezstart/storefront-mrinhk"
+        API_INTERNAL_ORIGIN: http://api:3001
+    command: ["node", "../../node_modules/next/dist/bin/next", "start", "--hostname", "0.0.0.0", "--port", "3002"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_ORIGIN: http://api:3001
+    depends_on:
+      - api
+
+  # ---------- 反向代理 + 自动 HTTPS（Let's Encrypt） ----------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - admin
+      - storefront
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

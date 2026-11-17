@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+dist
+**/.next
+.workbuddy
+test-results
+playwright-report
+mrinhk-site
+.git
+docs
+e2e
+tests
+*.md
+!packages/*/README.md

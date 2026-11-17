@@ -1,0 +1,28 @@
+# API / Worker / 数据库迁移共用镜像（构建上下文 = 仓库根目录）
+FROM node:24-alpine
+
+RUN apk add --no-cache libc6-compat openssl
+WORKDIR /app
+RUN npm i -g pnpm@8.15.9
+
+# 先拷贝清单文件，利用 Docker 层缓存
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/worker/package.json apps/worker/
+COPY packages/config/package.json packages/config/
+COPY packages/contracts/package.json packages/contracts/
+COPY packages/database/package.json packages/database/
+COPY packages/domain/package.json packages/domain/
+COPY scripts/ ./scripts/
+
+RUN pnpm install --frozen-lockfile
+
+COPY apps/api apps/api
+COPY apps/worker apps/worker
+COPY packages packages
+
+# 生成 Prisma client 并编译 TS → dist/
+RUN pnpm db:generate && pnpm build
+
+# 默认启动 API；worker / migrate 在 docker-compose.yml 中覆盖 command
+CMD ["node", "dist/apps/api/src/main.js"]

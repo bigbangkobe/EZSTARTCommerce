@@ -1,0 +1,26 @@
+# Next.js 应用镜像（admin / storefront 共用；构建上下文 = 仓库根目录）
+FROM node:24-alpine
+
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+ARG APP_DIR
+ARG APP_NAME
+# next.config.mjs 里的 rewrites() 目标地址在 **构建期** 就被写进 routes-manifest.json，
+# 运行时再设 API_INTERNAL_ORIGIN 不会生效（会一直指向构建时的默认值 127.0.0.1:3001）。
+# 因此必须在构建期把它作为构建参数传进来，compose 里对应 build.args。
+ARG API_INTERNAL_ORIGIN=http://api:3001
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV API_INTERNAL_ORIGIN=${API_INTERNAL_ORIGIN}
+RUN npm i -g pnpm@8.15.9
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ${APP_DIR}/package.json ./${APP_DIR}/
+
+RUN pnpm install --frozen-lockfile --filter ${APP_NAME}
+
+COPY ${APP_DIR} ./${APP_DIR}
+RUN pnpm --filter ${APP_NAME} build
+
+WORKDIR /app/${APP_DIR}
+# 注意：项目自带 start 脚本绑定 127.0.0.1，容器内必须绑定 0.0.0.0 才能被反代访问
+CMD ["node", "../../node_modules/next/dist/bin/next", "start", "--hostname", "0.0.0.0", "--port", "3000"]
