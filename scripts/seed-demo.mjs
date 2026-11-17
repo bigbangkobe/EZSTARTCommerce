@@ -179,6 +179,12 @@ if (!categoryId) {
 }
 
 const slug = 'demo-matcha-bowl';
+// 发布校验要求“所有启用语言都要有翻译”，店铺默认启用 zh-CN / zh-HK / en，三语都必须给。
+const translations = [
+  { locale: 'zh-HK', name: '手作抹茶碗', slug, shortDescription: '手捏陶土，釉色自然', description: '日本進口陶土手作，每只紋理略有不同。' },
+  { locale: 'zh-CN', name: '手作抹茶碗', slug, shortDescription: '手捏陶土，釉色自然', description: '日本进口陶土手作，每只纹理略有不同。' },
+  { locale: 'en', name: 'Handmade Matcha Bowl', slug, shortDescription: 'Hand-thrown stoneware with a natural glaze', description: 'Handmade from Japanese clay. Each piece has its own texture.' },
+];
 const existing = await call('GET', `/api/v1/admin/products?q=${encodeURIComponent(slug)}`);
 const exists = (existing.body?.data?.items ?? []).some((item) => (item.translations ?? []).some((t) => t.slug === slug));
 let productId;
@@ -188,10 +194,7 @@ if (exists) {
 } else {
   const created = must(await call('POST', '/api/v1/admin/products', {
     body: {
-      translations: [
-        { locale: 'zh-HK', name: '手作抹茶碗', slug, shortDescription: '手捏陶土，釉色自然', description: '日本進口陶土手作，每只紋理略有不同。' },
-        { locale: 'zh-CN', name: '手作抹茶碗', slug, shortDescription: '手捏陶土，釉色自然', description: '日本进口陶土手作，每只纹理略有不同。' },
-      ],
+      translations,
       variants: [{ sku: 'DEMO-MATCHA-01', optionValues: { 容量: '400ml' }, priceMinor: 32800, currency }],
       // 契约要求这四项必填（即使为空数组也要显式给出）
       media: [],
@@ -202,6 +205,14 @@ if (exists) {
   }), '创建商品');
   productId = created.id;
   log(`商品已创建：${productId}`);
+}
+
+// 3.5) 补齐缺失语言的翻译（老数据或分步调试时可能缺 en，发布前必须补齐）
+const before = must(await call('GET', `/api/v1/admin/products/${productId}`), '读取商品');
+const haveLocales = new Set((before.translations ?? []).map((t) => t.locale));
+if (translations.some((t) => !haveLocales.has(t.locale))) {
+  must(await call('PATCH', `/api/v1/admin/products/${productId}`, { body: { translations }, csrf, ifMatch: before.version }), '补齐翻译');
+  log('已补齐三语翻译');
 }
 
 // 4) 发布到市场
