@@ -8,6 +8,7 @@ import { IdentityService } from '../apps/api/src/identity/service.js';
 import { csrf, decrypt, totp } from '../apps/api/src/identity/crypto.js';
 import { connectDatabase } from '../packages/database/src/client.js';
 import { digest } from '../packages/domain/src/identity.js';
+import { otpEmailDigest } from '../packages/domain/src/members.js';
 import { testPostgres } from './helpers/postgres.js';
 
 test('members: verified email login, guest order linkage and admin customer records', { timeout: 300_000 }, async t => {
@@ -60,9 +61,11 @@ test('members: verified email login, guest order linkage and admin customer reco
     await db.adminSession.create({ data: { userId: user.id, tokenDigest: digest(token), mfaVerified: true,
       lastSeenAt: new Date(), idleExpiresAt: new Date(Date.now() + 3_600_000),
       absoluteExpiresAt: new Date(Date.now() + 3_600_000) } });
+    /** csrf:false 用来证明缺少令牌的写请求会被拒绝，而不是悄悄沿用会话里的令牌。 */
     const call = (method: string, path: string, body?: unknown, schema = 'SuccessEnvelope',
-      opts: { ifMatch?: string } = {}) =>
-      request(method, path, body, { Origin: origin, 'X-CSRF-Token': csrfToken,
+      opts: { ifMatch?: string; csrf?: false } = {}) =>
+      request(method, path, body, { Origin: origin,
+        ...(opts.csrf === false ? {} : { 'X-CSRF-Token': csrfToken }),
         ...(opts.ifMatch ? { 'If-Match': opts.ifMatch } : {}), Cookie: `ez_admin_session=${token}` }, schema);
     return { call, userId: user.id };
   };
@@ -141,7 +144,8 @@ test('members: verified email login, guest order linkage and admin customer reco
     let profileChallenge = '';
     await t.test('the OTP request is uniform and never leaks the code or the address', async () => {
       await resetLimits();
-      const requested = await front('POST', 'storefront/member/otp/request', { email: ' Link@Example.com ',
+      // 大小写混写由服务端规范化：契约只校验形状，规范化是业务规则。
+      const requested = await front('POST', 'storefront/member/otp/request', { email: 'Link@Example.com',
         locale: 'zh-HK', purpose: 'member_login' }, 'OtpChallengeEnvelope');
       assert.equal(requested.status, 202, JSON.stringify(requested.body));
       const data = requested.body.data;
@@ -271,7 +275,8 @@ test('members: verified email login, guest order linkage and admin customer reco
       assert.equal(asAdmin.status, 401);
       const forged = await request('GET', 'storefront/member/profile', undefined, { Cookie: `ez_member_session=${'A'.repeat(43)}` });
       assert.equal(forged.status, 401);
-      assert.equal((await request('GET', 'storefront/member/profile', undefined, {})).status, 401);
+      // 不带会员 cookie（这里用无关 cookie 覆盖，避免命中 jar 里的会话）。
+      assert.equal((await request('GET', 'storefront/member/profile', undefined, { Cookie: 'other=1' })).status, 401);
     });
 
     await t.test('logout needs the session-derived CSRF token and revokes the session', async () => {
@@ -291,7 +296,11 @@ test('members: verified email login, guest order linkage and admin customer reco
     await t.test('a suspended member keeps no session and a closed member is terminal', async () => {
       await resetLimits();
       // 重新登录拿到会话，再由后台停用：会话必须当场失效。
-      await db.identityRateLimit.deleteMany();
+      // 60 秒冷却里没有时钟可推进，直接把上一批挑战挪到窗口外。
+      await db.memberOtpChallenge.updateMany({
+        where: { emailDigest: otpEmailDigest(config.encryptionKey, config.instanceId, memberEmail) },
+        data: { createdAt: new Date(Date.now() - 120_000) } });
+      await resetLimits();
       const requested = await front('POST', 'storefront/member/otp/request', { email: memberEmail, locale: 'en',
         purpose: 'member_login' }, 'OtpChallengeEnvelope');
       assert.equal(requested.status, 202, JSON.stringify(requested.body));
@@ -361,13 +370,15 @@ test('members: verified email login, guest order linkage and admin customer reco
         'SuccessEnvelope', { ifMatch: '"1"' })).status, 403);
       const unrelated = await sessionFor(['catalog.read']);
       assert.equal((await unrelated.call('GET', 'admin/customers')).status, 403);
-      assert.equal((await request('GET', 'admin/customers', undefined, {})).status, 401);
+      // 没有后台会话（这里显式给一个无效 cookie，避免带上 bootstrap 得到的 owner 会话）。
+      assert.equal((await request('GET', 'admin/customers', undefined,
+        { Cookie: `ez_admin_session=${'A'.repeat(43)}` })).status, 401);
       assert.equal((await request('PATCH', `admin/customers/${customerId}`, { displayName: 'No origin' },
         { 'X-CSRF-Token': adminCsrf })).status, 403);
       // 有写权限但没有 CSRF 令牌：跨站请求不能改顾客资料。
       const writer = await sessionFor(['customers.manage']);
       assert.equal((await writer.call('PATCH', `admin/customers/${customerId}`, { displayName: 'No CSRF' },
-        'SuccessEnvelope', { ifMatch: '"1"' })).status, 403);
+        'SuccessEnvelope', { ifMatch: '"1"', csrf: false })).status, 403);
     });
 
     await t.test('customer edits are versioned and audited', async () => {

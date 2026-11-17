@@ -92,15 +92,21 @@ export class MembersService {
     });
   }
 
-  /** 邀请码不存在、已过期、已使用、错误次数用尽都不透露账户是否存在，只在 429 与 401 之间区分。 */
+  /**
+   * 邀请码不存在、已过期、已使用、错误次数用尽都不透露账户是否存在，只在 429 与 401 之间区分。
+   *
+   * 失败也必须在事务里“写完再返回”：抛异常会让尝试计数与作废状态一起回滚，
+   * 于是错误次数永远停在 0，验证码可以无限尝试。
+   */
   async verifyOtp(body: { challengeId: string; code: string }, ctx: RequestContext) {
     await this.identity.limitIp(ctx);
     if (!UUID.test(body.challengeId)) throw new AuthError(422, 'VALIDATION_ERROR');
     if (typeof body.code !== 'string' || !/^\d{6}$/.test(body.code)) throw new AuthError(422, 'VALIDATION_ERROR');
-    return this.db.$transaction(async tx => {
+    type Outcome = { ok: true; token: string; data: object } | { ok: false; status: 401 | 403 | 429; code: string };
+    const outcome = await this.db.$transaction(async (tx): Promise<Outcome> => {
       const now = await this.clock(tx);
       const existing = await tx.memberOtpChallenge.findUnique({ where: { id: body.challengeId } });
-      if (!existing) throw new AuthError(401, 'UNAUTHORIZED');
+      if (!existing) return { ok: false, status: 401, code: 'UNAUTHORIZED' };
       // 同一挑战的并发验证串行化：否则错误次数预算可被并发绕过。
       await this.lock(tx, `member-challenge:${existing.id}`);
       const challenge = await tx.memberOtpChallenge.findUniqueOrThrow({ where: { id: existing.id } });
@@ -108,14 +114,15 @@ export class MembersService {
         if (challenge.status === 'pending' && challenge.expiresAt.getTime() <= now.getTime()) {
           await tx.memberOtpChallenge.update({ where: { id: challenge.id }, data: { status: 'expired', updatedAt: now } });
         }
-        throw new AuthError(401, 'UNAUTHORIZED');
+        return { ok: false, status: 401, code: 'UNAUTHORIZED' };
       }
       if (!equal(this.codeDigest(challenge.id, body.code), challenge.codeDigest)) {
         const failure = nextOtpFailure(challenge.attempts, challenge.maxAttempts);
         await tx.memberOtpChallenge.update({ where: { id: challenge.id }, data: { ...failure, updatedAt: now } });
         // 次数用尽后下一次请求得到 429，而不是无限次 401。
-        if (failure.status === 'failed') throw new AuthError(429, 'RATE_LIMITED');
-        throw new AuthError(401, 'UNAUTHORIZED');
+        return failure.status === 'failed'
+          ? { ok: false, status: 429, code: 'RATE_LIMITED' }
+          : { ok: false, status: 401, code: 'UNAUTHORIZED' };
       }
       // 一次性消费：先落状态再发会话，重复提交同一挑战拿不到第二个会话。
       await tx.memberOtpChallenge.update({ where: { id: challenge.id }, data: { status: 'consumed', verifiedAt: now, updatedAt: now } });
@@ -130,8 +137,8 @@ export class MembersService {
         member = await tx.memberProfile.create({ data: { customerId: customer.id, memberNo: await this.nextMemberNo(tx, now),
           joinedAt: now, createdAt: now, updatedAt: now } });
       }
-      // 验证成功即证明邮箱归属：被停用/关闭的会员不能拿到新会话，但提示与普通失败不同。
-      if (member.status !== 'active') throw new AuthError(403, 'FORBIDDEN');
+      // 验证成功即证明邮箱归属：被停用/关闭的会员不能拿到新会话。挑战仍然消费掉，避免旧码被反复利用。
+      if (member.status !== 'active') return { ok: false, status: 403, code: 'FORBIDDEN' };
       // 同一个已验证邮箱的既有访客订单归入会员，来源记为 email_match；重复登录不会重复链接。
       await tx.$executeRaw`
         INSERT INTO "OrderMemberLink" ("orderId", "memberId", "source", "linkedAt")
@@ -143,9 +150,11 @@ export class MembersService {
       const expiresAt = memberSessionExpiry(now);
       await tx.memberSession.create({ data: { memberId: member.id, tokenDigest: sessionTokenDigest(token),
         expiresAt, createdAt: now, updatedAt: now } });
-      return { token, data: { member: this.memberSummary(member, customer), csrfToken: csrf(token, this.config, 'member'),
+      return { ok: true, token, data: { member: this.memberSummary(member, customer), csrfToken: csrf(token, this.config, 'member'),
         expiresAt: expiresAt.toISOString() } };
     });
+    if (!outcome.ok) throw new AuthError(outcome.status, outcome.code);
+    return { token: outcome.token, data: outcome.data };
   }
 
   private async nextMemberNo(tx: Tx, now: Date): Promise<string> {
