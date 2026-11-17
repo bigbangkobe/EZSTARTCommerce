@@ -55,6 +55,13 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # 容器内自检：DB 连不上时 ready 返回 503，compose 就不会把后台/前台挂上去
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --timeout=3 http://127.0.0.1:3001/api/v1/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   # ---------- 通知 Worker（需要完整 SMTP 配置，配好后用 --profile smtp 启动） ----------
   worker:
@@ -89,7 +96,8 @@ services:
       NODE_ENV: production
       API_INTERNAL_ORIGIN: http://api:3001
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   # ---------- IN先生 顾客前台 ----------
   storefront:
@@ -106,7 +114,8 @@ services:
       NODE_ENV: production
       API_INTERNAL_ORIGIN: http://api:3001
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   # ---------- 反向代理 + 自动 HTTPS（Let's Encrypt） ----------
   caddy:
