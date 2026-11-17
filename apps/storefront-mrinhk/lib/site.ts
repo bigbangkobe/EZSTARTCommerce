@@ -11,6 +11,12 @@ export const site = {
   whatsappGreeting: '你好，想向你查詢詳情',
   languages: ['zh-Hant', 'zh-Hans', 'en'],
   defaultLanguage: 'zh-Hant',
+  /** 结账市场（报价必传 marketCode），与后台 store-config 的市场码一致 */
+  marketCode: 'HK',
+  /** 结账界面语言（服务端已启用的 locale 之一） */
+  checkoutLocale: 'zh-HK',
+  /** 政策同意：上线前应替换为真实政策的最新版本号 */
+  policies: [{ policyKey: 'terms-of-service', version: 'demo-v1', label: '我已閱讀並同意條款及細則' }],
 } as const;
 
 export const whatsappLink = `https://wa.me/${site.whatsappIntl}?text=${encodeURIComponent(site.whatsappGreeting)}`;

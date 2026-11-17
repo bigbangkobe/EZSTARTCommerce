@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { copy, whatsappLink } from '../../../lib/site';
 import { fetchProduct, formatPrice } from '../../../lib/products';
+import AddToCartForm from './add-to-cart-form';
 
 export const revalidate = 60;
 
@@ -40,8 +41,10 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             ))}
           </ul>
 
-          <div className="cta-row">
-            <a className="btn btn-primary" href={whatsappLink} target="_blank" rel="noopener noreferrer">
+          <AddToCartForm productName={product.name} variants={product.variants} />
+
+          <div className="cta-row secondary-cta">
+            <a className="btn btn-ghost" href={whatsappLink} target="_blank" rel="noopener noreferrer">
               {copy.products.inquiry}
             </a>
             <Link className="btn btn-ghost" href="/products">

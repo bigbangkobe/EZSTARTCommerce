@@ -111,6 +111,28 @@ export class CheckoutService {
       ruleVersions: row.ruleVersions as Record<string, string | null>, warnings: row.warnings as string[] };
   }
 
+  /**
+   * 游客可选的配送方式列表：费用按购物袋当前小计算出，地址只取国家/区域码做区匹配。
+   * 结账页据此渲染选项；报价仍以 quote 的服务端计算为准，这里只是展示口径。
+   */
+  async shippingMethods(token: string, query: { countryCode?: unknown; regionCode?: unknown; locale?: unknown },
+    ctx: RequestContext) {
+    await this.identity.limitIp(ctx);
+    const countryCode = typeof query.countryCode === 'string' ? query.countryCode.trim().toUpperCase() : '';
+    if (!/^[A-Z]{2}$/.test(countryCode)) throw new AuthError(422, 'VALIDATION_ERROR');
+    const regionCode = typeof query.regionCode === 'string' && query.regionCode.trim()
+      ? query.regionCode.trim().slice(0, 80) : null;
+    const locale = typeof query.locale === 'string' && query.locale.trim() ? query.locale.trim().slice(0, 10) : null;
+    return this.db.$transaction(async tx => {
+      const cart = await this.cartService.requireCart(tx, token);
+      const view = await this.cartService.render(tx, cart);
+      const settings = await this.settings(tx);
+      const methods = await this.shipping.methodsFor(tx, { countryCode, regionCode }, view.subtotalMinor,
+        view.currency, locale ?? cart.locale ?? settings.defaultLocale, settings.defaultLocale);
+      return { items: methods };
+    }, { timeout: 15_000 });
+  }
+
   async quote(token: string, body: QuoteBody, ctx: RequestContext) {
     await this.identity.limitIp(ctx);
     return this.db.$transaction(async tx => {

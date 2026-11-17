@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
 import { parse, serialize } from 'cookie';
 import type { ServerResponse } from 'node:http';
 import { uuid, type ApiRequest } from '../identity/controller.js';
@@ -87,6 +87,13 @@ export class CheckoutController extends ManagementHttp {
   constructor(@Inject('CHECKOUT') private readonly checkout: CheckoutService | null,
     @Inject('IDENTITY') identity: IdentityService | null) { super(identity); }
   private checkoutService() { if (!this.checkout) throw new AuthError(503, 'SERVICE_NOT_READY'); return this.checkout; }
+
+  @Get('shipping-methods')
+  async shippingMethods(@Query('countryCode') countryCode: unknown, @Query('regionCode') regionCode: unknown,
+    @Query('locale') locale: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    this.send(response, request, 200, await this.checkoutService()
+      .shippingMethods(cartToken(request), { countryCode, regionCode, locale }, this.context(request)));
+  }
 
   @Post('quote')
   async quote(@Body() body: QuoteBody, @Req() request: ApiRequest, @Res() response: ServerResponse) {

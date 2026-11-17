@@ -160,3 +160,104 @@ body {
   .logo-card { justify-self: center; }
   .site-nav a { margin-left: 18px; }
 }
+
+/* ---------- 购物袋 ---------- */
+.cart-link { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); text-decoration: none; font-size: 0.9rem; margin-left: 28px; position: relative; transition: color 0.25s; }
+.cart-link:hover { color: var(--red); }
+.cart-badge {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+  background: var(--line); color: var(--muted);
+  font-size: 0.72rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+}
+.cart-badge.has-items { background: var(--red); color: #fff; }
+
+.cart-wrap { max-width: 860px; }
+.cart-table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.cart-table th { text-align: left; font-size: 0.8rem; letter-spacing: 0.14em; color: var(--muted); padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.cart-table td { padding: 16px; border-bottom: 1px solid var(--line); font-size: 0.95rem; vertical-align: middle; }
+.cart-table tr:last-child td { border-bottom: none; }
+.cart-table tr.unavailable td { color: var(--muted); }
+.cart-table small { display: block; color: var(--muted); margin-top: 4px; }
+
+.link-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.85rem; text-decoration: underline; padding: 0; }
+.link-btn:hover { color: var(--red); }
+
+.qty-stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.qty-stepper button { width: 34px; height: 34px; border: none; background: transparent; font-size: 1rem; cursor: pointer; color: var(--ink); }
+.qty-stepper button:hover { background: rgba(188, 0, 45, 0.06); color: var(--red); }
+.qty-stepper input { width: 46px; height: 34px; border: none; text-align: center; font-size: 0.9rem; -moz-appearance: textfield; }
+.qty-stepper input::-webkit-outer-spin-button, .qty-stepper input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+.cart-summary { margin-top: 24px; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.summary-line { display: flex; justify-content: space-between; align-items: baseline; gap: 32px; width: 100%; max-width: 320px; font-size: 1rem; }
+.summary-line strong { font-family: var(--serif); font-size: 1.15rem; color: var(--ink); }
+.cart-warnings { margin-top: 14px; color: var(--muted); font-size: 0.85rem; }
+
+/* ---------- 表单 ---------- */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; margin-bottom: 28px; }
+.form-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 0.82rem; letter-spacing: 0.1em; color: var(--muted); }
+.form-grid label.span-2 { grid-column: span 2; }
+.form-grid input {
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  font-size: 0.95rem; color: var(--ink); background: var(--card); outline: none; transition: border-color 0.2s;
+}
+.form-grid input:focus { border-color: var(--red); }
+.form-note { color: var(--muted); font-size: 0.85rem; margin: 6px 0; }
+.form-note.error { color: var(--red); }
+.form-note.sold-out { color: var(--muted); font-style: italic; }
+
+/* ---------- 加购 ---------- */
+.add-to-cart { margin: 18px 0 8px; display: flex; flex-direction: column; gap: 14px; }
+.variant-picker { display: flex; flex-wrap: wrap; gap: 10px; }
+.variant-option {
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px;
+  border: 1px solid var(--line); border-radius: 999px; cursor: pointer; font-size: 0.9rem; transition: all 0.2s;
+}
+.variant-option input { display: none; }
+.variant-option.selected { border-color: var(--red); color: var(--red); background: rgba(188, 0, 45, 0.05); }
+.variant-option small { color: var(--muted); }
+.qty-row { display: flex; align-items: center; gap: 12px; font-size: 0.9rem; }
+.qty-label { letter-spacing: 0.1em; color: var(--muted); }
+.qty-limit { color: var(--muted); font-size: 0.82rem; }
+.add-btn { align-self: flex-start; border: none; cursor: pointer; }
+.add-btn:disabled { opacity: 0.6; cursor: wait; }
+.added-box { border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px; background: var(--card); }
+.added-box p { color: var(--ink); margin-bottom: 14px; }
+.secondary-cta { margin-top: 18px; }
+
+/* ---------- 结账 ---------- */
+.checkout-grid { display: grid; grid-template-columns: 1fr 340px; gap: 36px; align-items: start; }
+.checkout-main h3 { font-family: var(--serif); font-size: 1.05rem; letter-spacing: 0.12em; margin: 26px 0 14px; color: var(--ink); }
+.method-list { display: flex; flex-direction: column; gap: 10px; }
+.method-option {
+  display: flex; align-items: center; gap: 14px; padding: 14px 18px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; transition: all 0.2s;
+}
+.method-option input { accent-color: var(--red); }
+.method-option.selected { border-color: var(--red); box-shadow: 0 4px 16px rgba(188, 0, 45, 0.08); }
+.method-name { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 0.95rem; }
+.method-name small { color: var(--muted); font-size: 0.8rem; }
+.method-option strong { font-family: var(--serif); }
+.agree-row { display: flex; align-items: center; gap: 10px; margin-top: 26px; font-size: 0.9rem; cursor: pointer; }
+.agree-row input { accent-color: var(--red); width: 18px; height: 18px; }
+.checkout-aside { position: sticky; top: 24px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
+.checkout-aside h3 { font-family: var(--serif); font-size: 1.05rem; letter-spacing: 0.12em; margin-bottom: 16px; }
+.summary-items { list-style: none; display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; font-size: 0.88rem; }
+.summary-items li { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); }
+.summary-items strong { color: var(--ink); font-weight: 500; }
+.checkout-aside .summary-line { max-width: none; }
+.checkout-btn { width: 100%; justify-content: center; border: none; cursor: pointer; margin-top: 6px; }
+.checkout-btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; transform: none; }
+
+/* ---------- 订单确认 ---------- */
+.order-confirmed { padding: 44px 40px; text-align: center; }
+.order-number { font-family: var(--serif); font-size: 1.9rem; font-weight: 700; letter-spacing: 0.12em; color: var(--red); margin-bottom: 20px; }
+.order-facts { list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 0.95rem; color: var(--muted); }
+.order-facts strong { color: var(--ink); }
+
+@media (max-width: 900px) {
+  .checkout-grid { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-grid label.span-2 { grid-column: span 1; }
+  .cart-table th:nth-child(2), .cart-table td:nth-child(2) { display: none; }
+}

@@ -1501,6 +1501,24 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/checkout/shipping-methods:
+    get:
+      tags: [Checkout]
+      operationId: listCheckoutShippingMethods
+      summary: List delivery methods available for the guest cart and destination
+      security: [{ GuestCartSession: [] }]
+      parameters:
+        - { name: countryCode, in: query, required: true,
+            schema: { type: string, pattern: '^[A-Za-z]{2}$',
+              description: Case-insensitive on input; the stored value is uppercased. } }
+        - { name: regionCode, in: query, required: false, schema: { type: string, maxLength: 80 } }
+        - { name: locale, in: query, required: false, schema: { type: string, maxLength: 10 } }
+      responses:
+        '200': { $ref: '#/components/responses/ShippingMethodsSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/checkout/quote:
     post:
       tags: [Checkout]
@@ -3857,6 +3875,13 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/QuoteEnvelope' }
+    ShippingMethodsSuccess:
+      description: Delivery methods for the guest cart and destination; fees are computed server-side from the live cart subtotal
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ShippingMethodsEnvelope' }
     CartSuccess:
       description: Guest cart with live prices and availability
       headers:
@@ -5148,6 +5173,34 @@ components:
       properties:
         data: { $ref: '#/components/schemas/CheckoutQuote' }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
+    ShippingMethodsEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/ShippingMethodsData' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    ShippingMethodsData:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/ShippingMethodPublic' }
+    ShippingMethodPublic:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, feeMinor, estimatedMinDays, estimatedMaxDays, codEnabled]
+      properties:
+        id: { type: string, format: uuid, description: Shipping rate id to pass back as shippingMethodId in the quote request }
+        code: { type: string, minLength: 1, maxLength: 80 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        feeMinor: { type: integer, minimum: 0, description: Server-computed fee for the current cart subtotal (0 when above the free-shipping threshold) }
+        estimatedMinDays: { type: [integer, 'null'], minimum: 0 }
+        estimatedMaxDays: { type: [integer, 'null'], minimum: 0 }
+        codEnabled: { type: boolean }
     OrderCreatedEnvelope:
       type: object
       additionalProperties: false

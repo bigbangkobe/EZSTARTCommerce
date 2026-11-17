@@ -1074,6 +1074,23 @@ export interface paths {
         patch: operations["updateCartItem"];
         trace?: never;
     };
+    "/storefront/checkout/shipping-methods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List delivery methods available for the guest cart and destination */
+        get: operations["listCheckoutShippingMethods"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storefront/checkout/quote": {
         parameters: {
             query?: never;
@@ -2816,6 +2833,27 @@ export interface components {
         QuoteEnvelope: {
             data: components["schemas"]["CheckoutQuote"];
             meta: components["schemas"]["ResponseMeta"];
+        };
+        ShippingMethodsEnvelope: {
+            data: components["schemas"]["ShippingMethodsData"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        ShippingMethodsData: {
+            items: components["schemas"]["ShippingMethodPublic"][];
+        };
+        ShippingMethodPublic: {
+            /**
+             * Format: uuid
+             * @description Shipping rate id to pass back as shippingMethodId in the quote request
+             */
+            id: string;
+            code: string;
+            name: string;
+            /** @description Server-computed fee for the current cart subtotal (0 when above the free-shipping threshold) */
+            feeMinor: number;
+            estimatedMinDays: number | null;
+            estimatedMaxDays: number | null;
+            codEnabled: boolean;
         };
         OrderCreatedEnvelope: {
             data: components["schemas"]["CheckoutOrderCreated"];
@@ -4966,6 +5004,16 @@ export interface components {
                 "application/json": components["schemas"]["QuoteEnvelope"];
             };
         };
+        /** @description Delivery methods for the guest cart and destination; fees are computed server-side from the live cart subtotal */
+        ShippingMethodsSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ShippingMethodsEnvelope"];
+            };
+        };
         /** @description Guest cart with live prices and availability */
         CartSuccess: {
             headers: {
@@ -6821,6 +6869,26 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    listCheckoutShippingMethods: {
+        parameters: {
+            query: {
+                countryCode: string;
+                regionCode?: string;
+                locale?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["ShippingMethodsSuccess"];
+            401: components["responses"]["Unauthorized"];
+            422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["UnexpectedError"];
         };
     };
