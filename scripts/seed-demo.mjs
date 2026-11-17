@@ -185,14 +185,14 @@ const translations = [
   { locale: 'zh-CN', name: '手作抹茶碗', slug, shortDescription: '手捏陶土，釉色自然', description: '日本进口陶土手作，每只纹理略有不同。' },
   { locale: 'en', name: 'Handmade Matcha Bowl', slug, shortDescription: 'Hand-thrown stoneware with a natural glaze', description: 'Handmade from Japanese clay. Each piece has its own texture.' },
 ];
-const existing = await call('GET', `/api/v1/admin/products?q=${encodeURIComponent(slug)}`);
-const exists = (existing.body?.data?.items ?? []).some((item) => (item.translations ?? []).some((t) => t.slug === slug));
+const existing = await call('GET', '/api/v1/admin/products?limit=100');
+const found = (existing.body?.data?.items ?? []).find((item) => (item.translations ?? []).some((t) => t.slug === slug));
 let productId;
-if (exists) {
-  productId = (existing.body.data.items.find((item) => (item.translations ?? []).some((t) => t.slug === slug))).id;
+if (found) {
+  productId = found.id;
   log(`商品已存在，跳过创建：${productId}`);
 } else {
-  const created = must(await call('POST', '/api/v1/admin/products', {
+  const created = await call('POST', '/api/v1/admin/products', {
     body: {
       translations,
       variants: [{ sku: 'DEMO-MATCHA-01', optionValues: { 容量: '400ml' }, priceMinor: 32800, currency }],
@@ -202,9 +202,18 @@ if (exists) {
       marketCodes: [MARKET],
     },
     csrf,
-  }), '创建商品');
-  productId = created.id;
-  log(`商品已创建：${productId}`);
+  });
+  if (created.status === 409) {
+    // SKU/slug 唯一约束冲突：说明上一轮已经建过，重新定位即可
+    const again = await call('GET', '/api/v1/admin/products?limit=100');
+    const hit = (again.body?.data?.items ?? []).find((item) => (item.translations ?? []).some((t) => t.slug === slug));
+    if (!hit) die('商品创建冲突，但列表里定位不到', created.body);
+    productId = hit.id;
+    log(`商品已存在（冲突后重新定位）：${productId}`);
+  } else {
+    productId = must(created, '创建商品').id;
+    log(`商品已创建：${productId}`);
+  }
 }
 
 // 3.5) 补齐缺失语言的翻译（老数据或分步调试时可能缺 en，发布前必须补齐）
