@@ -89,11 +89,12 @@ async function loginExisting(creds) {
   // 同一 30 秒窗口内重复登录会撞上 lastUsedStep 去重，因此每个候选步长都重新开一次挑战
   for (const offset of [0, 1, 2]) {
     const login = await call('POST', '/api/v1/admin/auth/login', { body: { email: creds.email, password: creds.password }, cookies: false });
-    if (login.status === 200) return must(login, '登录').session;
+    // 登录/验码成功时 data 本身就是会话对象；注册确认（bootstrap 路径）才是 { session, recoveryCodes }
+    if (login.status === 200) return must(login, '登录');
     if (login.status !== 202) die('登录失败', login.body);
     const challengeId = must(login, '登录').challengeId;
     const verify = await call('POST', '/api/v1/admin/auth/mfa/verify', { body: { challengeId, code: totpCode(creds.totpSecret, offset) } });
-    if (verify.status === 200) return must(verify, 'MFA 验证').session;
+    if (verify.status === 200) return must(verify, 'MFA 验证');
   }
   die('MFA 验证连续失败：请确认 /secrets/admin.json 里的 TOTP 密钥仍有效，或用恢复码重置');
 }
