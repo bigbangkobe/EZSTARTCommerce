@@ -8,6 +8,7 @@ import { IdentityService } from '../apps/api/src/identity/service.js';
 import { csrf, totp } from '../apps/api/src/identity/crypto.js';
 import { connectDatabase } from '../packages/database/src/client.js';
 import { digest } from '../packages/domain/src/identity.js';
+import { memberNumber } from '../packages/domain/src/members.js';
 import { testPostgres } from './helpers/postgres.js';
 
 test('privacy: acceptance, identity verification and the approval trail', { timeout: 300_000 }, async t => {
@@ -323,6 +324,102 @@ test('privacy: acceptance, identity verification and the approval trail', { time
       assert.equal((await admin('GET', 'admin/privacy-requests/not-a-uuid')).status, 422);
       // 匿名访问一律 401，不区分「存在」与「不存在」。
       assert.equal((await request('GET', 'admin/privacy-requests', undefined, { Cookie: '' })).status, 401);
+    });
+
+    await t.test('an export is encrypted at rest and only the processing role can download it', async () => {
+      const memberNo = memberNumber('20261117', randomUUID().replaceAll('-', '').slice(0, 6).toUpperCase());
+      await db.memberProfile.create({ data: { customerId, memberNo, consentRef: 'consent-v1',
+        joinedAt: new Date(), createdAt: new Date(), updatedAt: new Date() } });
+      const account = await db.pointAccount.create({ data: { memberId: (await db.memberProfile.findUniqueOrThrow({
+        where: { customerId } })).id, balance: 250, createdAt: new Date(), updatedAt: new Date() } });
+
+      const opened = await accept({ requestType: 'export' });
+      await verify(opened.id, nextKey(), { verificationMethod: 'email_reply', evidenceRef: 'ticket-export', reason: 'Verified', customerId });
+      const reader = await sessionFor(['privacy.read']);
+      assert.equal((await reader('POST', `admin/privacy-requests/${opened.id}/export`, {},
+        { 'Idempotency-Key': nextKey() })).status, 403);
+
+      const created = await request('POST', `admin/privacy-requests/${opened.id}/export`, {},
+        { Origin: origin, 'X-CSRF-Token': adminCsrf, 'Idempotency-Key': nextKey() }, 'PrivacyExportEnvelope');
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const job = created.body.data;
+      assert.equal(job.status, 'ready');
+      const stored = await db.customerDataExportJob.findUniqueOrThrow({ where: { id: job.id } });
+      assert.ok(stored.encryptedPayload && !stored.encryptedPayload.includes('chan@example.com'), '收件人明文不得落库');
+      assert.equal(stored.sha256, job.sha256);
+      assert.equal((await request('GET', `admin/privacy-requests/${opened.id}/export/${randomUUID()}`, undefined,
+        { Origin: origin }, 'ErrorEnvelope')).status, 404);
+
+      const downloaded = await request('GET', `admin/privacy-requests/${opened.id}/export/${job.id}`, undefined,
+        { Origin: origin }, 'PrivacyExportArtifact');
+      assert.equal(downloaded.status, 200, JSON.stringify(downloaded.body));
+      assert.equal(downloaded.response.headers.get('content-disposition'), `attachment; filename="${opened.requestNumber}.json"`);
+      assert.equal(downloaded.body.customer.email, 'chan@example.com');
+      assert.equal(downloaded.body.member.memberNo, memberNo);
+      assert.equal(downloaded.body.loyalty.account.balance, 250);
+      assert.deepEqual(downloaded.body.orders, []);
+      assert.ok(await db.auditLog.findFirst({ where: { action: 'privacy.export.downloaded', objectId: opened.id } }));
+
+      // 删除请求不该产出第二份副本。
+      const removal = await accept({ requestType: 'delete' });
+      await verify(removal.id, nextKey(), { verificationMethod: 'email_reply', evidenceRef: 'ticket-export-deny', reason: 'Verified', customerId });
+      const denied = await request('POST', `admin/privacy-requests/${removal.id}/export`, {},
+        { Origin: origin, 'X-CSRF-Token': adminCsrf, 'Idempotency-Key': nextKey() }, 'ErrorEnvelope');
+      assert.equal(denied.status, 422);
+      assert.equal(denied.body.error.code, 'PRIVACY_EXPORT_NOT_ALLOWED');
+      assert.ok(account);
+    });
+
+    await t.test('completing an anonymization rewrites the customer and keeps the audit trail', async () => {
+      const customer = await admin('POST', 'admin/customers', { displayName: 'To Be Anonymous',
+        email: 'anon@example.com', phone: '+85291234567', internalNote: 'VIP', tags: ['vip'] });
+      // 顾客接口用的是通用成功信封，这里只需要拿回新顾客 id。
+      assert.equal(customer.status, 201, JSON.stringify(customer.body));
+      const targetId = customer.body.data.id as string;
+      const member = await db.memberProfile.create({ data: { customerId: targetId,
+        memberNo: memberNumber('20261117', randomUUID().replaceAll('-', '').slice(0, 6).toUpperCase()),
+        consentRef: 'consent-v1', joinedAt: new Date(), createdAt: new Date(), updatedAt: new Date() } });
+      await db.memberSession.create({ data: { memberId: member.id, tokenDigest: randomBytes(32).toString('hex'),
+        expiresAt: new Date(Date.now() + 3_600_000), createdAt: new Date(), updatedAt: new Date() } });
+
+      const opened = await accept({ requestType: 'anonymize' });
+      await verify(opened.id, nextKey(), { verificationMethod: 'email_reply', evidenceRef: 'ticket-anon', reason: 'Verified', customerId: targetId });
+      assert.equal((await decide(opened.id, nextKey(), { decision: 'approved', reason: 'Approved' })).status, 200);
+      const done = await decide(opened.id, nextKey(), { decision: 'completed', reason: 'Profile anonymized, orders kept',
+        retentionExceptionRef: 'retention-v1#order-history' });
+      assert.equal(done.status, 200, JSON.stringify(done.body));
+
+      const after = await db.customer.findUniqueOrThrow({ where: { id: targetId } });
+      assert.match(after.displayName, /^Anonymized [0-9a-f]{8}$/);
+      assert.equal(after.emailNormalized, null);
+      assert.equal(after.phone, null);
+      assert.equal(after.internalNote, null);
+      assert.deepEqual(after.tags, []);
+      assert.equal(after.status, 'anonymized');
+      const memberAfter = await db.memberProfile.findUniqueOrThrow({ where: { id: member.id } });
+      assert.equal(memberAfter.status, 'closed');
+      assert.match(memberAfter.consentRef!, /^withdrawn:/);
+      assert.equal(await db.memberSession.count({ where: { memberId: member.id, status: 'active' } }), 0);
+      const consents = await db.customerConsent.findMany({ where: { customerId: targetId } });
+      assert.equal(consents.length, 4);
+      assert.ok(consents.every(row => row.status === 'withdrawn'));
+      const detail = await admin('GET', `admin/privacy-requests/${opened.id}`, undefined, 'PrivacyRequestEnvelope');
+      assert.ok(detail.body.data.history.some((entry: any) => entry.action === 'privacy.data.anonymized'));
+    });
+
+    await t.test('a marketing withdrawal writes structured consent state, not just a note', async () => {
+      const customer = await admin('POST', 'admin/customers', { displayName: 'Marketing Fan', email: 'marketing@example.com' });
+      assert.equal(customer.status, 201, JSON.stringify(customer.body));
+      const targetId = customer.body.data.id as string;
+      const opened = await accept({ requestType: 'withdraw_marketing' });
+      await verify(opened.id, nextKey(), { verificationMethod: 'email_reply', evidenceRef: 'ticket-optout', reason: 'Verified', customerId: targetId });
+      assert.equal((await decide(opened.id, nextKey(), { decision: 'approved', reason: 'Approved' })).status, 200);
+      const done = await decide(opened.id, nextKey(), { decision: 'completed', reason: 'Customer opted out of all marketing' });
+      assert.equal(done.status, 200, JSON.stringify(done.body));
+      const consents = await db.customerConsent.findMany({ where: { customerId: targetId }, orderBy: { channel: 'asc' } });
+      assert.deepEqual(consents.map(row => row.channel), ['email', 'phone', 'push', 'sms']);
+      assert.ok(consents.every(row => row.status === 'withdrawn' && row.purpose === 'marketing'));
+      assert.ok(await db.auditLog.findFirst({ where: { action: 'privacy.marketing.withdrawn', objectId: opened.id } }));
     });
   } finally {
     if (app) await app.close();

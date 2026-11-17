@@ -1992,6 +1992,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/privacy-requests/{id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build an encrypted, time-limited data export for a verified access or export request */
+        post: operations["createPrivacyExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/privacy-requests/{id}/export/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download the decrypted export artifact; requires the same processing permission */
+        get: operations["downloadPrivacyExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/privacy-settings": {
         parameters: {
             query?: never;
@@ -4056,6 +4090,111 @@ export interface components {
             retentionExceptionRef?: string | null;
             /** Format: uuid */
             exportJobId?: string | null;
+        };
+        /** @description Empty body. The request and its verified customer determine what is exported. */
+        PrivacyExportRequest: Record<string, never>;
+        PrivacyExportJob: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            customerId: string;
+            /** @enum {string} */
+            status: "ready" | "expired" | "revoked";
+            byteSize: number;
+            sha256: string;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Plaintext or ciphertext is destroyed after this instant.
+             */
+            expiresAt: string;
+            /** Format: date-time */
+            revokedAt: string | null;
+        };
+        PrivacyExportEnvelope: {
+            data: components["schemas"]["PrivacyExportJob"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** @description The deliverable itself. It contains personal data and is only served over an authenticated, non-cacheable GET. */
+        PrivacyExportArtifact: {
+            schemaVersion: string;
+            requestNumber: string;
+            /** Format: date-time */
+            generatedAt: string;
+            customer: {
+                /** Format: uuid */
+                id: string;
+                displayName: string;
+                email: string | null;
+                phone: string | null;
+                tags: string[];
+                status: string;
+                internalNote: string | null;
+                /** Format: date-time */
+                createdAt: string;
+                /** Format: date-time */
+                updatedAt: string;
+            };
+            member: {
+                /** Format: uuid */
+                id: string;
+                memberNo: string;
+                status: string;
+                consentRef: string | null;
+                /** Format: date-time */
+                joinedAt: string;
+                tier: {
+                    code: string;
+                    rank: number;
+                } | null;
+            } | null;
+            loyalty: {
+                account: {
+                    balance: number;
+                    status: string;
+                    version: number;
+                } | null;
+                ledger: {
+                    /** Format: uuid */
+                    id: string;
+                    deltaPoints: number;
+                    balanceAfter: number;
+                    entryType: string;
+                    sourceType: string;
+                    reasonCode: string;
+                    /** Format: date-time */
+                    createdAt: string;
+                    /** Format: date-time */
+                    expiresAt: string | null;
+                }[];
+            };
+            orders: {
+                orderNumber: string;
+                orderStatus: string;
+                paymentStatus: string;
+                fulfillmentStatus: string;
+                currency: string;
+                totalMinor: number;
+                /** Format: date-time */
+                placedAt: string;
+                /** Format: date-time */
+                linkedAt: string;
+                linkSource: string;
+            }[];
+            consents: {
+                /** @enum {string} */
+                channel: "email" | "sms" | "phone" | "push";
+                purpose: string;
+                /** @enum {string} */
+                status: "granted" | "withdrawn";
+                source: string;
+                evidenceRef: string | null;
+                /** Format: date-time */
+                updatedAt: string;
+            }[];
         };
         /** @description Admin who acted on a request. Display name only, never credentials or session data. */
         PrivacyActorRef: {
@@ -8597,6 +8736,70 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    createPrivacyExport: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Same key and same request returns the original result; same key with different request returns IDEMPOTENCY_CONFLICT. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrivacyExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Export job metadata; the encrypted payload is never returned here. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivacyExportEnvelope"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    downloadPrivacyExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON artifact as a private, non-cacheable attachment. */
+            200: {
+                headers: {
+                    /** @description SHA-256 of the plaintext artifact. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivacyExportArtifact"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["UnexpectedError"];
         };
     };

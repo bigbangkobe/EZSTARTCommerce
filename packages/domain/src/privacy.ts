@@ -192,6 +192,23 @@ export interface PrivacyDecisionInput {
 /** 完成删除/匿名化必须记下保留例外：交易事实不随请求消失，依据要能指出来。 */
 export const RETENTION_REQUIRED_TYPES: readonly PrivacyRequestType[] = ['delete', 'anonymize'];
 
+/** 只有查阅与导出请求会产出工件；删除、退订等请求生成快照等于多留一份副本。 */
+export const PRIVACY_EXPORT_REQUEST_TYPES: readonly PrivacyRequestType[] = ['access', 'export'];
+export const PRIVACY_DISPOSITION_RULE_VERSION = 'privacy-disposition-v1';
+export const PRIVACY_EXPORT_TTL_MS = 24 * 60 * 60 * 1000;
+export const MARKETING_CONSENT_CHANNELS = ['email', 'sms', 'phone', 'push'] as const;
+export type MarketingConsentChannel = (typeof MARKETING_CONSENT_CHANNELS)[number];
+
+export function assertExportAllowed(requestType: PrivacyRequestType): void {
+  if (!PRIVACY_EXPORT_REQUEST_TYPES.includes(requestType)) fail('PRIVACY_EXPORT_NOT_ALLOWED');
+}
+
+/** 匿名名保留可追溯的前缀，但不再包含邮箱本地部分、电话或顾客自填姓名。 */
+export function anonymizedDisplayName(customerId: string): string {
+  if (typeof customerId !== 'string' || !UUID.test(customerId)) fail('PRIVACY_CUSTOMER_REQUIRED');
+  return `Anonymized ${customerId.slice(0, 8)}`;
+}
+
 export function normalizePrivacyDecision(body: unknown, requestType: PrivacyRequestType): PrivacyDecisionInput {
   const input = body !== null && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
   const decision = input.decision;

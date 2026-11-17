@@ -86,6 +86,32 @@ export class PrivacyController extends ManagementHttp {
       header(request, 'x-csrf-token'), uuid(id), this.idempotencyKey(request), body, this.context(request)));
   }
 
+  /** 生成导出工件：明文不进响应，只有密文与哈希；重复提交刷新同一份工件。 */
+  @Post('privacy-requests/:id/export')
+  async createExport(@Param('id') id: string, @Body() body: Record<string, unknown>, @Req() request: ApiRequest,
+    @Res() response: ServerResponse) {
+    await this.write(request, 'PrivacyExportRequest', body);
+    this.send(response, request, 201, await this.privacyService().createExport(this.cookieSession(request),
+      header(request, 'x-csrf-token'), uuid(id), this.context(request)));
+  }
+
+  /** 下载是原始 JSON 附件，不走统一信封：前端拿到的是可交付给顾客的工件本身。 */
+  @Get('privacy-requests/:id/export/:jobId')
+  async downloadExport(@Param('id') id: string, @Param('jobId') jobId: string,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    const result = await this.privacyService().downloadExport(this.cookieSession(request), uuid(id), uuid(jobId), this.context(request));
+    if (!result) throw new AuthError(404, 'NOT_FOUND');
+    const bytes = Buffer.from(result.text, 'utf8');
+    response.statusCode = 200;
+    response.setHeader('Content-Type', 'application/json; charset=utf-8');
+    response.setHeader('Content-Length', String(bytes.length));
+    response.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('ETag', `"${result.sha256}"`);
+    response.end(bytes);
+  }
+
   @Patch('privacy-settings')
   async updateSettings(@Body() body: Record<string, unknown>, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     await this.write(request, 'PrivacySettingPatchRequest', body);

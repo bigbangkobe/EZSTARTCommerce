@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  assertDueAtExtension, assertPrivacyTransition, canTransition, decisionStatus, dueAtFrom, isTerminal,
+  assertDueAtExtension, assertPrivacyTransition, assertExportAllowed, anonymizedDisplayName, canTransition,
+  decisionStatus, dueAtFrom, isTerminal, MARKETING_CONSENT_CHANNELS,
   normalizeDueDays, normalizePrivacyDecision, normalizePrivacyRequestInput, normalizePrivacyUpdate,
   normalizePrivacyVerification, overdueDays, privacyDay, privacyRequestNumber, PrivacyRuleError,
   requiresVerifiedIdentity,
@@ -111,6 +112,18 @@ test('completing a deletion needs a retention reference, approving it does not',
   rejects(() => normalizePrivacyDecision({ decision: 'done', reason: 'x' }, 'access'), 'PRIVACY_DECISION_INVALID');
   rejects(() => normalizePrivacyDecision({ decision: 'completed', reason: '' }, 'access'), 'PRIVACY_DECISION_INVALID');
   rejects(() => normalizePrivacyDecision({ decision: 'completed', reason: 'x', exportJobId: 'not-a-uuid' }, 'export'), 'PRIVACY_DECISION_INVALID');
+});
+
+test('only access and export requests may produce a deliverable artifact', () => {
+  assertExportAllowed('access');
+  assertExportAllowed('export');
+  for (const type of ['correct', 'withdraw_marketing', 'delete', 'anonymize'] as const) {
+    rejects(() => assertExportAllowed(type), 'PRIVACY_EXPORT_NOT_ALLOWED');
+  }
+  // 匿名名只保留顾客 id 前缀，不能把旧邮箱本地部分或自填姓名带过去。
+  assert.equal(anonymizedDisplayName('3f2c1d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f'), 'Anonymized 3f2c1d3e');
+  rejects(() => anonymizedDisplayName('not-a-uuid'), 'PRIVACY_CUSTOMER_REQUIRED');
+  assert.deepEqual([...MARKETING_CONSENT_CHANNELS], ['email', 'sms', 'phone', 'push']);
 });
 
 test('owner reassignment and extensions both need a reason and one real change', () => {

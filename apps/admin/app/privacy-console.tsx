@@ -22,7 +22,11 @@ const DECISIONS: Record<string, string> = { approved: '批准（待执行）', r
   needs_information: '要求补充材料', completed: '标记完成' };
 const ACTION_LABELS: Record<string, string> = { 'privacy.request.created': '受理', 'privacy.request.verified': '核验身份',
   'privacy.request.approved': '批准', 'privacy.request.rejected': '拒绝', 'privacy.request.needs_information': '要求补充',
-  'privacy.request.completed': '标记完成', 'privacy.request.updated': '改负责人或延期' };
+  'privacy.request.completed': '标记完成', 'privacy.request.updated': '改负责人或延期',
+  'privacy.export.created': '生成导出工件', 'privacy.export.downloaded': '下载导出工件',
+  'privacy.data.anonymized': '匿名化顾客资料', 'privacy.marketing.withdrawn': '退订营销通知' };
+/** 只有这两类请求会生成可交付工件；其余类型生成快照等于多留一份副本。 */
+const EXPORT_TYPES = new Set(['access', 'export']);
 /** 只有这两类请求在完成时必须指出保留依据：交易事实不随请求消失。 */
 const RETENTION_TYPES = new Set(['delete', 'anonymize']);
 
@@ -61,7 +65,7 @@ export function PrivacyConsole() {
       const payload = await response.json().catch(() => null) as { error?: { code?: string } } | null;
       const code = payload?.error?.code ?? '';
       if (response.status === 403) throw new Error(canProcess
-        ? '当前账号没有该操作权限：受理与延期要 privacy.manage，核验要 privacy.verify，决定要 privacy.process。'
+        ? '当前账号没有该操作权限：受理与延期要 privacy.manage，核验要 privacy.verify，决定、导出与下载要 privacy.process。'
         : '当前账号没有资料请求权限：查看队列要 privacy.read。');
       if (response.status === 404) throw new Error('这条请求不存在，可能刚被其他人处理，请刷新。');
       if (response.status === 409) throw new Error(
@@ -236,6 +240,21 @@ export function PrivacyConsole() {
         {selected.decisionReason && <p><small>最近记录：{STATUS[selected.status]} —— {selected.decisionReason}
           （{when(selected.decisionAt)}，{selected.reviewer?.displayName ?? '—'}）</small></p>}
         {selected.retentionExceptionRef && <p><small>保留例外依据：{selected.retentionExceptionRef}</small></p>}
+
+        {EXPORT_TYPES.has(selected.requestType) && selected.exportJobRef && <p><small>导出工件：
+          <a href={`/api/v1/admin/privacy-requests/${selected.id}/export/${selected.exportJobRef}`} download>
+            下载 JSON 工件
+          </a>（需 privacy.process；24 小时内有效，下载行为也会写入审计）</small></p>}
+        {canProcess && EXPORT_TYPES.has(selected.requestType) && selected.customerId &&
+          ['verified', 'approved'].includes(selected.status) && <p>
+            <button disabled={busy} onClick={() => void run(async () => {
+              const job = await request<{ id: string; sha256: string; expiresAt: string }>(
+                `privacy-requests/${selected.id}/export`, 'POST', {}, { key: crypto.randomUUID() });
+              setNotice(`导出工件已生成，SHA-256 ${job.sha256.slice(0, 12)}…，有效期至 ${when(job.expiresAt)}。`);
+              await reload();
+            })}>生成导出工件</button>
+            <small> 明文只在下载时解密；重复生成会覆盖同一份工件，不会多留副本。</small>
+          </p>}
 
         {canVerify && selected.verificationState !== 'verified' && !['rejected', 'completed'].includes(selected.status) &&
           <form onSubmit={(event: FormEvent<HTMLFormElement>) => {

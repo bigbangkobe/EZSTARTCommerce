@@ -196,6 +196,31 @@ class ContractTests(unittest.TestCase):
                     self.assertTrue(operation.get("x-permission"), (method, path))
         self.assertEqual(len(ids), len(set(ids)))
 
+    def test_privacy_disposition_is_permissioned_and_typed(self):
+        export = SPEC["paths"]["/admin/privacy-requests/{id}/export"]["post"]
+        download = SPEC["paths"]["/admin/privacy-requests/{id}/export/{jobId}"]["get"]
+        self.assertEqual("privacy.process", export["x-permission"])
+        self.assertEqual("privacy.process", download["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], export["security"])
+        self.assertEqual([{"AdminSession": []}], download["security"])
+        self.assertIn({"$ref": "#/components/parameters/IdempotencyKey"}, export["parameters"])
+        job = {"id": UUID, "requestId": UUID, "customerId": UUID, "status": "ready", "byteSize": 128,
+               "sha256": "a" * 64, "createdAt": NOW, "expiresAt": NOW, "revokedAt": None}
+        self.assertEqual([], errors("PrivacyExportJob", job))
+        self.assertTrue(errors("PrivacyExportJob", dict(job, status="pending")))
+        self.assertTrue(errors("PrivacyExportJob", dict(job, sha256="not-a-hash")))
+        artifact = {"schemaVersion": "privacy-disposition-v1", "requestNumber": "PR-20261117-0001",
+                    "generatedAt": NOW,
+                    "customer": {"id": UUID, "displayName": "Chan", "email": None, "phone": None, "tags": [],
+                                 "status": "active", "internalNote": None, "createdAt": NOW, "updatedAt": NOW},
+                    "member": None, "loyalty": {"account": None, "ledger": []}, "orders": [], "consents": []}
+        self.assertEqual([], errors("PrivacyExportArtifact", artifact))
+        self.assertTrue(errors("PrivacyExportArtifact", dict(artifact, member={"memberNo": "M-1"})))
+        consent = {"channel": "email", "purpose": "marketing", "status": "withdrawn", "source": "privacy-request",
+                   "evidenceRef": None, "updatedAt": NOW}
+        self.assertEqual([], errors("PrivacyExportArtifact", dict(artifact, consents=[consent])))
+        self.assertTrue(errors("PrivacyExportArtifact", dict(artifact, consents=[dict(consent, channel="carrier_pigeon")])))
+
     def test_order_actions_use_separate_permissions_and_versioned_bodies(self):
         expected = {
             ("/admin/orders", "get"): "orders.read",

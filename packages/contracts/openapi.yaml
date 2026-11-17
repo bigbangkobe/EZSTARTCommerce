@@ -2666,6 +2666,58 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/privacy-requests/{id}/export:
+    post:
+      tags: [Privacy]
+      operationId: createPrivacyExport
+      summary: Build an encrypted, time-limited data export for a verified access or export request
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: privacy.process
+      x-mfa-required: true
+      parameters: [{ $ref: '#/components/parameters/UuidId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrivacyExportRequest' }
+      responses:
+        '201':
+          description: Export job metadata; the encrypted payload is never returned here.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyExportEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/privacy-requests/{id}/export/{jobId}:
+    get:
+      tags: [Privacy]
+      operationId: downloadPrivacyExport
+      summary: Download the decrypted export artifact; requires the same processing permission
+      security: [{ AdminSession: [] }]
+      x-permission: privacy.process
+      x-mfa-required: true
+      parameters:
+        - { $ref: '#/components/parameters/UuidId' }
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: JSON artifact as a private, non-cacheable attachment.
+          headers:
+            ETag: { schema: { type: string }, description: SHA-256 of the plaintext artifact. }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyExportArtifact' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
 
   /admin/privacy-settings:
     patch:
@@ -6662,6 +6714,128 @@ components:
         reason: { type: string, minLength: 1, maxLength: 1000 }
         retentionExceptionRef: { type: [string, 'null'], maxLength: 200 }
         exportJobId: { type: [string, 'null'], format: uuid }
+    PrivacyExportRequest:
+      type: object
+      additionalProperties: false
+      description: Empty body. The request and its verified customer determine what is exported.
+    PrivacyExportJob:
+      type: object
+      additionalProperties: false
+      required: [id, requestId, customerId, status, byteSize, sha256, createdAt, expiresAt, revokedAt]
+      properties:
+        id: { type: string, format: uuid }
+        requestId: { type: string, format: uuid }
+        customerId: { type: string, format: uuid }
+        status: { type: string, enum: [ready, expired, revoked] }
+        byteSize: { type: integer, minimum: 0 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time, description: Plaintext or ciphertext is destroyed after this instant. }
+        revokedAt: { type: [string, 'null'], format: date-time }
+    PrivacyExportEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PrivacyExportJob' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PrivacyExportArtifact:
+      type: object
+      additionalProperties: false
+      description: The deliverable itself. It contains personal data and is only served over an authenticated, non-cacheable GET.
+      required: [schemaVersion, requestNumber, generatedAt, customer, member, loyalty, orders, consents]
+      properties:
+        schemaVersion: { type: string }
+        requestNumber: { type: string }
+        generatedAt: { type: string, format: date-time }
+        customer:
+          type: object
+          additionalProperties: false
+          required: [id, displayName, email, phone, tags, status, internalNote, createdAt, updatedAt]
+          properties:
+            id: { type: string, format: uuid }
+            displayName: { type: string }
+            email: { type: [string, 'null'] }
+            phone: { type: [string, 'null'] }
+            tags: { type: array, items: { type: string } }
+            status: { type: string }
+            internalNote: { type: [string, 'null'] }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+        member:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [id, memberNo, status, consentRef, joinedAt, tier]
+          properties:
+            id: { type: string, format: uuid }
+            memberNo: { type: string }
+            status: { type: string }
+            consentRef: { type: [string, 'null'] }
+            joinedAt: { type: string, format: date-time }
+            tier:
+              type: [object, 'null']
+              additionalProperties: false
+              required: [code, rank]
+              properties:
+                code: { type: string }
+                rank: { type: integer }
+        loyalty:
+          type: object
+          additionalProperties: false
+          required: [account, ledger]
+          properties:
+            account:
+              type: [object, 'null']
+              additionalProperties: false
+              required: [balance, status, version]
+              properties:
+                balance: { type: integer }
+                status: { type: string }
+                version: { type: integer }
+            ledger:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, deltaPoints, balanceAfter, entryType, sourceType, reasonCode, createdAt, expiresAt]
+                properties:
+                  id: { type: string, format: uuid }
+                  deltaPoints: { type: integer }
+                  balanceAfter: { type: integer }
+                  entryType: { type: string }
+                  sourceType: { type: string }
+                  reasonCode: { type: string }
+                  createdAt: { type: string, format: date-time }
+                  expiresAt: { type: [string, 'null'], format: date-time }
+        orders:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [orderNumber, orderStatus, paymentStatus, fulfillmentStatus, currency, totalMinor, placedAt, linkedAt, linkSource]
+            properties:
+              orderNumber: { type: string }
+              orderStatus: { type: string }
+              paymentStatus: { type: string }
+              fulfillmentStatus: { type: string }
+              currency: { type: string }
+              totalMinor: { type: integer }
+              placedAt: { type: string, format: date-time }
+              linkedAt: { type: string, format: date-time }
+              linkSource: { type: string }
+        consents:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [channel, purpose, status, source, evidenceRef, updatedAt]
+            properties:
+              channel: { type: string, enum: [email, sms, phone, push] }
+              purpose: { type: string }
+              status: { type: string, enum: [granted, withdrawn] }
+              source: { type: string }
+              evidenceRef: { type: [string, 'null'] }
+              updatedAt: { type: string, format: date-time }
     PrivacyActorRef:
       type: [object, 'null']
       additionalProperties: false

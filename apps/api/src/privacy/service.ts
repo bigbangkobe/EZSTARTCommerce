@@ -1,12 +1,14 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import {
-  assertDueAtExtension, assertPrivacyTransition, decisionStatus, dueAtFrom, isTerminal, normalizeDueDays,
-  normalizePrivacyDecision, normalizePrivacyRequestInput, normalizePrivacyUpdate, normalizePrivacyVerification,
+  assertDueAtExtension, assertPrivacyTransition, assertExportAllowed, decisionStatus, dueAtFrom, isTerminal,
+  normalizeDueDays, normalizePrivacyDecision, normalizePrivacyRequestInput, normalizePrivacyUpdate, normalizePrivacyVerification,
   overdueDays, privacyDay, privacyRequestNumber, PRIVACY_RULE_VERSION, PRIVACY_STATUSES, PrivacyRuleError,
-  requiresVerifiedIdentity, type PrivacyRequestType, type PrivacyStatus,
+  PRIVACY_EXPORT_TTL_MS, requiresVerifiedIdentity, type PrivacyRequestType, type PrivacyStatus,
 } from '../../../../packages/domain/src/privacy.js';
+import { decrypt, encrypt } from '../identity/crypto.js';
 import { AuthError, IdentityService, type RequestContext, type User } from '../identity/service.js';
+import { anonymizeCustomerInTx, buildExportSnapshot, withdrawMarketingInTx } from './disposition.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -36,6 +38,7 @@ type RequestRow = Prisma.CustomerPrivacyRequestGetPayload<{ include: typeof incl
 export class PrivacyService {
   constructor(private readonly identity: IdentityService) {}
   private get db() { return this.identity.db; }
+  private get config() { return this.identity.config; }
 
   private rule<T>(fn: () => T): T {
     try { return fn(); } catch (error) {
@@ -86,6 +89,14 @@ export class PrivacyService {
 
   private settingsView(row: { dueDays: number; version: number; updatedAt: Date }) {
     return { dueDays: row.dueDays, version: row.version, updatedAt: row.updatedAt.toISOString() };
+  }
+
+  /** 工件元数据只暴露哈希与大小：密文、明文都不出现在列表和详情里。 */
+  private exportView(row: { id: string; requestId: string; customerId: string; status: string; byteSize: number;
+    sha256: string; createdAt: Date; expiresAt: Date; revokedAt: Date | null }) {
+    return { id: row.id, requestId: row.requestId, customerId: row.customerId, status: row.status,
+      byteSize: row.byteSize, sha256: row.sha256, createdAt: row.createdAt.toISOString(),
+      expiresAt: row.expiresAt.toISOString(), revokedAt: row.revokedAt?.toISOString() ?? null };
   }
 
   private has(actor: User, code: string) {
@@ -141,6 +152,61 @@ export class PrivacyService {
       if (!row) throw new AuthError(404, 'NOT_FOUND');
       return { ...this.view(row, now, actor), history: await this.history(tx, row.id) };
     });
+  }
+
+  // ---- 数据导出 -------------------------------------------------------------
+
+  /**
+   * 导出工件与请求一一对应：重复发起只会刷新同一行的密文，不会留下第二份顾客副本。
+   * 明文快照用 AES-GCM 加密，AAD 绑工件行；24 小时后密文作废，匿名化时立即销毁。
+   */
+  async createExport(supplied: string, csrfToken: string, id: string, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfToken, 'privacy.process', async (tx, actor, _session, now) => {
+      await this.lock(tx, `privacy:${id}`);
+      const row = await tx.customerPrivacyRequest.findUnique({ where: { id } });
+      if (!row) throw new AuthError(404, 'NOT_FOUND');
+      if (!['verified', 'approved'].includes(row.status)) throw new AuthError(409, 'PRIVACY_STATUS_CONFLICT');
+      this.rule(() => assertExportAllowed(row.requestType as PrivacyRequestType));
+      if (!row.customerId) throw new AuthError(409, 'PRIVACY_CUSTOMER_REQUIRED');
+
+      const snapshot = await buildExportSnapshot(tx, row.customerId, row.requestNumber, now);
+      const existing = await tx.customerDataExportJob.findUnique({ where: { requestId: id } });
+      const jobId = existing?.id ?? randomUUID();
+      const data = { status: 'ready', encryptedPayload: encrypt(snapshot.text, jobId, this.config, 'privacy-export'),
+        byteSize: snapshot.byteSize, sha256: snapshot.sha256, createdAt: now,
+        expiresAt: new Date(now.getTime() + PRIVACY_EXPORT_TTL_MS), revokedAt: null };
+      const job = existing
+        ? await tx.customerDataExportJob.update({ where: { id: jobId }, data })
+        : await tx.customerDataExportJob.create({ data: { id: jobId, requestId: id, customerId: row.customerId, ...data } });
+      await tx.customerPrivacyRequest.update({ where: { id }, data: { exportJobRef: jobId, updatedAt: now } });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'privacy.export.created', id, 'success',
+        `${row.requestNumber} sha256=${snapshot.sha256.slice(0, 12)}`);
+      return this.exportView(job);
+    }, false);
+  }
+
+  /** 下载发生在同一个权限门槛上：能看请求的人未必有权拿到整份资料。 */
+  async downloadExport(supplied: string, id: string, jobId: string, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, null, 'privacy.process', async (tx, actor, _session, now) => {
+      const row = await tx.customerPrivacyRequest.findUnique({ where: { id } });
+      if (!row) throw new AuthError(404, 'NOT_FOUND');
+      const job = await tx.customerDataExportJob.findUnique({ where: { id: jobId } });
+      if (!job || job.requestId !== id) throw new AuthError(404, 'NOT_FOUND');
+      if (job.status !== 'ready' || job.expiresAt <= now) {
+        if (job.status === 'ready') await tx.customerDataExportJob.update({ where: { id: jobId }, data: {
+          status: 'expired', encryptedPayload: null, revokedAt: now,
+        } });
+        return null;
+      }
+      let text: string;
+      try { text = decrypt(job.encryptedPayload!, job.id, this.config, 'privacy-export'); }
+      catch { throw new AuthError(500, 'EXPORT_UNREADABLE'); }
+      const actual = createHash('sha256').update(text).digest('hex');
+      if (actual !== job.sha256 || Buffer.byteLength(text) !== job.byteSize) throw new AuthError(500, 'EXPORT_INTEGRITY_FAILED');
+      await this.identity.recordAudit(tx, ctx, actor.id, 'privacy.export.downloaded', id, 'success',
+        `${row.requestNumber} sha256=${job.sha256.slice(0, 12)}`);
+      return { text, fileName: `${row.requestNumber}.json`, sha256: job.sha256 };
+    }, false);
   }
 
   // ---- 受理 -----------------------------------------------------------------
@@ -226,13 +292,36 @@ export class PrivacyService {
         throw new AuthError(409, 'PRIVACY_VERIFICATION_REQUIRED');
       }
       this.rule(() => assertPrivacyTransition(row.status as PrivacyStatus, next));
+      if (input.exportJobId) {
+        const job = await tx.customerDataExportJob.findUnique({ where: { id: input.exportJobId } });
+        if (!job || job.requestId !== row.id) throw new AuthError(422, 'PRIVACY_EXPORT_JOB_INVALID');
+      }
+      // 完成不是一句状态变更：删除/匿名化真的改写资料，退订真的写入同意状态。
+      // 与请求状态更新同事务：任何一步失败都不会出现「已完成但资料还在」。
+      const dispositions: string[] = [];
+      if (next === 'completed' && row.customerId) {
+        if (row.requestType === 'withdraw_marketing') {
+          await withdrawMarketingInTx(tx, row.customerId, 'privacy-request', input.retentionExceptionRef, now);
+          await tx.memberProfile.updateMany({ where: { customerId: row.customerId }, data: {
+            consentRef: `withdrawn:${now.toISOString()}`, updatedAt: now,
+          } });
+          dispositions.push('privacy.marketing.withdrawn');
+        } else if (row.requestType === 'delete' || row.requestType === 'anonymize') {
+          await anonymizeCustomerInTx(tx, row.customerId, input.retentionExceptionRef!, now);
+          dispositions.push('privacy.data.anonymized');
+        }
+      }
       const updated = await this.write(() => tx.customerPrivacyRequest.update({ where: { id }, data: {
         status: next, decisionAt: now, decisionReason: input.reason, reviewerId: actor.id,
-        retentionExceptionRef: input.retentionExceptionRef, exportJobRef: input.exportJobId,
+        retentionExceptionRef: input.retentionExceptionRef,
+        exportJobRef: input.exportJobId ?? row.exportJobRef,
         ...(next === 'completed' ? { completedAt: now } : {}),
         idempotencyKey, version: { increment: 1 }, updatedAt: now,
       }, include: includeRequest }));
       await this.identity.recordAudit(tx, ctx, actor.id, `privacy.request.${next}`, id, 'success', input.reason);
+      for (const action of dispositions) {
+        await this.identity.recordAudit(tx, ctx, actor.id, action, id, 'success', input.reason);
+      }
       return this.view(updated, now, actor);
     });
   }
