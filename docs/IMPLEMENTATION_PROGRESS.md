@@ -401,3 +401,17 @@
 验证：真实 PostgreSQL 上 `node --test` **236/236 全绿**（会员 HTTP 端到端 15 子测，新增「profile 下发的 CSRF 与会话一致」「重发使旧码失效、新码仍可用」两项）；契约 37 项、生成物一致；前台 `next build` 通过并生成 `/login`、`/member`；已部署 mrinhk（`ad69456`），生产冒烟：`/login`、`/member`、`/cart`、`/products` 均 200，匿名 `storefront/member/profile` 401，页头会员入口指向 `/login`。
 
 边界：worker 与 SMTP 仍未启动，验证码邮件目前只在队列里等投递，所以**线上登录闭环还差最后一步**（页面与接口都已就绪，补上 SMTP 凭据并起 worker 即可）；登录页没有图形验证码，防刷依赖 IP 限速 + 邮箱 60 秒冷却 + 每小时 5 次；会员中心只读，尚无地址簿、改资料、积分兑换。
+
+## 2026-11-17：M10 批次四（后台会员与积分页面）
+
+范围：把批次二已经在跑的后台接口变成店铺真的能用的页面，并补上「看账」这个动作。此前等级与积分只有接口，店主改口径、分等级、查会员积分都得靠手写请求。
+
+- 新增 `GET /admin/members/{id}/points`（`members.manage`，`/admin/members/{id}/points-adjustments` 之前一直缺读侧）：返回会员摘要（会员号、状态、等级、累计消费、顾客姓名与邮箱）、余额、账户状态、当前换算率与最近流水（`limit`/`cursor` 分页）。邮箱与顾客模块同口径——有 `customers.read_pii` 才是原文，否则是掩码。**读只要 `members.manage`，改才要 `points.adjust`**：能看见账不等于能改账，反过来也一样。
+- 后台新增 `/admin/members`（`members-console.tsx`）：积分口径（开关、换算率、有效期，带 `If-Match` 版本控制）、等级阶梯（列表 + 新建 + 选中编辑，`rank`/`code` 冲突分码提示，退役不清空既有归属）、会员列表（分页「加载更多」）、选中会员的余额与流水，以及人工调整（必须带原因码与原因说明）。
+- 人工调整的幂等键跟着「这次意图」走：换会员或提交成功才换新键，网络失败后重试沿用同一个键，所以重试不会变成两次加减；`IDEMPOTENCY_KEY_REUSED` 单独提示「同一个键被用于不同请求」。
+- 各后台页页头补「会员与积分」入口（员工与角色、店铺设置两页按 `members.manage` 条件显示），否则新页面没有入口。
+- 契约：新增 `/admin/members/{id}/points`（`operationId: getAdminMemberPoints`；最初写成 `getMemberPoints` 与前台会员积分操作重名，契约测试的 operationId 唯一性检查当场拦下），重新生成 `generated/api.d.ts`，37 项契约测试全绿。
+
+验证：真实 PostgreSQL 18.7 上 `node --test` **237/237 全绿**，新增子测覆盖「`members.manage` 可读账且无 PII 时邮箱为掩码」「只有 `points.adjust` 读账 403」「未知会员 404」「非法 id 422」；契约 37 项、生成物一致、根 `tsc` 与后台 `tsc --noEmit` 通过、后台 `next build` 产出 `/admin/members`。
+
+边界：页面只做单店口径，没有等级「删除」（只有退役）；积分兑换、优惠券抵扣、退款按比例扣回与到期清扫仍未接入；会员中心仍只读；worker 与 SMTP 仍未启动。

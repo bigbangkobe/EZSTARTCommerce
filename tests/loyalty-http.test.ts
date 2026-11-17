@@ -246,6 +246,25 @@ test('loyalty: tier ladder, idempotent point ledger and order-completion earning
       assert.equal((await limited('GET', 'admin/loyalty')).status, 200);
     });
 
+    await t.test('the back office reads a member ledger with members.manage, and only masked email without pii', async () => {
+      const reader = await sessionFor(['members.manage', 'customers.read_masked']);
+      const ledger = await reader('GET', `admin/members/${memberId}/points?limit=20`);
+      assert.equal(ledger.status, 200, JSON.stringify(ledger.body));
+      assert.equal(ledger.body.data.balance, 300);
+      assert.equal(ledger.body.data.member.memberNo, (await db.memberProfile.findUniqueOrThrow({ where: { id: memberId } })).memberNo);
+      assert.equal(ledger.body.data.items.length, 2);
+      assert.equal(ledger.body.data.items[0].deltaPoints, -200);
+      assert.equal(ledger.body.data.hasMore, false);
+      // 没有 customers.read_pii：邮箱只能是掩码值。
+      assert.equal(ledger.body.data.member.customer.email, 'l***@example.com');
+
+      // 能看账不等于能改账，反过来也一样：只有 points.adjust 的账号连账都读不到。
+      const adjustOnly = await sessionFor(['points.adjust']);
+      assert.equal((await adjustOnly('GET', `admin/members/${memberId}/points`)).status, 403);
+      assert.equal((await reader('GET', `admin/members/${randomUUID()}/points`)).status, 404);
+      assert.equal((await reader('GET', 'admin/members/not-a-uuid/points')).status, 422);
+    });
+
     let memberCookie = '';
     await t.test('the member sees only their own balance and history', async () => {
       await resetLimits();

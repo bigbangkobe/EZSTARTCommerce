@@ -155,7 +155,7 @@ export function CouponsConsole() {
     return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
       <header><div><p className="eyebrow">店铺管理</p><h1>优惠券</h1></div>
         <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a>
-          <a href="/admin/settings">店铺设置</a></div></header>
+          <a href="/admin/members">会员与积分</a><a href="/admin/settings">店铺设置</a></div></header>
       <p className="error">当前账号没有优惠券读取权限（coupons.read）。</p></main>;
   }
 
@@ -163,7 +163,7 @@ export function CouponsConsole() {
     <header><div><p className="eyebrow">店铺管理</p><h1>优惠券</h1></div>
       <div className="actions"><a href="/admin/catalog">商品目录</a><a href="/admin/orders">订单</a>
         <a href="/admin/payments">付款</a><a href="/admin/inventory">库存</a><a href="/admin/aftersales">售后</a>
-        <a href="/admin/settings">店铺设置</a>
+        <a href="/admin/members">会员与积分</a><a href="/admin/settings">店铺设置</a>
         <button disabled={busy} onClick={() => void run(async () => '已刷新。')}>刷新</button></div></header>
     {error && <p className="error" role="alert">{error}</p>}{notice && <p className="notice" role="status">{notice}</p>}
     <p><small>每单最多用一张券，不叠加。报价只做试算，额度在下单时才预占；收款成功才核销，取消或超时自动释放。</small></p>

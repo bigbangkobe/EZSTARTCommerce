@@ -2427,6 +2427,21 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/members/{id}/points:
+    get:
+      tags: [Customers]
+      operationId: getAdminMemberPoints
+      summary: Read one member's point balance and recent ledger entries
+      security: [{ AdminSession: [] }]
+      x-permission: members.manage
+      parameters: [{ $ref: '#/components/parameters/UuidId' }]
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/members/{id}/points-adjustments:
     post:
       tags: [Customers]

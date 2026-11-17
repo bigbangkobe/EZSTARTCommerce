@@ -179,6 +179,15 @@ export class CustomersController extends ManagementHttp {
       header(request, 'x-csrf-token'), uuid(id), this.version(request), body, this.context(request)));
   }
 
+  /** 后台看账：余额 + 最近流水。读只要 members.manage，改才要 points.adjust。 */
+  @Get('members/:id/points')
+  async memberPointsAdmin(@Param('id') id: string, @Query('limit') limit: unknown, @Query('cursor') cursor: unknown,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    const page = this.pagination(limit, cursor);
+    this.send(response, request, 200, await this.loyaltyService().adminMemberPoints(
+      this.cookieSession(request), uuid(id), page.limit, page.cursor));
+  }
+
   /** 人工调整必须带幂等键：重试同一笔不会变成两次加减。 */
   @Post('members/:id/points-adjustments')
   async adjustPoints(@Param('id') id: string, @Body() body: Record<string, unknown>, @Req() request: ApiRequest,

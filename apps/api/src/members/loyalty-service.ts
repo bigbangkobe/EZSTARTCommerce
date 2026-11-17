@@ -4,6 +4,7 @@ import {
   applyDelta, earnPoints, LOYALTY_RULE_VERSION, LoyaltyRuleError, normalizeAdjustment,
   normalizeSettingPatch, normalizeTierInput, normalizeTierPatch, resolveTier,
 } from '../../../../packages/domain/src/loyalty.js';
+import { maskEmail } from '../../../../packages/domain/src/orders.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import { resolveMemberSession } from './session.js';
 
@@ -178,6 +179,45 @@ export class LoyaltyService {
     const existing = await tx.pointAccount.findUnique({ where: { memberId } });
     if (existing) return existing;
     return tx.pointAccount.create({ data: { memberId, createdAt: now, updatedAt: now } });
+  }
+
+  // ---- 后台：某位会员的账 ------------------------------------------------
+
+  /**
+   * 后台读某位会员的积分账（余额 + 最近流水）。
+   *
+   * 读只要 members.manage，与调整的 points.adjust 分开：能看见账不等于能改账。
+   * 顾客邮箱按 customers.read_pii 决定给原文还是遮蔽值，与会员列表口径一致。
+   */
+  async adminMemberPoints(supplied: string, memberId: string, limit: number, cursor: string | null) {
+    if (!UUID.test(memberId)) throw new AuthError(422, 'VALIDATION_ERROR');
+    return this.identity.withPermission(supplied, null, 'members.manage', async (tx, actor) => {
+      const member = await tx.memberProfile.findUnique({ where: { id: memberId },
+        include: { customer: true, tier: true } });
+      if (!member) throw new AuthError(404, 'NOT_FOUND');
+      if (cursor && !await tx.pointLedger.findFirst({ where: { id: cursor, memberId } })) {
+        throw new AuthError(422, 'VALIDATION_ERROR');
+      }
+      const rows = await tx.pointLedger.findMany({ where: { memberId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
+      const visible = rows.slice(0, limit); const hasMore = rows.length > limit;
+      const account = await tx.pointAccount.findUnique({ where: { memberId } });
+      const setting = await this.setting(tx);
+      const pii = this.identity.hasPermission(actor, 'customers.read_pii');
+      return {
+        member: { id: member.id, memberNo: member.memberNo, status: member.status,
+          joinedAt: member.joinedAt.toISOString(), lifetimeSpendMinor: Number(member.lifetimeSpendMinor),
+          tier: member.tier === null ? null : { id: member.tier.id, code: member.tier.code,
+            rank: member.tier.rank, nameByLocale: member.tier.nameByLocale },
+          customer: { id: member.customer.id, displayName: member.customer.displayName,
+            email: member.customer.emailNormalized === null ? null
+              : pii ? member.customer.emailNormalized : maskEmail(member.customer.emailNormalized) } },
+        balance: account?.balance ?? 0, accountStatus: account?.status ?? 'active',
+        minorPerPoint: member.tier?.minorPerPoint ?? setting.minorPerPoint,
+        enabled: setting.enabled,
+        items: visible.map(row => this.ledgerView(row)), hasMore, nextCursor: hasMore ? visible.at(-1)!.id : null };
+    });
   }
 
   // ---- 前台：本人积分 -----------------------------------------------------
