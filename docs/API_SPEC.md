@@ -233,6 +233,7 @@
 | `POST /admin/settlements/:id/preview` / `POST /admin/settlements/:id/confirm` | 匹配预览/确认 | 先预览再确认；保存差异和原始行 |
 | `POST /admin/settlements/:id/lines/:lineId/resolve` | 差异类型、理由、匹配对象 | `settlements.resolve`；不可覆盖原金额 |
 | `POST /webhooks/payments/:provider` | 服务商原始回调 | 仅签名验证、持久化去重、排队处理；快速返回接收结果 |
+| `POST /webhooks/carriers/:carrierCode` | 承运商签名状态回传 | `X-Carrier-Timestamp`/`X-Carrier-Signature` 验签 + 五分钟时间窗；`eventId` 幂等；只认已 dispatch 包裹，delivered 由服务端推进履约且不改付款状态 |
 | `GET/POST /admin/shipping/zones`；`GET/PATCH /admin/shipping/zones/:id` | 配送区域 | `shipping.manage`；阻止非法/冲突区域规则 |
 | `GET/POST /admin/shipping/rates`；`GET/PATCH /admin/shipping/rates/:id` | 固定运费/门槛费率 | `shipping.manage`；发布配置版本 |
 | `POST /admin/shipping/quote-preview` | 地址/购物袋测试条件 | `shipping.manage`；只预览，不创建订单 |
@@ -424,7 +425,15 @@ Webhook 原始 body 由 adapter 验签；进入内部标准事件前，规范字
 4. 金额、币种、商户号与本地 payment 不匹配时进入差异/人工队列，不得直接标为已付款。
 5. 未知状态不视为失败；库存和优惠预留按状态机继续占用，等待查询或人工处理。
 
-### 4.3 定时发布、导入与消息任务
+### 4.3 承运商状态回传
+
+1. 承运商代码必须预先在实例 `CARRIER_WEBHOOK_SECRETS` 登记；未登记、时间戳超出五分钟或签名不符一律拒绝，且不得借此探测包裹是否存在。
+2. 签名格式为 `v1=HMAC-SHA256(secret, timestamp + "." + canonicalJson(body))`；canonicalJson 按键排序、无多余空格，body 中额外字段在契约层被拒绝。
+3. `eventId` 是幂等键；重复回传返回 `duplicate=true`，不重复写台账也不重复推进订单。
+4. `carrierCode` 取路径，必须与包裹已有承运商一致；回传追踪号与已有追踪号冲突时返回 409，不静默覆盖。
+5. `delivered` 只作用于已由授权员工 dispatch 的包裹，复用人工签收的履约推进逻辑，状态事件记 `actorType=system`；付款状态永远不由承运商回传改变。`exception`/`returned` 只入台账，等待人工处理。
+
+### 4.4 定时发布、导入与消息任务
 
 - 定时发布按店铺 IANA 时区输入、UTC 执行；任务必须绑定页面版本，旧任务不得覆盖新版本。
 - 导入必须区分 `validate` 与 `execute`；执行时校验确认的文件摘要及映射版本；重复提交有同一结果。

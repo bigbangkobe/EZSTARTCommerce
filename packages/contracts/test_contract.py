@@ -729,6 +729,33 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(errors("AnalyticsEventInput", dict(event, sessionId="a@b.com")))
         self.assertTrue(errors("AnalyticsEventBatch", {"events": []}))
 
+    def test_carrier_webhook_is_signed_idempotent_and_pii_free(self):
+        op = SPEC["paths"]["/webhooks/carriers/{carrierCode}"]["post"]
+        self.assertEqual("public", op["x-authentication"])
+        self.assertEqual("hmac-sha256", op["x-webhook-signature-validation"])
+        self.assertEqual("carrier-event-id", op["x-idempotency"])
+        params = {p["$ref"].rsplit("/", 1)[-1] for p in op["parameters"]}
+        self.assertEqual({"CarrierCode", "CarrierTimestamp", "CarrierSignature"}, params)
+        signature = SPEC["components"]["parameters"]["CarrierSignature"]["schema"]["pattern"]
+        self.assertIn("v1=", signature)
+        event = {"eventId": UUID, "shipmentId": UUID, "status": "out_for_delivery", "occurredAt": NOW}
+        self.assertEqual([], errors("CarrierStatusEventRequest", event))
+        self.assertEqual([], errors("CarrierStatusEventRequest", dict(event, trackingNumber="SF123", note="leave at door")))
+        # 承运商回调不是顾客资料通道：联系方式、URL、支付凭证与内部状态字段一律拒绝。
+        for bad in ({"email": "a@b.com"}, {"phone": "123"}, {"url": "https://x/?q=secret"},
+                    {"customerId": UUID}, {"paymentStatus": "paid"}, {"orderStatus": "completed"}):
+            self.assertTrue(errors("CarrierStatusEventRequest", dict(event, **bad)))
+        self.assertTrue(errors("CarrierStatusEventRequest", dict(event, status="purchase")))
+        for missing in ("eventId", "shipmentId", "status", "occurredAt"):
+            broken = copy.deepcopy(event)
+            del broken[missing]
+            self.assertTrue(errors("CarrierStatusEventRequest", broken))
+        ack = {"data": {"received": True, "duplicate": False, "shipmentStatus": "dispatched"},
+               "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("CarrierWebhookAck", ack))
+        self.assertTrue(errors("CarrierWebhookAck", dict(ack,
+            data=dict(ack["data"], shipmentStatus="paid"))))
+
 
 if __name__ == "__main__":
     unittest.main()

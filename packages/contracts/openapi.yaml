@@ -1692,6 +1692,38 @@ paths:
         '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
+  /webhooks/carriers/{carrierCode}:
+    post:
+      tags: [Orders]
+      operationId: receiveCarrierWebhook
+      summary: Receive a signed carrier status callback, de-duplicate it and advance fulfillment
+      description: >-
+        Public HMAC-authenticated callback. The carrier code is taken from the path and must have a
+        pre-configured secret; the body is a closed set with no customer PII. A delivered callback
+        only completes a parcel that was already dispatched by an authorized operator, and never
+        changes payment status. The signature covers the Unix timestamp and the canonical JSON body.
+      x-authentication: public
+      x-webhook-signature-validation: hmac-sha256
+      x-idempotency: carrier-event-id
+      parameters:
+        - { $ref: '#/components/parameters/CarrierCode' }
+        - { $ref: '#/components/parameters/CarrierTimestamp' }
+        - { $ref: '#/components/parameters/CarrierSignature' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CarrierStatusEventRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/CarrierWebhookAccepted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { description: Webhook body too large }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+
   /admin/orders:
     get:
       tags: [Orders]
@@ -3598,6 +3630,24 @@ components:
       in: path
       required: true
       schema: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,63}$' }
+    CarrierCode:
+      name: carrierCode
+      in: path
+      required: true
+      description: Pre-registered carrier code whose webhook secret is configured on the instance.
+      schema: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,63}$' }
+    CarrierTimestamp:
+      name: X-Carrier-Timestamp
+      in: header
+      required: true
+      description: Unix seconds. Callbacks outside a five-minute window are replayed or rejected.
+      schema: { type: string, pattern: '^[0-9]{10}$' }
+    CarrierSignature:
+      name: X-Carrier-Signature
+      in: header
+      required: true
+      description: v1=HMAC-SHA256(secret, timestamp + "." + canonicalJson(body)), lowercase hex.
+      schema: { type: string, pattern: '^v1=[0-9a-f]{64}$' }
     ReportKey:
       name: reportKey
       in: path
@@ -4352,6 +4402,13 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+    CarrierWebhookAccepted:
+      description: Signed carrier status event accepted; duplicate events are acknowledged without reprocessing
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CarrierWebhookAck' }
     BadRequest:
       description: Malformed or invalidly signed request
       content:
@@ -6443,6 +6500,39 @@ components:
         deliveredAt: { type: string, format: date-time }
         evidenceRef: { type: [string, 'null'], maxLength: 200 }
         note: { type: [string, 'null'], maxLength: 1000 }
+    CarrierStatusEventRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        Signed carrier callback. The body contains identifiers and delivery status only; no customer
+        contact, address, payment credential or raw tracking URL is accepted.
+      required: [eventId, shipmentId, status, occurredAt]
+      properties:
+        eventId: { type: string, minLength: 16, maxLength: 128 }
+        shipmentId: { type: string, format: uuid }
+        status: { type: string, enum: [in_transit, out_for_delivery, delivered, exception, returned] }
+        occurredAt: { type: string, format: date-time }
+        trackingNumber: { type: string, minLength: 1, maxLength: 160 }
+        note: { type: string, minLength: 1, maxLength: 500 }
+    CarrierWebhookAck:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [received, duplicate, shipmentStatus]
+          properties:
+            received: { type: boolean }
+            duplicate: { type: boolean }
+            shipmentStatus: { type: string, enum: [created, dispatched, delivered] }
+        meta:
+          type: object
+          additionalProperties: false
+          required: [requestId]
+          properties:
+            requestId: { type: string, maxLength: 128 }
     PaymentMethodPatchRequest:
       type: object
       additionalProperties: false

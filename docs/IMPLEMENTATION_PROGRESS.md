@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表首批（服务端权威数据聚合与受控导出）已完成并上线；M14 第二批「访问漏斗」（第一方匿名事件采集 + 漏斗报表）已完成。剩余：陈列效果分析（M14 P1，依赖发布版本埋点与 section 归因，另行估算）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表首批（服务端权威数据聚合与受控导出）已完成并上线；M14 第二批「访问漏斗」（第一方匿名事件采集 + 漏斗报表）已完成。剩余：陈列效果分析（M14 P1，依赖发布版本埋点与 section 归因，另行估算）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、三语参考前台（M02 前台部分）与页面内容（M04）。承运商签名状态回传（M09 剩余）已于本批完成。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -555,3 +555,19 @@
 部署：提交 d50c7dd 已推送 origin/main 并部署 mrinhk。deploy.sh 备份→快进拉取→重建镜像→第 26 条迁移 202611180026_analytics_events 应用成功（共 26 条）→ API 健康→ Caddy/公网 health/live 200。生产冒烟：health/ready 200、漏斗报表匿名 401（权限正确）、采集端点未开开关 403 FORBIDDEN（安全默认：未经批准不采集）、后台 /admin/reports 200 且含「访问漏斗」选项。
 
 边界：首期漏斗为「各步骤独立去重会话数」的近似口径，不做严格有序漏斗（不要求先访问再浏览）；不采集 purchase 浏览器事件；不含 P1 陈列（曝光 50%/1 秒判定、section_click/placement_add_to_cart、稳定 section_key 与发布版本筛选、24h 最后交互归因）；不做跨设备/跨店归因、A/B 实验与因果增量。分析开关默认关闭，需店主显式开启并配合同意告知；预览/员工/沙箱/测试流量过滤与已知爬虫排除留待 P1 一并实现。
+
+## 2026-11-18：M09 承运商状态回传（签名 webhook + 幂等台账 + 服务端履约）
+
+范围：M09 原来只覆盖人工建包裹、授权发货与人工签收；本批补上承运商侧主动回传，让在途/派送/签收状态能回到系统。仍不含自动下单、承运商 API 轨迹聚合与多承运商路由。
+
+- 契约：`POST /webhooks/carriers/{carrierCode}` 为公开端点（`x-authentication: public`），`x-webhook-signature-validation: hmac-sha256`、`x-idempotency: carrier-event-id`。请求体闭集 `eventId/shipmentId/status/occurredAt/trackingNumber/note`，`additionalProperties: false` 阻断邮箱、电话、URL、客户 ID 与内部订单/付款状态；`CarrierWebhookAck` 明确 `received/duplicate/shipmentStatus`。契约测试 +1 项，共 45 项。
+- 领域规则 `packages/domain/src/carrier.ts`：状态闭集 `in_transit/out_for_delivery/delivered/exception/returned`；签名覆盖 Unix 秒 + 规范化 JSON（键排序、无空格），五分钟时间窗防重放，签名格式 `v1=<64 hex>`；密钥从实例 `CARRIER_WEBHOOK_SECRETS` JSON 读取，格式异常或未登记一律拒绝，不降级放行；落库只保留 16 位签名前缀。
+- 服务端 `apps/api/src/carrier-webhooks/{service,controller}.ts`：先验签再查库（未登记承运商、过期时间戳、错签名分别 404/401）；`carrierCode` 取路径且与包裹已有承运商一致，追踪号双向校验不一致返回 409；事件 ID 唯一 + 行锁串行化，重放返回 `duplicate=true` 且不二次推进；IP 限流与系统审计沿用现有基础设施。
+- 履约边界：`delivered` 只对已经由授权员工 `dispatch` 的包裹生效，复用 `OrdersService.applyCarrierDelivery`（与人工签收同一套履约与积分发放逻辑），状态事件记 `actorType=system`；不碰 `paymentStatus`，COD 仍须单独收款。未发货包裹收到 delivered 回调返回 409，不能越过库存授权动作。
+- 第 27 条迁移 `202611180027_carrier_status_webhooks`：`CarrierStatusEvent` 台账（eventId 唯一、状态/承运商代码闭集 CHECK、无 PII 列）与 `Shipment.carrierStatus/lastCarrierEventAt`；后台订单详情在包裹列表展示当前回传状态与事件时间线，沿用 `orders.read`。
+
+验证：契约 45 项、生成物一致、Prisma schema 有效、前后台 typecheck 与后台生产构建通过；承运商纯规则 3 项、真实 PostgreSQL HTTP 集成覆盖验签重放/PII/幂等/追踪号冲突/未发货拒绝/delivered 推进/后台读取全绿；全量真实 PostgreSQL 顺序回归 **298/298**（历史 294 + 新增领域 3 + HTTP 1）；浏览器端到端 **78/78**（订单包裹用例桌面/移动各补一条回传展示断言）。
+
+边界：签名回传只证明承运商说过什么，不替代员工的库存扣减与授权；不做自动下单、承运商 API 主动查询/轨迹聚合、路由器由或异常件自动售后（exception/returned 只入台账，需人工处理）；未登记承运商没有 webhook 密钥，配置变化需重启 API；批量发放真实通知投递、SMTP/worker 与 HTTPS 链路仍未启动/验收，与此前边界一致。
+
+部署：本批完成后记录。

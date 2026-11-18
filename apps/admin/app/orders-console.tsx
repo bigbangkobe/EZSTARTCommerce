@@ -6,8 +6,11 @@ type OrderSummary = { id: string; publicOrderNumber: string; orderStatus: string
   currency: string; totalMinor: number; contactMasked: string | null; createdAt: string };
 type Line = { id: string; sku: string; productName: string; variantName: string | null; quantity: number;
   unitPriceMinor: number; lineTotalMinor: number; shippedQuantity: number; allocatedQuantity: number };
+type CarrierEvent = { eventId: string; carrierCode: string; status: string; occurredAt: string;
+  trackingNumber: string | null; note: string | null };
 type Shipment = { id: string; status: string; carrierCode: string | null; carrierName: string | null;
   trackingNumber: string | null; dispatchedAt: string | null; deliveredAt: string | null; version: number;
+  carrierStatus?: string | null; lastCarrierEventAt?: string | null; carrierEvents?: CarrierEvent[];
   items: { orderItemId: string; quantity: number }[] };
 type Order = { id: string; publicOrderNumber: string; orderStatus: string; paymentStatus: string;
   fulfillmentStatus: string; currency: string; subtotalMinor: number; discountMinor: number; shippingMinor: number;
@@ -36,6 +39,8 @@ function toMinor(value: string): number | null {
 const OPEN_PAYMENT_STATUSES = new Set(['cod_due', 'created', 'processing', 'requires_action', 'unknown']);
 
 const SHIPMENT_LABEL: Record<string, string> = { created: '待发货', dispatched: '已发货', delivered: '已签收', cancelled: '已取消' };
+const CARRIER_STATUS_LABEL: Record<string, string> = { in_transit: '运输中', out_for_delivery: '派送中',
+  delivered: '承运商已签收', exception: '运输异常', returned: '退回' };
 
 export function OrdersConsole() {
   const session = useRef<Session | null>(null);
@@ -273,6 +278,15 @@ export function OrdersConsole() {
             const line = selected.lines.find(entry => entry.id === item.orderItemId);
             return `${line?.sku ?? item.orderItemId}×${item.quantity}`;
           }).join('，')}
+          {shipment.carrierStatus && <div><small>承运商回传：{CARRIER_STATUS_LABEL[shipment.carrierStatus] ?? shipment.carrierStatus}
+            {shipment.lastCarrierEventAt ? ` · ${shortDate(shipment.lastCarrierEventAt)}` : ''}</small></div>}
+          {(shipment.carrierEvents?.length ?? 0) > 0 && <ul>
+            {shipment.carrierEvents!.map(event => <li key={event.eventId}><small>
+              {CARRIER_STATUS_LABEL[event.status] ?? event.status} · {shortDate(event.occurredAt)}
+              {event.trackingNumber ? ` · ${event.trackingNumber}` : ''}
+              {event.note ? ` · ${event.note}` : ''}
+            </small></li>)}
+          </ul>}
           {canShip && shipment.status === 'created' && <button className="secondary" disabled={busy}
             onClick={() => dispatch(shipment)}>发货</button>}
           {canShip && shipment.status === 'dispatched' && <button className="secondary" disabled={busy}

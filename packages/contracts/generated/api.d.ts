@@ -1281,6 +1281,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/carriers/{carrierCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a signed carrier status callback, de-duplicate it and advance fulfillment
+         * @description Public HMAC-authenticated callback. The carrier code is taken from the path and must have a pre-configured secret; the body is a closed set with no customer PII. A delivered callback only completes a parcel that was already dispatched by an authorized operator, and never changes payment status. The signature covers the Unix timestamp and the canonical JSON body.
+         */
+        post: operations["receiveCarrierWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders": {
         parameters: {
             query?: never;
@@ -3834,6 +3854,29 @@ export interface components {
             evidenceRef?: string | null;
             note?: string | null;
         };
+        /** @description Signed carrier callback. The body contains identifiers and delivery status only; no customer contact, address, payment credential or raw tracking URL is accepted. */
+        CarrierStatusEventRequest: {
+            eventId: string;
+            /** Format: uuid */
+            shipmentId: string;
+            /** @enum {string} */
+            status: "in_transit" | "out_for_delivery" | "delivered" | "exception" | "returned";
+            /** Format: date-time */
+            occurredAt: string;
+            trackingNumber?: string;
+            note?: string;
+        };
+        CarrierWebhookAck: {
+            data: {
+                received: boolean;
+                duplicate: boolean;
+                /** @enum {string} */
+                shipmentStatus: "created" | "dispatched" | "delivered";
+            };
+            meta: {
+                requestId: string;
+            };
+        };
         PaymentMethodPatchRequest: {
             providerCode: string;
             /** @enum {string} */
@@ -5829,6 +5872,16 @@ export interface components {
                 "application/json": components["schemas"]["SuccessEnvelope"];
             };
         };
+        /** @description Signed carrier status event accepted; duplicate events are acknowledged without reprocessing */
+        CarrierWebhookAccepted: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CarrierWebhookAck"];
+            };
+        };
         /** @description Malformed or invalidly signed request */
         BadRequest: {
             headers: {
@@ -5918,6 +5971,12 @@ export interface components {
         PageKey: string;
         Slug: string;
         ProviderCode: string;
+        /** @description Pre-registered carrier code whose webhook secret is configured on the instance. */
+        CarrierCode: string;
+        /** @description Unix seconds. Callbacks outside a five-minute window are replayed or rejected. */
+        CarrierTimestamp: string;
+        /** @description v1=HMAC-SHA256(secret, timestamp + "." + canonicalJson(body)), lowercase hex. */
+        CarrierSignature: string;
         /** @description Server-computed report key from the closed set in components.schemas.ReportKey. */
         ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members" | "funnel";
         Cursor: string;
@@ -7800,6 +7859,43 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    receiveCarrierWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Unix seconds. Callbacks outside a five-minute window are replayed or rejected. */
+                "X-Carrier-Timestamp": components["parameters"]["CarrierTimestamp"];
+                /** @description v1=HMAC-SHA256(secret, timestamp + "." + canonicalJson(body)), lowercase hex. */
+                "X-Carrier-Signature": components["parameters"]["CarrierSignature"];
+            };
+            path: {
+                /** @description Pre-registered carrier code whose webhook secret is configured on the instance. */
+                carrierCode: components["parameters"]["CarrierCode"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CarrierStatusEventRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["CarrierWebhookAccepted"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            /** @description Webhook body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            422: components["responses"]["ValidationError"];
             429: components["responses"]["RateLimited"];
             default: components["responses"]["UnexpectedError"];
         };

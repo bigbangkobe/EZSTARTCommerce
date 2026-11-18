@@ -7,7 +7,7 @@
 让商家按店铺/市场配置配送区域、运费、免运规则和预计时效。
 
 ## 首期范围
-配送区域；按地区固定收费或按订单金额门槛；免运规则；预计时效说明；后台订单配送备注和状态。初期支持人工履约，支持录入一个或多个包裹及各包裹商品数量、承运商和追踪号；不含承运商 API 自动下单/轨迹聚合。
+配送区域；按地区固定收费或按订单金额门槛；免运规则；预计时效说明；后台订单配送备注和状态。初期支持人工履约，支持录入一个或多个包裹及各包裹商品数量、承运商和追踪号；不含承运商 API 自动下单/轨迹聚合。已补承运商签名 webhook 状态回传（in_transit/out_for_delivery/delivered/exception/returned）：先验签、按 eventId 幂等、只认已 dispatch 包裹，delivered 由服务端推进履约且不改付款状态。
 
 ## 主要数据对象
 ShippingZone；ShippingMethod；ShippingRate；FreeShippingRule；ShipmentRecord（承运商、追踪号、状态、时间）。

@@ -34,6 +34,9 @@ import { ReportsController } from './reports/controller.js';
 import { ReportsService } from './reports/service.js';
 import { AnalyticsController } from './analytics/controller.js';
 import { AnalyticsService } from './analytics/service.js';
+import { CarrierWebhookController } from './carrier-webhooks/controller.js';
+import { CarrierWebhookService } from './carrier-webhooks/service.js';
+import { carrierWebhookSecrets } from '../../../packages/domain/src/carrier.js';
 import { AfterSalesService } from './aftersales/service.js';
 import { OrdersController } from './orders/controller.js';
 import { PaymentsController } from './payments/controller.js';
@@ -116,10 +119,12 @@ export async function createApp(identity: IdentityService | null = null, options
   const mailTest = identity ? new NotificationService(identity) : null;
   const reports = identity ? new ReportsService(identity) : null;
   const analytics = identity && cart ? new AnalyticsService(identity, cart) : null;
+  const carrierWebhooks = identity && orders
+    ? new CarrierWebhookService(identity, orders, carrierWebhookSecrets(process.env)) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
     OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController, PrivacyController,
-    MailTestController, ReportsController, AnalyticsController],
+    MailTestController, ReportsController, AnalyticsController, CarrierWebhookController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
@@ -136,7 +141,8 @@ export async function createApp(identity: IdentityService | null = null, options
       { provide: 'PRIVACY', useValue: privacy },
       { provide: 'MAIL_TEST', useValue: mailTest },
       { provide: 'REPORTS', useValue: reports },
-      { provide: 'ANALYTICS', useValue: analytics }] })
+      { provide: 'ANALYTICS', useValue: analytics },
+      { provide: 'CARRIER_WEBHOOKS', useValue: carrierWebhooks }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

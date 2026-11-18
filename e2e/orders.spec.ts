@@ -46,7 +46,10 @@ function mockApi(state: { order: typeof baseOrder; shipments: Record<string, unk
     if (method === 'POST' && url.pathname.endsWith('/dispatch')) {
       const id = url.pathname.split('/').at(-2);
       state.shipments = state.shipments.map(item => item['id'] === id
-        ? { ...item, status: 'dispatched', dispatchedAt: '2026-11-16T04:00:00.000Z', version: 2 } : item);
+        ? { ...item, status: 'dispatched', dispatchedAt: '2026-11-16T04:00:00.000Z', version: 2,
+            carrierStatus: 'in_transit', lastCarrierEventAt: '2026-11-16T04:01:00.000Z',
+            carrierEvents: [{ eventId: 'carrier-event-00001', carrierCode: 'SF', status: 'in_transit',
+              occurredAt: '2026-11-16T04:01:00.000Z', trackingNumber: 'SF123', note: null }] } : item);
       return route.fulfill({ json: { data: state.shipments.find(item => item['id'] === id), meta: { requestId: 'req' } } });
     }
     if (method === 'POST' && url.pathname.endsWith('/notes')) {
@@ -112,6 +115,8 @@ test('parcels are created with line quantities and dispatched with the read vers
   await expect(page.getByText('待发货 · SF · SF123 · SKU-1×1')).toBeVisible();
   await page.getByRole('button', { name: '发货' }).click();
   await expect(page.getByText('包裹已发出，库存已扣减。')).toBeVisible();
+  await page.getByRole('button', { name: '刷新' }).click();
+  await expect(page.getByText(/承运商回传：运输中/)).toBeVisible();
   const dispatched = writes.find(write => write.path.endsWith('/dispatch'))!;
   expect(dispatched.ifMatch).toBe('"1"');
   expect(typeof dispatched.body['dispatchedAt']).toBe('string');

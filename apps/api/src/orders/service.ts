@@ -19,10 +19,11 @@ const includeDetail = {
   items: { orderBy: { id: 'asc' } },
   events: { orderBy: { createdAt: 'asc' } },
   notes: { orderBy: { createdAt: 'asc' } },
-  shipments: { include: { items: true }, orderBy: { createdAt: 'asc' } },
+  shipments: { include: { items: true, carrierEvents: { orderBy: { occurredAt: 'asc' } } }, orderBy: { createdAt: 'asc' } },
 } as const;
 type OrderRow = Prisma.ShopOrderGetPayload<{ include: typeof includeDetail }>;
 type ShipmentRow = Prisma.ShipmentGetPayload<{ include: { items: true } }>;
+type CarrierEventRow = Prisma.CarrierStatusEventGetPayload<{}>;
 
 export interface AddressChangeBody { expectedVersion: number; address: Address; customerConfirmationRef?: string | null }
 export interface ShipmentBody { items: ShipmentLineRequest[]; carrierCode?: string | null; carrierName?: string | null;
@@ -101,11 +102,16 @@ export class OrdersService {
     return this.shippedQuantities(row, ['created', 'dispatched', 'delivered']);
   }
 
-  private shipmentView(row: ShipmentRow) {
+  private shipmentView(row: ShipmentRow & { carrierEvents?: CarrierEventRow[] }) {
     return { id: row.id, status: row.status, carrierCode: row.carrierCode ?? null,
       carrierName: row.carrierName ?? null, trackingNumber: row.trackingNumber ?? null, note: row.note ?? null,
       dispatchedAt: row.dispatchedAt?.toISOString() ?? null, deliveredAt: row.deliveredAt?.toISOString() ?? null,
       evidenceRef: row.evidenceRef ?? null, version: row.version,
+      carrierStatus: row.carrierStatus ?? null,
+      lastCarrierEventAt: row.lastCarrierEventAt?.toISOString() ?? null,
+      carrierEvents: [...(row.carrierEvents ?? [])].map(event => ({ eventId: event.eventId,
+        carrierCode: event.carrierCode, status: event.status, occurredAt: event.occurredAt.toISOString(),
+        trackingNumber: event.trackingNumber, note: event.note })),
       items: [...row.items].map(item => ({ orderItemId: item.orderItemId, quantity: item.quantity })) };
   }
 
@@ -391,32 +397,50 @@ export class OrdersService {
         const fresh = await tx.shipment.findUnique({ where: { id }, include: { items: true } });
         return this.shipmentView(fresh!);
       }
-      this.rule(() => assertShipmentDeliver(shipment.status));
-      const row = await this.detail(tx, shipment.orderId);
-      const updated = await tx.shipment.update({ where: { id }, data: { status: 'delivered', deliveredAt,
-        evidenceRef, ...(note === null ? {} : { note }), version: { increment: 1 } }, include: { items: true } });
-      const delivered = this.shippedQuantities(row, ['delivered']);
-      for (const item of updated.items) delivered.set(item.orderItemId,
-        (delivered.get(item.orderItemId) ?? 0) + item.quantity);
-      const allDelivered = row.items.every(item => (delivered.get(item.id) ?? 0) >= item.quantity);
-      if (allDelivered) {
-        await tx.shopOrder.update({ where: { id: row.id }, data: { orderStatus: 'completed',
-          fulfillmentStatus: 'delivered', version: { increment: 1 } } });
-        if (row.orderStatus !== 'completed') {
-          await tx.orderStatusEvent.create({ data: { orderId: row.id, fromStatus: row.orderStatus,
-            toStatus: 'completed', reason: 'shipment_delivered', actorType: 'admin' } });
-        }
-        // 订单完成才发放积分：只认已经建立的会员关联，访客订单不按邮箱反推。
-        // 同一订单重复触发时由 `order:{id}:earn` 幂等键挡住，不会二次发放。
-        await awardOrderPointsInTx(tx, row.id, now);
-      } else if (row.fulfillmentStatus !== 'partially_fulfilled') {
-        await tx.shopOrder.update({ where: { id: row.id }, data: { fulfillmentStatus: 'partially_fulfilled' } });
-      }
-      await tx.orderAction.create({ data: { idempotencyKey: key, orderId: row.id, action: 'shipment_deliver',
+      const view = await this.applyDelivery(tx, id, deliveredAt, evidenceRef, note, now, 'admin');
+      await tx.orderAction.create({ data: { idempotencyKey: key, orderId: shipment.orderId, action: 'shipment_deliver',
         requestDigest: digest, objectId: id } });
       await this.identity.recordAudit(tx, ctx, actor.id, 'order.shipment.delivered', id);
-      return this.shipmentView(updated);
+      return view;
     }, true);
+  }
+
+  /**
+   * 承运商 delivered 回调复用同一套履约推进，但只允许作用于已 dispatch 的包裹：
+   * 签名只证明"承运商说过"，不能替代员工的库存扣减与授权动作。
+   * 调用方负责在自己的事务里做事件幂等和审计。
+   */
+  async applyCarrierDelivery(tx: Tx, shipmentId: string, deliveredAt: Date, evidenceRef: string, now: Date) {
+    return this.applyDelivery(tx, shipmentId, deliveredAt, evidenceRef, null, now, 'system');
+  }
+
+  /** 签收的公共履约部分：改包裹状态、推进订单、发放积分；不含权限、幂等键与审计。 */
+  private async applyDelivery(tx: Tx, id: string, deliveredAt: Date, evidenceRef: string | null,
+    note: string | null, now: Date, actorType: 'admin' | 'system') {
+    const shipment = await tx.shipment.findUnique({ where: { id }, include: { items: true } });
+    if (!shipment) throw new AuthError(404, 'NOT_FOUND');
+    this.rule(() => assertShipmentDeliver(shipment.status));
+    const row = await this.detail(tx, shipment.orderId);
+    const updated = await tx.shipment.update({ where: { id }, data: { status: 'delivered', deliveredAt,
+      evidenceRef, ...(note === null ? {} : { note }), version: { increment: 1 } }, include: { items: true } });
+    const delivered = this.shippedQuantities(row, ['delivered']);
+    for (const item of updated.items) delivered.set(item.orderItemId,
+      (delivered.get(item.orderItemId) ?? 0) + item.quantity);
+    const allDelivered = row.items.every(item => (delivered.get(item.id) ?? 0) >= item.quantity);
+    if (allDelivered) {
+      await tx.shopOrder.update({ where: { id: row.id }, data: { orderStatus: 'completed',
+        fulfillmentStatus: 'delivered', version: { increment: 1 } } });
+      if (row.orderStatus !== 'completed') {
+        await tx.orderStatusEvent.create({ data: { orderId: row.id, fromStatus: row.orderStatus,
+          toStatus: 'completed', reason: 'shipment_delivered', actorType } });
+      }
+      // 订单完成才发放积分：只认已经建立的会员关联，访客订单不按邮箱反推。
+      // 同一订单重复触发时由 `order:{id}:earn` 幂等键挡住，不会二次发放。
+      await awardOrderPointsInTx(tx, row.id, now);
+    } else if (row.fulfillmentStatus !== 'partially_fulfilled') {
+      await tx.shopOrder.update({ where: { id: row.id }, data: { fulfillmentStatus: 'partially_fulfilled' } });
+    }
+    return this.shipmentView(updated);
   }
 
   // ---- 过期预留 ---------------------------------------------------------------
