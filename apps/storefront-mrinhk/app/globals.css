@@ -40,6 +40,28 @@ body {
 .site-nav a:hover { color: var(--red); }
 .site-nav a:hover::after { width: 100%; }
 
+/* 语言切换：三个短标签做成胶囊，当前语言用主色标出且不可点 */
+.lang-switch {
+  display: inline-flex; align-items: center; gap: 2px; margin-left: 20px;
+  padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--card);
+}
+.lang-switch a {
+  margin: 0; padding: 2px 9px; border-radius: 999px;
+  font-size: 0.75rem; letter-spacing: 0.02em; line-height: 1.5;
+  color: var(--muted); text-decoration: none; transition: color 0.2s, background 0.2s;
+}
+.lang-switch a::after { content: none; }
+.lang-switch a:hover { color: var(--red); }
+.lang-switch a.lang-active { background: var(--red); color: #fff; cursor: default; }
+
+/* 键盘用户跳过导航 */
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 50;
+  background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 0 0 var(--radius) 0;
+  text-decoration: none; font-size: 0.85rem;
+}
+.skip-link:focus { left: 0; }
+
 /* ---------- hero ---------- */
 .hero {
   min-height: 78vh;
@@ -159,6 +181,8 @@ body {
   .vertical { display: none; }
   .logo-card { justify-self: center; }
   .site-nav a { margin-left: 18px; }
+  .lang-switch { margin-left: 12px; }
+  .site-header { gap: 8px; flex-wrap: wrap; }
 }
 
 /* ---------- 购物袋 ---------- */

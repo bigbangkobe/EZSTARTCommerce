@@ -1,6 +1,7 @@
-import { copy, site, whatsappLink } from '../../lib/site';
-
-export const metadata = { title: `聯絡 | IN先生` };
+import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
+import { site, whatsappLink } from '../../../lib/site';
+import { altPaths, copyFor, isLocale, localePath } from '../../../lib/i18n';
 
 const WHATSAPP_ICON = (
   <svg className="wa-icon" viewBox="0 0 24 24" fill="#25D366" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -8,23 +9,38 @@ const WHATSAPP_ICON = (
   </svg>
 );
 
-export default function ContactPage() {
+export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
+  const { locale: raw } = await params;
+  if (!isLocale(raw)) notFound();
+  const t = copyFor[raw];
+  return {
+    title: t.seo.contact.title,
+    description: t.seo.contact.description,
+    alternates: { canonical: localePath(raw, '/contact'), languages: altPaths('/contact') },
+  };
+}
+
+export default async function ContactPage({ params }: { params: Promise<{ locale: string }> }) {
+  const { locale: raw } = await params;
+  if (!isLocale(raw)) notFound();
+  const t = copyFor[raw];
+
   return (
     <section className="section">
       <div className="red-line" />
       <div className="section-head">
         <span className="num">壱</span>
-        <h2>{copy.contact.heading}</h2>
-        <span className="jp">{copy.contact.jp}</span>
+        <h2>{t.contact.heading}</h2>
+        <span className="jp">{t.contact.jp}</span>
       </div>
       <div className="contact-wrap">
         <div className="contact-card">
           {WHATSAPP_ICON}
-          <div className="label">{copy.contact.label}</div>
+          <div className="label">{t.contact.label}</div>
           <div className="number">{site.whatsappNumber}</div>
-          <div className="hint">{copy.contact.hint}</div>
+          <div className="hint">{t.contact.hint}</div>
           <a className="btn btn-primary" href={whatsappLink} target="_blank" rel="noopener noreferrer">
-            {copy.contact.cta}
+            {t.contact.cta}
           </a>
         </div>
       </div>

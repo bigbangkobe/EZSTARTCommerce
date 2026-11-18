@@ -1,15 +1,45 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { site, whatsappLink } from '../lib/site';
-import CartLink from './cart-link';
-import MemberLink from './member-link';
-import './globals.css';
+import { site, whatsappLink } from '../../lib/site';
+import {
+  LOCALES, HTML_LANG, OG_LOCALE, altPaths, copyFor, isLocale, localePath, resolveLocale, type Locale,
+} from '../../lib/i18n';
+import CartLink from '../cart-link';
+import LocaleSwitcher from '../locale-switcher';
+import MemberLink from '../member-link';
+import '../globals.css';
 
-export const metadata: Metadata = {
-  title: `${site.brand} | ${site.brandLatin}`,
-  description: `${site.tagline} WhatsApp：${site.whatsappNumber}`,
-  metadataBase: new URL(`https://${site.domain}`),
-};
+/**
+ * 语言段是根布局：三种语言各自一套 URL，html lang 与 canonical 都从这里定。
+ * 不在 middleware 里重写，是为了让「哪个 URL 对应哪种语言」在路由层面就确定，
+ * 静态渲染、缓存与搜索引擎看到的完全一致。
+ */
+export function generateStaticParams() {
+  return LOCALES.map(locale => ({ locale }));
+}
+
+export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
+  const { locale: raw } = await params;
+  const locale = isLocale(raw) ? raw : 'zh-HK';
+  const t = copyFor[locale];
+  const base = new URL(`https://${site.domain}`);
+  return {
+    metadataBase: base,
+    title: { default: t.seo.home.title, template: `%s | ${site.brand} ${site.brandLatin}` },
+    description: t.seo.home.description,
+    applicationName: `${site.brand} ${site.brandLatin}`,
+    alternates: { canonical: localePath(locale), languages: altPaths('') },
+    openGraph: {
+      type: 'website',
+      siteName: `${site.brand} ${site.brandLatin}`,
+      locale: OG_LOCALE[locale],
+      title: t.seo.home.title,
+      description: t.seo.home.description,
+      url: localePath(locale),
+    },
+    robots: { index: true, follow: true },
+  };
+}
 
 const WHATSAPP_ICON = (
   <svg viewBox="0 0 24 24" fill="#25D366" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -17,9 +47,19 @@ const WHATSAPP_ICON = (
   </svg>
 );
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function LocaleLayout({ children, params }: {
+  children: React.ReactNode;
+  params: Promise<{ locale: string }>;
+}) {
+  const { locale: raw } = await params;
+  // 布局本身不判定 404：每个页面在拿到参数后会调 notFound()，这样能落到
+  // app/[locale]/not-found.tsx 的自定义 404（带页头页脚、跟随语言），
+  // 而不是 Next 内置的裸 404。这里只为渲染外壳选一个语言。
+  const locale: Locale = resolveLocale(raw);
+  const t = copyFor[locale];
+
   return (
-    <html lang="zh-Hant">
+    <html lang={HTML_LANG[locale]}>
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
@@ -33,31 +73,33 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
+        <a className="skip-link" href="#main">{t.nav.skipToContent}</a>
         <header className="site-header">
-          <Link className="brand" href="/">
+          <Link className="brand" href={localePath(locale)} hrefLang={locale}>
             <span className="dot" />
             {site.brand}
           </Link>
-          <nav className="site-nav">
-            <Link href="/products">商品</Link>
-            <Link href="/contact">聯絡</Link>
+          <nav className="site-nav" aria-label={t.nav.home}>
+            <Link href={localePath(locale, '/products')} hrefLang={locale}>{t.nav.products}</Link>
+            <Link href={localePath(locale, '/contact')} hrefLang={locale}>{t.nav.contact}</Link>
             <MemberLink />
             <CartLink />
           </nav>
+          <LocaleSwitcher />
         </header>
-        <main>{children}</main>
+        <main id="main">{children}</main>
         <footer className="site-footer">
           <div className="seal">
             <span className="dot" />
             {site.brand} · {site.domain}
           </div>
-          <div>© 2026 {site.brandLatin}. All rights reserved.</div>
+          <div>© 2026 {site.brandLatin}. {t.footer.rights}.</div>
         </footer>
         <a
           href={whatsappLink}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="WhatsApp"
+          aria-label={t.common.whatsapp}
           style={{ position: 'fixed', right: 24, bottom: 24, zIndex: 20 }}
           className="btn btn-primary"
         >

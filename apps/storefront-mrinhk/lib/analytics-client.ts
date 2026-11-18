@@ -74,8 +74,10 @@ async function isEnabled(): Promise<boolean> {
   try {
     const response = await fetch('/api/v1/storefront/config', { cache: 'no-store' });
     if (!response.ok) { enabledCache = false; return false; }
-    const json = await response.json() as { data?: { featureFlags?: Record<string, boolean> } };
-    enabledCache = json.data?.featureFlags?.analyticsEnabled === true;
+    // 公开配置里开关字段名是 features；早期写成 featureFlags 会让采集永远静默关闭。
+    const json = await response.json() as { data?: { features?: Record<string, boolean>; featureFlags?: Record<string, boolean> } };
+    const flags = json.data?.features ?? json.data?.featureFlags;
+    enabledCache = flags?.analyticsEnabled === true;
     return enabledCache;
   } catch {
     enabledCache = false;

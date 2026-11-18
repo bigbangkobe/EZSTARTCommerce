@@ -1,3 +1,5 @@
+import type { Copy } from './i18n';
+
 // 会员身份的浏览器端调用层。
 //
 // 与游客购物袋的区别：会员会话 cookie（ez_member_session）是 HttpOnly 且 path=/api/v1，
@@ -183,15 +185,15 @@ export async function logout(): Promise<MemberOutcome<null>> {
   return result;
 }
 
-/** 页面文案统一在这里：接口只给 code，措辞与语言由前台决定。 */
-export function memberErrorMessage(error: { status: number; code?: string }): string {
-  if (error.code === 'NETWORK' || error.status === 0) return '網絡異常，請稍後再試。';
+/** 页面文案统一由调用方传入（当前语言的字典）：接口只给 code，措辞与语言由前台决定。 */
+export function memberErrorMessage(error: { status: number; code?: string }, t: Copy): string {
+  if (error.code === 'NETWORK' || error.status === 0) return t.member.networkError;
   switch (error.code) {
-    case 'UNAUTHORIZED': return error.status === 401 ? '驗證碼不正確或已過期。' : '請先登入。';
-    case 'RATE_LIMITED': return '嘗試次數過多，請稍後再試。';
-    case 'FORBIDDEN': return '此帳戶目前無法登入，請聯絡我們。';
-    case 'VALIDATION_ERROR': return '請檢查填寫的資料。';
-    case 'SERVICE_NOT_READY': return '會員服務暫時無法使用，請稍後再試。';
-    default: return error.status >= 500 ? '服務暫時無法使用，請稍後再試。' : '操作未能完成，請稍後再試。';
+    case 'UNAUTHORIZED': return error.status === 401 ? t.member.codeInvalid : t.member.signInRequired;
+    case 'RATE_LIMITED': return t.member.rateLimited;
+    case 'FORBIDDEN': return t.member.forbidden;
+    case 'VALIDATION_ERROR': return t.member.validation;
+    case 'SERVICE_NOT_READY': return t.member.serviceNotReady;
+    default: return error.status >= 500 ? t.member.serverError : t.member.fallbackError;
   }
 }

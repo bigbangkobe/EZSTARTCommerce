@@ -30,7 +30,12 @@ export type ProductResult =
   | { ok: true; products: Product[] }
   | { ok: false; error: 'unavailable' };
 
+// 语言是服务端接口的必填业务参数（不传就落到店铺默认语言）：
+// 显式带上才能保证 /en/products 里看到的是英文名称，而不是缓存里另一次请求的结果。
+
 const apiBase = process.env.API_INTERNAL_ORIGIN ?? 'http://127.0.0.1:3001';
+/** 与后台店铺设置的市场码一致；报价、目录都要带，否则服务端按默认市场处理。 */
+const SITE_MARKET = 'HK';
 
 type ApiVariant = {
   id: string;
@@ -66,32 +71,63 @@ function startingPrice(variants: ApiVariant[]): { price: number; currency: strin
  * 拉取在售商品列表。
  * API 未就绪或不可达时返回 ok:false，前台展示空态/错误态，不阻断页面渲染。
  */
-export async function fetchProducts(): Promise<ProductResult> {
+export async function fetchProducts(locale?: string, limit?: number): Promise<ProductResult> {
+  const items = await requestList(locale, limit);
+  if (!items) return { ok: false, error: 'unavailable' };
+  return { ok: true, products: items.map(toProduct) };
+}
+
+/**
+ * 列表请求：先带语言，实例没启用该语言（422）时退回不带语言。
+ * 退一步比整页报错合理：店铺只开了一种语言时，前台仍应能买到东西。
+ */
+async function requestList(locale?: string, limit?: number): Promise<ApiProduct[] | null> {
+  const query = new URLSearchParams();
+  if (locale) query.set('locale', locale);
+  query.set('marketCode', SITE_MARKET);
+  if (limit) query.set('limit', String(limit));
+  const first = await getList(query);
+  if (first.status === 422 && locale) {
+    query.delete('locale');
+    const retry = await getList(query);
+    return retry.items;
+  }
+  return first.status === 200 ? first.items : null;
+}
+
+async function getList(query: URLSearchParams): Promise<{ status: number; items: ApiProduct[] }> {
   try {
-    const res = await fetch(`${apiBase}/api/v1/storefront/products`, {
+    const res = await fetch(`${apiBase}/api/v1/storefront/products?${query.toString()}`, {
       next: { revalidate: 60 },
     });
-    if (!res.ok) return { ok: false, error: 'unavailable' };
+    if (!res.ok) return { status: res.status, items: [] };
     // 服务端统一返回 { data, meta } envelope，不能直接在根上取 items
     const body = (await res.json()) as { data?: { items?: ApiProduct[] } };
-    const items = body.data?.items ?? [];
-    return { ok: true, products: items.map(toProduct) };
+    return { status: 200, items: body.data?.items ?? [] };
   } catch {
     // 本地未启动 API（3001）或生产 API 不可用时降级
-    return { ok: false, error: 'unavailable' };
+    return { status: 0, items: [] };
   }
 }
 
-/** 单个商品详情：找不到返回 notFound，交给页面渲染 404。 */
-export async function fetchProduct(slug: string): Promise<Product | null> {
-  try {
-    const res = await fetch(`${apiBase}/api/v1/storefront/products/${encodeURIComponent(slug)}`, {
-      next: { revalidate: 60 },
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { data?: ApiProduct };
-    return body.data ? toProduct(body.data) : null;
-  } catch { return null; }
+/** 单个商品详情：找不到返回 null，交给页面渲染 404。 */
+export async function fetchProduct(slug: string, locale?: string): Promise<Product | null> {
+  const one = async (withLocale: boolean) => {
+    const query = new URLSearchParams({ marketCode: SITE_MARKET });
+    if (withLocale && locale) query.set('locale', locale);
+    try {
+      const res = await fetch(`${apiBase}/api/v1/storefront/products/${encodeURIComponent(slug)}?${query.toString()}`, {
+        next: { revalidate: 60 },
+      });
+      return { status: res.status, item: res.ok ? (await res.json() as { data?: ApiProduct }).data ?? null : null };
+    } catch { return { status: 0, item: null }; }
+  };
+  const first = await one(true);
+  if (first.status === 422 && locale) {
+    const fallback = await one(false);
+    return fallback.item ? toProduct(fallback.item) : null;
+  }
+  return first.item ? toProduct(first.item) : null;
 }
 
 function toProduct(item: ApiProduct): Product {
