@@ -58,6 +58,8 @@ services:
       APP_ORIGIN: https://${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
       IDENTITY_ENCRYPTION_KEY: ${IDENTITY_ENCRYPTION_KEY:?请在 .env 设置 IDENTITY_ENCRYPTION_KEY}
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+      # 承运商签名回传密钥 JSON；留空时所有承运商回调返回 404（安全默认）
+      CARRIER_WEBHOOK_SECRETS: ${CARRIER_WEBHOOK_SECRETS:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

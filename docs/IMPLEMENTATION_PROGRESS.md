@@ -570,4 +570,4 @@
 
 边界：签名回传只证明承运商说过什么，不替代员工的库存扣减与授权；不做自动下单、承运商 API 主动查询/轨迹聚合、路由器由或异常件自动售后（exception/returned 只入台账，需人工处理）；未登记承运商没有 webhook 密钥，配置变化需重启 API；批量发放真实通知投递、SMTP/worker 与 HTTPS 链路仍未启动/验收，与此前边界一致。
 
-部署：本批完成后记录。
+部署：提交 5bd72d9 已推送 origin/main 并部署 mrinhk。deploy.sh 备份数据库→快进拉取→重建镜像→第 27 条迁移 202611180027_carrier_status_webhooks 应用成功（共 27 条）→ API 健康→ Caddy/公网 health/live 200。生产冒烟：health/ready 200、`https://admin.mrinhk.com/admin/orders` 200、承运商回调在未登记密钥时返回 404（安全默认，未配置来源不入库）。另补 `.env.example`/compose 的 `CARRIER_WEBHOOK_SECRETS` 传递项：店主与具体承运商约定共享密钥后写入该变量并重建 API，端点才会验签放行；密钥未配齐前不伪装为已对接。
