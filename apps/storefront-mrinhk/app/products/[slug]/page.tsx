@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { copy, whatsappLink } from '../../../lib/site';
 import { fetchProduct, formatPrice } from '../../../lib/products';
 import AddToCartForm from './add-to-cart-form';
+import AnalyticsTracker from '../../analytics-tracker';
 
 export const revalidate = 60;
 
@@ -13,6 +14,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
   return (
     <section className="section">
+      <AnalyticsTracker pageKey={`product:${slug}`} variantId={product.variants[0]?.id} />
       <div className="red-line" />
       <div className="section-head">
         <span className="num">弐</span>

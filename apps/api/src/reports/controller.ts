@@ -30,12 +30,17 @@ export class ReportsController extends ManagementHttp {
   @Get('reports/:reportKey')
   async report(@Param('reportKey') reportKey: string, @Query('from') from: unknown, @Query('to') to: unknown,
     @Query('timezone') timezone: unknown, @Query('marketCode') marketCode: unknown,
-    @Query('paymentMethodCode') paymentMethodCode: unknown,
+    @Query('paymentMethodCode') paymentMethodCode: unknown, @Query('locale') locale: unknown,
+    @Query('deviceClass') deviceClass: unknown, @Query('source') source: unknown, @Query('groupBy') groupBy: unknown,
     @Req() request: ApiRequest, @Res() response: ServerResponse) {
     const result = await this.reportsService().report(cookie(request, 'ez_admin_session'), reportKey, {
       from, to, timezone,
       ...(this.optional(marketCode) ? { marketCode: this.optional(marketCode) } : {}),
       ...(this.optional(paymentMethodCode) ? { paymentMethodCode: this.optional(paymentMethodCode) } : {}),
+      ...(this.optional(locale) ? { locale: this.optional(locale) } : {}),
+      ...(this.optional(deviceClass) ? { deviceClass: this.optional(deviceClass) } : {}),
+      ...(this.optional(source) ? { source: this.optional(source) } : {}),
+      ...(this.optional(groupBy) ? { groupBy: this.optional(groupBy) } : {}),
     });
     this.send(response, request, 200, result);
   }

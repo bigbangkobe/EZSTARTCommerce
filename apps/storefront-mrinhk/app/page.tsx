@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { copy, site, whatsappLink } from '../lib/site';
 import { fetchProducts, formatPrice } from '../lib/products';
+import AnalyticsTracker from './analytics-tracker';
 
 function SectionHead({ num, title, jp }: { num: string; title: string; jp: string }) {
   return (
@@ -21,6 +22,7 @@ export default async function HomePage() {
 
   return (
     <>
+      <AnalyticsTracker pageKey="home" locale={site.defaultLanguage} />
       {/* HERO */}
       <section className="hero">
         <div className="hero-copy">

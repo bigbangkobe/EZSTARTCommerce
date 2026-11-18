@@ -10,12 +10,14 @@ export const SUPPORTED_LOCALES = ['zh-CN', 'zh-HK', 'en'] as const;
 export type StoreLocale = (typeof SUPPORTED_LOCALES)[number];
 
 /** 实例认识的功能开关；未知开关一律拒绝，避免写入无人实现的配置。 */
-export const FEATURE_FLAGS = ['guestCheckout', 'memberOtpLogin', 'codPayment', 'onlinePayment', 'ageVerification'] as const;
+export const FEATURE_FLAGS = ['guestCheckout', 'memberOtpLogin', 'codPayment', 'onlinePayment', 'ageVerification', 'analyticsEnabled'] as const;
 export type FeatureFlag = (typeof FEATURE_FLAGS)[number];
 
 export const DEFAULT_FEATURE_FLAGS: Readonly<Record<FeatureFlag, boolean>> = {
   // 访客结账是产品基线；会员登录、货到付款默认开启；线上支付与年龄验证需按市场审核后再开。
+  // 分析采集默认关闭：未经批准的追踪不得默认启用，须由店主显式打开并配合同意策略。
   guestCheckout: true, memberOtpLogin: true, codPayment: true, onlinePayment: false, ageVerification: false,
+  analyticsEnabled: false,
 };
 
 export type ReviewDecision = 'approved' | 'rejected' | 'revoked';

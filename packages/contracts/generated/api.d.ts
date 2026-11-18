@@ -1125,6 +1125,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storefront/analytics/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest first-party anonymous funnel events (no PII, consent-gated) */
+        post: operations["ingestAnalyticsEvents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storefront/member/otp/request": {
         parameters: {
             query?: never;
@@ -4665,6 +4682,31 @@ export interface components {
             body: string;
             enabled: boolean;
         };
+        AnalyticsEventInput: {
+            /** @description Client-generated idempotency key (UUID) */
+            eventId: string;
+            /** @description Random anonymous session id; not derived from any PII */
+            sessionId: string;
+            /** @enum {string} */
+            eventName: "page_view" | "view_item" | "add_to_cart" | "begin_checkout";
+            /** Format: date-time */
+            occurredAt: string;
+            schemaVersion: string;
+            /** @enum {string} */
+            consentState: "granted" | "denied" | "unknown";
+            pageKey?: string;
+            locale?: string;
+            /** @enum {string} */
+            deviceClass?: "desktop" | "mobile" | "tablet";
+            marketCode?: string;
+            variantId?: string;
+            interactionId?: string;
+            /** @description Anonymous UTM source bucket */
+            source?: string;
+        };
+        AnalyticsEventBatch: {
+            events: components["schemas"]["AnalyticsEventInput"][];
+        };
         ReportExportRequest: {
             reportKey: components["schemas"]["ReportKey"];
             /** Format: date-time */
@@ -4685,9 +4727,9 @@ export interface components {
          * @description Server-computed aggregate report. PII is never included in report rows.
          * @enum {string}
          */
-        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members";
+        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members" | "funnel";
         ReportRow: {
-            /** @description Dimension keys (status, method, sku, ...) with their bucket value. Only non-PII dimension keys are allowed. */
+            /** @description Dimension keys (status, method, sku, step, device, source, ...) with their bucket value. Only non-PII dimension keys are allowed; funnel uses step/device/source. */
             dimensions: {
                 [key: string]: string | null;
             };
@@ -5877,7 +5919,7 @@ export interface components {
         Slug: string;
         ProviderCode: string;
         /** @description Server-computed report key from the closed set in components.schemas.ReportKey. */
-        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members";
+        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members" | "funnel";
         Cursor: string;
         Limit: number;
         SearchQuery: string;
@@ -7581,6 +7623,33 @@ export interface operations {
             422: components["responses"]["ValidationError"];
             429: components["responses"]["RateLimited"];
             503: components["responses"]["Unavailable"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    ingestAnalyticsEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyticsEventBatch"];
+            };
+        };
+        responses: {
+            /** @description Events accepted (idempotent duplicates ignored) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["UnexpectedError"];
         };
     };
@@ -9463,6 +9532,14 @@ export interface operations {
                 timezone: string;
                 marketCode?: string;
                 paymentMethodCode?: string;
+                /** @description Funnel only - IANA locale filter */
+                locale?: string;
+                /** @description Funnel only - device class filter */
+                deviceClass?: "desktop" | "mobile" | "tablet";
+                /** @description Funnel only - UTM source filter */
+                source?: string;
+                /** @description Funnel only - grouping dimension */
+                groupBy?: "step" | "device" | "source" | "locale" | "day";
             };
             header?: never;
             path: {

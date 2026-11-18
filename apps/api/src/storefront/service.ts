@@ -17,7 +17,7 @@ const DEFAULT_SETTINGS: StoreSettings = {
   timezone: 'Asia/Hong_Kong', featureFlags: {}, markets: [],
 };
 
-const PUBLIC_FLAGS = ['guestCheckout', 'memberOtpLogin', 'codPayment', 'onlinePayment', 'ageVerification'] as const;
+const PUBLIC_FLAGS = ['guestCheckout', 'memberOtpLogin', 'codPayment', 'onlinePayment', 'ageVerification', 'analyticsEnabled'] as const;
 
 /**
  * 前台只读目录（M02/M03 对外面）。

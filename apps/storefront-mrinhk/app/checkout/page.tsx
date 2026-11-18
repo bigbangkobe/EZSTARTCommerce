@@ -7,6 +7,7 @@ import {
   type ApiOutcome, type CartView, type OrderCreatedView, type ShippingMethodView,
 } from '../../lib/cart-client';
 import { fetchProfile, type MemberProfileView } from '../../lib/member-client';
+import { trackBeginCheckout } from '../../lib/analytics-client';
 import { site } from '../../lib/site';
 import MemberNudge from './member-nudge';
 
@@ -70,6 +71,8 @@ export default function CheckoutPage() {
     if (!cart || !method) return;
     setBusy(true);
     setError(null);
+    // 开始结账：在提交报价之前上报；成功下单由服务端订单权威归因，不发浏览器 purchase。
+    void trackBeginCheckout('checkout', site.checkoutLocale, site.marketCode);
     const quote = await createQuote({
       cartId: cart.cartId,
       locale: site.checkoutLocale,

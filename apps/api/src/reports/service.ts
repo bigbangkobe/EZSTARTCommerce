@@ -1,8 +1,8 @@
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import {
-  REPORT_METRIC_VERSION, REPORT_EXPORT_TTL_MINUTES, REPORT_KEYS, PAID_PAYMENT_STATUSES,
-  COD_PAYMENT_STATUSES, REFUNDED_STATUS, CANCELLED_ORDER_STATUS,
-  localDay, within, sumMinor, ratio, RowAccumulator,
+  REPORT_METRIC_VERSION, FUNNEL_METRIC_VERSION, REPORT_EXPORT_TTL_MINUTES, REPORT_KEYS, PAID_PAYMENT_STATUSES,
+  COD_PAYMENT_STATUSES, REFUNDED_STATUS, CANCELLED_ORDER_STATUS, REPORT_MIN_SAMPLE,
+  localDay, within, sumMinor, ratio, smallSampleRatio, RowAccumulator,
   assertReportKey, assertReportFormat, normalizeReportFilters,
   exportPreamble, csvDocument,
   type ReportKey, type ReportFilters, type ReportRowInput, ReportRuleError,
@@ -51,7 +51,18 @@ interface Snapshot {
   members: MemberRow[];
   ledger: LedgerRow[];
   tiers: Map<string, TierRow>;
+  /** 漏斗报表专用快照：仅在 reportKey=funnel 时加载。 */
+  funnel?: FunnelData;
 }
+
+interface FunnelData {
+  events: { sessionId: string; eventName: string; occurredAt: string }[];
+  sessions: { sessionId: string; cartId: string | null; deviceClass: string | null;
+    source: string | null; locale: string | null; marketCode: string | null; firstSeenAt: Date | null }[];
+  orders: { cartId: string | null; placedAt: Date; currency: string }[];
+}
+
+const EMPTY_FUNNEL: FunnelData = { events: [], sessions: [], orders: [] };
 
 /**
  * 交易经营报表（M14 第一批）：服务端权威数据的只读聚合。
@@ -82,6 +93,7 @@ export class ReportsService {
 
     const run = async (client: Tx) => {
       const snap = await this.load(client, from, to, filters);
+      if (reportKey === 'funnel') snap.funnel = await this.loadFunnel(client, from, to, filters);
       return this.aggregate(reportKey, filters, from, to, snap);
     };
     // 导出调用方已经在外层事务里（withPermission），不能嵌套 $transaction。
@@ -137,6 +149,33 @@ export class ReportsService {
     };
   }
 
+  /** 漏斗数据在同一事务里读：事件按筛选/同意过滤，会话与订单全量取后在内存 join。 */
+  private async loadFunnel(tx: Tx, from: Date, to: Date, filters: ReportFilters): Promise<FunnelData> {
+    const eventWhere: Prisma.AnalyticsEventWhereInput = {
+      occurredAt: { gte: from, lt: to }, consentState: 'granted',
+      ...(filters.locale ? { locale: filters.locale } : {}),
+      ...(filters.deviceClass ? { deviceClass: filters.deviceClass } : {}),
+      ...(filters.source ? { source: filters.source } : {}),
+      ...(filters.marketCode ? { marketCode: filters.marketCode } : {}),
+    };
+    const orderWhere: Prisma.ShopOrderWhereInput = {
+      placedAt: { gte: from, lt: to }, cartId: { not: null },
+      ...(filters.marketCode ? { marketCode: filters.marketCode } : {}),
+    };
+    const [events, sessions, orders] = await Promise.all([
+      tx.analyticsEvent.findMany({ where: eventWhere }),
+      tx.analyticsSession.findMany(),
+      tx.shopOrder.findMany({ where: orderWhere }),
+    ]);
+    return {
+      events: events.map(e => ({ sessionId: e.sessionId, eventName: e.eventName, occurredAt: e.occurredAt.toISOString() })),
+      sessions: sessions.map(s => ({ sessionId: s.sessionId, cartId: s.cartId, deviceClass: s.deviceClass,
+        source: s.source, locale: s.locale, marketCode: s.marketCode,
+        firstSeenAt: s.firstSeenAt })),
+      orders: orders.map(o => ({ cartId: o.cartId, placedAt: o.placedAt, currency: o.currency })),
+    };
+  }
+
   private coverage(snap: Snapshot): ReportResult['coverage'] {
     let latest: Date | null = null;
     for (const order of snap.orders) if (!latest || order.placedAt > latest) latest = order.placedAt;
@@ -175,6 +214,7 @@ export class ReportsService {
       case 'inventory': return this.inventory(filters, from, to, snap);
       case 'coupons': return this.coupons(filters, from, to, snap);
       case 'members': return this.members(filters, from, to, snap);
+      case 'funnel': return this.funnel(filters, from, to, snap);
     }
   }
 
@@ -328,6 +368,121 @@ export class ReportsService {
     return this.result('members', filters, from, to, snap,
       { registeredMembers: registered, activeMembers: active, pointsIssued: issued, pointsRedeemed: redeemedPoints,
         lifetimeSpendMinor: 0 }, tierAcc.list().sort((a, b) => String(a.dimensions.tier).localeCompare(String(b.dimensions.tier))));
+  }
+
+  /**
+   * 访问漏斗（M14 第二批）：访问 → 商品浏览 → 加购 → 开始结账 → 成功下单。
+   *
+   * 口径：
+   * - 前四步来自已同意（granted）的浏览器事件，按 sessionId 去重；purchase 不采信浏览器，
+   *   而是用服务端 ShopOrder.cartId join AnalyticsSession.cartId，归因到会话，去重计一次。
+   * - 每步会话数是独立去重的集合大小（标准漏斗近似）；阶段转化率用 smallSampleRatio，
+   *   分母 < 20 显示"数据不足"（返回 null，前端不渲染百分比），避免反推个体行为。
+   * - 匿名 traffic：sessionId 随机，不含 PII；不跨设备/跨会话归因。
+   * - 维度分组 groupBy 闭集 {step,device,source,locale,day}，day 按店铺时区归属首见日。
+   */
+  private funnel(filters: ReportFilters, from: Date, to: Date, snap: Snapshot): ReportResult {
+    const data = snap.funnel ?? EMPTY_FUNNEL;
+    const groupBy = filters.groupBy ?? 'step';
+
+    const sessionById = new Map(data.sessions.map(s => [s.sessionId, s]));
+    const orderedCartIds = new Set(data.orders.map(o => o.cartId).filter((c): c is string => Boolean(c)));
+
+    // 每一步的会话集合。eventStep: 事件名 -> sessionId 集合；purchase: 通过 cartId 归因的 sessionId 集合。
+    const stepSessions = new Map<string, Set<string>>();
+    const touch = (step: string, id: string) => {
+      let set = stepSessions.get(step);
+      if (!set) { set = new Set(); stepSessions.set(step, set); }
+      set.add(id);
+    };
+    for (const e of data.events) {
+      if (e.eventName !== 'purchase') touch(e.eventName, e.sessionId);
+    }
+    for (const s of data.sessions) {
+      if (s.cartId && orderedCartIds.has(s.cartId)) touch('purchase', s.sessionId);
+    }
+
+    const steps = ['page_view', 'view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
+    const stepLabels: Record<string, string> = {
+      page_view: '访问', view_item: '商品浏览', add_to_cart: '加入购物车',
+      begin_checkout: '开始结账', purchase: '成功下单',
+    };
+    const bucketOf = (sessionId: string, step: string): string => {
+      const s = sessionById.get(sessionId);
+      if (!s) return 'unknown';
+      switch (groupBy) {
+        case 'device': return s.deviceClass ?? 'unknown';
+        case 'source': return s.source ?? 'unknown';
+        case 'locale': return s.locale ?? 'unknown';
+        case 'day': return s.firstSeenAt ? localDay(filters.timezone, s.firstSeenAt) : 'unknown';
+        default: return 'unknown';
+      }
+    };
+
+    const rows: ReportRowInput[] = [];
+    if (groupBy === 'step') {
+      let prev = 0, first = 0;
+      for (const step of steps) {
+        const count = stepSessions.get(step)?.size ?? 0;
+        if (step === steps[0]) first = count;
+        const metrics: Record<string, number> = { sessions: count };
+        const stepRate = smallSampleRatio(count, prev);
+        const overallRate = smallSampleRatio(count, first);
+        if (stepRate !== null) metrics.stepRate = stepRate;
+        if (overallRate !== null) metrics.overallRate = overallRate;
+        rows.push({ dimensions: { step: stepLabels[step] ?? step }, metrics });
+        prev = count;
+      }
+    } else {
+      // 按维度分桶，每桶内算五步；桶顺序稳定（先出现先输出）。
+      const buckets = new Map<string, Map<string, Set<string>>>();
+      for (const [step, ids] of stepSessions) {
+        for (const id of ids) {
+          const bucket = bucketOf(id, step);
+          let perStep = buckets.get(bucket);
+          if (!perStep) { perStep = new Map(); buckets.set(bucket, perStep); }
+          let set = perStep.get(step);
+          if (!set) { set = new Set(); perStep.set(step, set); }
+          set.add(id);
+        }
+      }
+      const dimKey = groupBy === 'device' ? 'device' : groupBy === 'source' ? 'source'
+        : groupBy === 'locale' ? 'locale' : 'day';
+      for (const [bucket, perStep] of buckets) {
+        let prev = 0, first = 0;
+        for (const step of steps) {
+          const count = perStep.get(step)?.size ?? 0;
+          if (step === steps[0]) first = count;
+          const metrics: Record<string, number> = { sessions: count };
+          const stepRate = smallSampleRatio(count, prev);
+          const overallRate = smallSampleRatio(count, first);
+          if (stepRate !== null) metrics.stepRate = stepRate;
+          if (overallRate !== null) metrics.overallRate = overallRate;
+          rows.push({ dimensions: { [dimKey]: bucket, step: stepLabels[step] ?? step }, metrics });
+          prev = count;
+        }
+      }
+    }
+
+    const totalSessions = new Set<string>();
+    for (const ids of stepSessions.values()) for (const id of ids) totalSessions.add(id);
+    const purchased = stepSessions.get('purchase')?.size ?? 0;
+    const coverage: ReportResult['coverage'] = {
+      sourceOrderCount: data.orders.length,
+      lastDataAt: data.events.reduce<string | null>((latest, e) =>
+        !latest || e.occurredAt > latest ? e.occurredAt : latest, null),
+      complete: data.sessions.length > 0,
+      note: `漏斗事件按 sessionId 去重；成功下单由服务端订单 cartId 归因（不采信浏览器 purchase）；` +
+        `共 ${data.events.length} 条已同意事件、${data.sessions.length} 个会话、${data.orders.length} 笔订单进入统计；` +
+        `阶段转化率分母不足 ${REPORT_MIN_SAMPLE} 显示数据不足。`,
+    };
+    return {
+      reportKey: 'funnel', metricDefinitionVersion: FUNNEL_METRIC_VERSION,
+      generatedAt: new Date().toISOString(), from: from.toISOString(), to: to.toISOString(),
+      timezone: filters.timezone, currencies: [...new Set(data.orders.map(o => o.currency))].sort(),
+      filters: { ...filters }, totals: { sessions: totalSessions.size, sessionsPurchased: purchased, eventCount: data.events.length },
+      rows, coverage,
+    };
   }
 
   // ---- 导出任务（M14）--------------------------------------------------------

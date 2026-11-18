@@ -653,7 +653,7 @@ class ContractTests(unittest.TestCase):
 
     def test_report_key_is_a_closed_set_across_parameter_and_request(self):
         expected = ["sales_summary", "orders_by_status", "orders_by_payment", "orders_by_method",
-                    "product_sales", "inventory", "coupons", "members"]
+                    "product_sales", "inventory", "coupons", "members", "funnel"]
         schemas = SPEC["components"]["schemas"]
         self.assertEqual(expected, schemas["ReportKey"]["enum"])
         self.assertEqual(expected, SPEC["components"]["parameters"]["ReportKey"]["schema"]["enum"])
@@ -696,6 +696,38 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(errors("ReportExport", dict(export, includePii="false")))
         # 进行中的任务不应带下载链接。
         self.assertEqual([], errors("ReportExport", dict(export, status="pending", downloadUrl=None, completedAt=None)))
+
+    def test_funnel_is_in_report_key_closed_set_and_dimensions_allow_funnel_keys(self):
+        expected = ["sales_summary", "orders_by_status", "orders_by_payment", "orders_by_method",
+                    "product_sales", "inventory", "coupons", "members", "funnel"]
+        self.assertEqual(expected, SPEC["components"]["schemas"]["ReportKey"]["enum"])
+        self.assertEqual(expected, SPEC["components"]["parameters"]["ReportKey"]["schema"]["enum"])
+        props = SPEC["components"]["schemas"]["ReportRow"]["properties"]["dimensions"]
+        allowed = props["propertyNames"]["enum"]
+        for key in ("step", "device", "source"):
+            self.assertIn(key, allowed)
+
+    def test_analytics_ingest_rejects_pii_and_requires_consent_and_idempotency(self):
+        op = SPEC["paths"]["/storefront/analytics/events"]["post"]
+        self.assertEqual("public", op["x-authentication"])
+        self.assertEqual("required", op["x-csrf"])
+        event = {"eventId": UUID, "sessionId": "sess_abcdefghijklmnop", "eventName": "page_view",
+                 "occurredAt": NOW, "schemaVersion": "1.0", "consentState": "granted", "pageKey": "home"}
+        self.assertEqual([], errors("AnalyticsEventInput", event))
+        self.assertEqual([], errors("AnalyticsEventBatch", {"events": [event]}))
+        # 禁止把联系方式/URL/身份塞进事件：additionalProperties=false 且字段名不在闭集里。
+        for bad in ({"email": "a@b.com"}, {"phone": "123"}, {"url": "https://x/?q=secret"},
+                    {"customerId": UUID}, {"name": "ID"}):
+            self.assertTrue(errors("AnalyticsEventInput", dict(event, **bad)))
+        # 采购事件不能由浏览器上报（purchase 由服务端订单权威生成）。
+        self.assertTrue(errors("AnalyticsEventInput", dict(event, eventName="purchase")))
+        # 必须声明同意状态与幂等键、随机会话 ID（非邮箱形态）。
+        for missing in ("consentState", "eventId", "sessionId", "schemaVersion"):
+            broken = copy.deepcopy(event)
+            del broken[missing]
+            self.assertTrue(errors("AnalyticsEventInput", broken))
+        self.assertTrue(errors("AnalyticsEventInput", dict(event, sessionId="a@b.com")))
+        self.assertTrue(errors("AnalyticsEventBatch", {"events": []}))
 
 
 if __name__ == "__main__":

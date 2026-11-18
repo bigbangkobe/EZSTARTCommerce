@@ -22,6 +22,7 @@ const REPORT_KEYS = [
   ['inventory', '库存汇总'],
   ['coupons', '优惠券效果'],
   ['members', '会员概览'],
+  ['funnel', '访问漏斗'],
 ] as const;
 
 const METRIC_LABEL: Record<string, string> = {
@@ -68,6 +69,9 @@ export function ReportsConsole() {
   const [timezone, setTimezone] = useState('Asia/Hong_Kong');
   const [marketCode, setMarketCode] = useState('');
   const [paymentMethodCode, setPaymentMethodCode] = useState('');
+  const [deviceClass, setDeviceClass] = useState('');
+  const [source, setSource] = useState('');
+  const [groupBy, setGroupBy] = useState('step');
   const [result, setResult] = useState<ReportResult | null>(null);
   const [exports, setExports] = useState<ReportExport[]>([]);
   const [busy, setBusy] = useState(false);
@@ -109,6 +113,11 @@ export function ReportsConsole() {
     const params = new URLSearchParams({ from: toUtc(from), to: toUtc(to), timezone });
     if (marketCode) params.set('marketCode', marketCode);
     if (paymentMethodCode) params.set('paymentMethodCode', paymentMethodCode);
+    if (reportKey === 'funnel') {
+      if (deviceClass) params.set('deviceClass', deviceClass);
+      if (source) params.set('source', source);
+      if (groupBy) params.set('groupBy', groupBy);
+    }
     return params.toString();
   }
 
@@ -138,6 +147,11 @@ export function ReportsConsole() {
         reportKey, from: toUtc(from), to: toUtc(to), timezone,
         ...(marketCode ? { marketCode } : {}),
         ...(paymentMethodCode ? { paymentMethodCode } : {}),
+        ...(reportKey === 'funnel' ? {
+          ...(deviceClass ? { deviceClass } : {}),
+          ...(source ? { source } : {}),
+          ...(groupBy ? { groupBy } : {}),
+        } : {}),
         format: 'csv',
       });
       setExports(previous => [created, ...previous.filter(item => item.id !== created.id)]);
@@ -162,6 +176,7 @@ export function ReportsConsole() {
         <a href="/admin/members">会员与积分</a><a href="/admin/settings">店铺设置</a></div></header>
     {error && <p className="error" role="alert">{error}</p>}{notice && <p className="notice" role="status">{notice}</p>}
     <p><small>报表以订单、支付、退款与积分为准（服务端权威数据），不含顾客资料。金额按币种分别展示，不跨币种相加。</small></p>
+    <p><small>访问漏斗依赖店铺「访问漏斗采集」开关与访客明示同意；成功下单由服务端订单归因，阶段转化率在样本不足 20 时不展示。</small></p>
 
     <form onSubmit={(event: FormEvent) => { event.preventDefault(); void load(); }}>
       <label>报表<select value={reportKey} onChange={event => setReportKey(event.target.value)}>
@@ -172,6 +187,17 @@ export function ReportsConsole() {
       <label>时区<input value={timezone} onChange={event => setTimezone(event.target.value)} maxLength={64} /></label>
       <label>市场<input value={marketCode} onChange={event => setMarketCode(event.target.value)} maxLength={16} placeholder="可选，如 HK" /></label>
       <label>付款方式<input value={paymentMethodCode} onChange={event => setPaymentMethodCode(event.target.value)} maxLength={32} placeholder="可选，如 cod" /></label>
+      {reportKey === 'funnel' && <>
+        <label>设备<select value={deviceClass} onChange={event => setDeviceClass(event.target.value)}>
+          <option value="">全部</option><option value="desktop">桌面</option>
+          <option value="mobile">手机</option><option value="tablet">平板</option>
+        </select></label>
+        <label>来源<input value={source} onChange={event => setSource(event.target.value)} maxLength={64} placeholder="可选，UTM 来源" /></label>
+        <label>分组<select value={groupBy} onChange={event => setGroupBy(event.target.value)}>
+          <option value="step">按步骤</option><option value="device">按设备</option>
+          <option value="source">按来源</option><option value="locale">按语言</option><option value="day">按日期</option>
+        </select></label>
+      </>}
       <button disabled={busy} type="submit">生成报表</button>
       <button disabled={busy} type="button" onClick={() => quickRange(7)}>近7天</button>
       <button disabled={busy} type="button" onClick={() => quickRange(30)}>近30天</button>

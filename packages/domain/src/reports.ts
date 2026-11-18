@@ -21,6 +21,8 @@ export class ReportRuleError extends Error {
 
 /** 指标定义版本：口径或维度变了必须升版本，历史导出要能解释当时的算法。 */
 export const REPORT_METRIC_VERSION = '1.0';
+/** 漏斗口径版本：归因规则（服务端订单权威、24h 窗口、小样本保护）变更时升级。 */
+export const FUNNEL_METRIC_VERSION = '1.0';
 /** 导出短时下载有效期（分钟）。 */
 export const REPORT_EXPORT_TTL_MINUTES = 30;
 /** 小样本保护阈值：某个维度下的订单数低于此值时，比率不展示，避免反推出个体。 */
@@ -30,7 +32,7 @@ export const REPORT_MAX_RANGE_DAYS = 366;
 
 export const REPORT_KEYS = [
   'sales_summary', 'orders_by_status', 'orders_by_payment', 'orders_by_method',
-  'product_sales', 'inventory', 'coupons', 'members',
+  'product_sales', 'inventory', 'coupons', 'members', 'funnel',
 ] as const;
 export type ReportKey = typeof REPORT_KEYS[number];
 
@@ -49,7 +51,16 @@ export interface ReportFilters {
   timezone: string;
   marketCode: string | null;
   paymentMethodCode: string | null;
+  /** 漏斗专用筛选（经营报表忽略这些字段）。 */
+  locale: string | null;
+  deviceClass: string | null;
+  source: string | null;
+  /** 漏斗分组维度：step（默认，五步汇总）/ device / source / locale / day。 */
+  groupBy: string | null;
 }
+
+/** 漏斗允许的分组维度闭集：不含任何 PII 维度键。 */
+export const FUNNEL_GROUP_BY = ['step', 'device', 'source', 'locale', 'day'] as const;
 
 export interface ReportRowInput {
   dimensions: Record<string, string | null>;
@@ -89,12 +100,20 @@ export function normalizeReportFilters(raw: Record<string, unknown>): { filters:
   if (from.getTime() >= to.getTime()) fail('to');
   if ((to.getTime() - from.getTime()) / 86_400_000 > REPORT_MAX_RANGE_DAYS) fail('to');
   const timezone = assertTimezone(raw['timezone']);
+  const deviceClass = optionalCode(raw['deviceClass'], 'deviceClass');
+  if (deviceClass && !['desktop', 'mobile', 'tablet'].includes(deviceClass)) fail('deviceClass');
+  const groupByRaw = optionalCode(raw['groupBy'], 'groupBy');
+  if (groupByRaw && !FUNNEL_GROUP_BY.includes(groupByRaw as never)) fail('groupBy');
   return {
     from, to,
     filters: {
       from: from.toISOString(), to: to.toISOString(), timezone,
       marketCode: optionalCode(raw['marketCode'], 'marketCode'),
       paymentMethodCode: optionalCode(raw['paymentMethodCode'], 'paymentMethodCode'),
+      locale: optionalCode(raw['locale'], 'locale'),
+      deviceClass,
+      source: optionalCode(raw['source'], 'source'),
+      groupBy: groupByRaw,
     },
   };
 }

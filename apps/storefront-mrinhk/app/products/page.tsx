@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { copy, whatsappLink } from '../../lib/site';
 import { fetchProducts, formatPrice } from '../../lib/products';
+import AnalyticsTracker from '../analytics-tracker';
 
 export const metadata = { title: '商品 | IN先生' };
 
@@ -10,6 +11,7 @@ export default async function ProductsPage() {
 
   return (
     <section className="section">
+      <AnalyticsTracker pageKey="products" />
       <div className="red-line" />
       <div className="section-head">
         <span className="num">壱</span>

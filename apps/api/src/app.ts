@@ -32,6 +32,8 @@ import { PromotionsController } from './promotions/controller.js';
 import { PromotionsService } from './promotions/service.js';
 import { ReportsController } from './reports/controller.js';
 import { ReportsService } from './reports/service.js';
+import { AnalyticsController } from './analytics/controller.js';
+import { AnalyticsService } from './analytics/service.js';
 import { AfterSalesService } from './aftersales/service.js';
 import { OrdersController } from './orders/controller.js';
 import { PaymentsController } from './payments/controller.js';
@@ -113,10 +115,11 @@ export async function createApp(identity: IdentityService | null = null, options
   const privacy = identity ? new PrivacyService(identity) : null;
   const mailTest = identity ? new NotificationService(identity) : null;
   const reports = identity ? new ReportsService(identity) : null;
+  const analytics = identity && cart ? new AnalyticsService(identity, cart) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
     OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController, PrivacyController,
-    MailTestController, ReportsController],
+    MailTestController, ReportsController, AnalyticsController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
@@ -132,7 +135,8 @@ export async function createApp(identity: IdentityService | null = null, options
       { provide: 'MEMBERS', useValue: members }, { provide: 'LOYALTY', useValue: loyalty },
       { provide: 'PRIVACY', useValue: privacy },
       { provide: 'MAIL_TEST', useValue: mailTest },
-      { provide: 'REPORTS', useValue: reports }] })
+      { provide: 'REPORTS', useValue: reports },
+      { provide: 'ANALYTICS', useValue: analytics }] })
   class AppModule {}
   const app = await NestFactory.create(AppModule, { logger: false, bodyParser: true });
   app.setGlobalPrefix('api/v1');

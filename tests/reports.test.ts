@@ -11,8 +11,9 @@ const FROM = '2026-11-01T00:00:00.000Z';
 const TO = '2026-11-08T00:00:00.000Z';
 
 test('reports: report keys and formats are closed sets', () => {
-  assert.equal(REPORT_KEYS.length, 8);
-  assert.equal(new Set(REPORT_KEYS).size, 8);
+  assert.equal(REPORT_KEYS.length, 9);
+  assert.equal(new Set(REPORT_KEYS).size, 9);
+  assert.ok(REPORT_KEYS.includes('funnel'));
   for (const key of REPORT_KEYS) assert.equal(assertReportKey(key), key);
   assert.throws(() => assertReportKey('drop_all_tables'), ReportRuleError);
   assert.throws(() => assertReportKey('sales'), ReportRuleError);
@@ -38,12 +39,24 @@ test('reports: filters are normalized with optional dimensions and range guards'
   assert.equal(filters.timezone, 'Asia/Hong_Kong');
   assert.equal(filters.marketCode, null);
   assert.equal(filters.paymentMethodCode, null);
+  assert.equal(filters.locale, null);
+  assert.equal(filters.deviceClass, null);
+  assert.equal(filters.source, null);
+  assert.equal(filters.groupBy, null);
   assert.equal(from.toISOString(), FROM);
   assert.equal(to.toISOString(), TO);
 
-  const withDims = normalizeReportFilters({ from: FROM, to: TO, timezone: 'UTC', marketCode: 'HK', paymentMethodCode: 'cod' });
+  const withDims = normalizeReportFilters({ from: FROM, to: TO, timezone: 'UTC', marketCode: 'HK', paymentMethodCode: 'cod',
+    locale: 'zh-HK', deviceClass: 'mobile', source: 'newsletter', groupBy: 'device' });
   assert.equal(withDims.filters.marketCode, 'HK');
   assert.equal(withDims.filters.paymentMethodCode, 'cod');
+  assert.equal(withDims.filters.locale, 'zh-HK');
+  assert.equal(withDims.filters.deviceClass, 'mobile');
+  assert.equal(withDims.filters.source, 'newsletter');
+  assert.equal(withDims.filters.groupBy, 'device');
+  // 漏斗维度闭集：非法设备类/分组维度拒绝。
+  assert.throws(() => normalizeReportFilters({ from: FROM, to: TO, timezone: 'UTC', deviceClass: 'smartwatch' }), ReportRuleError);
+  assert.throws(() => normalizeReportFilters({ from: FROM, to: TO, timezone: 'UTC', groupBy: 'email' }), ReportRuleError);
 
   // 空串当作未筛选；非法代码格式拒绝；from >= to 与超长跨度拒绝。
   assert.equal(normalizeReportFilters({ from: FROM, to: TO, timezone: 'UTC', marketCode: '' }).filters.marketCode, null);

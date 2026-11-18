@@ -11,7 +11,8 @@ type MailTestJob = { id: string; recipientMasked: string; status: string; attemp
 
 const LOCALES = [['zh-CN', '简体中文'], ['zh-HK', '繁體中文'], ['en', 'English']] as const;
 const FLAGS = [['guestCheckout', '访客结账'], ['memberOtpLogin', '会员验证码登录'], ['codPayment', '货到付款'],
-  ['onlinePayment', '线上支付'], ['ageVerification', '年龄验证']] as const;
+  ['onlinePayment', '线上支付'], ['ageVerification', '年龄验证'],
+  ['analyticsEnabled', '访问漏斗采集（需同时告知并取得访客同意）']] as const;
 const STATUS: Record<string, string> = { pending: '待审核', approved: '已通过', rejected: '已拒绝', revoked: '已撤销', expired: '已过期' };
 const MAIL_STATUS: Record<string, string> = { pending: '待发送', processing: '发送中', sent: '已送达', failed: '失败', cancelled: '已取消' };
 

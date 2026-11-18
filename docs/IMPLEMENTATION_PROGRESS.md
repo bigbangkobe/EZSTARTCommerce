@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表（服务端权威数据聚合与受控导出）首批已完成。剩余：网站访问漏斗与陈列效果分析（M14 第二批，依赖第一方事件采集与前台埋点）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表首批（服务端权威数据聚合与受控导出）已完成并上线；M14 第二批「访问漏斗」（第一方匿名事件采集 + 漏斗报表）已完成。剩余：陈列效果分析（M14 P1，依赖发布版本埋点与 section 归因，另行估算）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -537,3 +537,19 @@
 验证：契约 42 项、生成物一致、Prisma schema 有效、前后台 typecheck 与后台生产构建通过；真实 PostgreSQL 18 顺序全量 **287/287** 全绿（新增报表纯规则 8 项 + HTTP 集成 1 项）；浏览器端到端 **76/76**（新增报表生成/导出与权限提示 2 例 × 桌面/移动）。
 
 边界：本批不含访问漏斗（PV/会话/商品浏览/加购/结账事件）与陈列曝光归因（P1）；积分发放/兑换与会员订单占比为聚合快照，会员级明细不在报表内；导出为同步生成（数据量受单次最大跨度 366 天约束），异步分块与 Excel 原生格式留待后续；worker/SMTP 仍未启动，与既有边界一致。
+
+部署：提交 7c1b569 已推送 origin/main 并部署 mrinhk。`deploy.sh` 备份数据库→快进拉取→重建镜像→`prisma migrate deploy` 应用第 25 条迁移（共 25 条全部成功）→ API 健康→ Caddy/公网 health/live 200。生产冒烟：health/ready 200、前台 / 200、后台 `https://admin.mrinhk.com/admin/reports` 200、报表与导出接口匿名访问 401/403（权限边界正确）。
+
+## 2026-11-18：M14 第二批 访问漏斗（第一方匿名事件采集 + 漏斗报表）
+
+范围：按规格「经营报表先做服务端聚合，访问漏斗随后接入」，本批落地不依赖发布版本埋点的访问漏斗——第一方事件采集 + 五步漏斗报表。P1 陈列效果分析（section 曝光/点击/区块归因、发布版本筛选）明确另行估算，不在本批。
+
+- 事件采集：`POST /storefront/analytics/events`（公开端点 + 双提交 CSRF + IP 限流 + 契约 assert + 店铺开关门控）。事件名闭集 `page_view/view_item/add_to_cart/begin_checkout`，**不含 purchase**（浏览器成交在契约与领域两层拒绝，成交只认服务端订单）。sessionId 是浏览器随机 UUID（不来自购物袋 token/手机号/邮箱）；`AnalyticsEventInput` 在契约层禁 `additionalProperties`，拦住 email/phone/url/customerId 等 PII 字段；source 只收匿名 UTM 桶、拒完整 URL。同意状态必填，未 granted 的事件可落库（可审计）但不进指标。eventId 唯一实现幂等，重复上报忽略。
+- 会话与归因：服务端读 HttpOnly `ez_guest_cart` 后由 CartService.locate 解析 cartId 写入 AnalyticsSession（坏/过期 cookie 当无购物袋，不阻断采集）；没有 cookie 的页面浏览也能记，cartId 留空后续回填。成功下单用 `ShopOrder.cartId` join `AnalyticsSession.cartId` 归因到会话，去重计一次——不采信浏览器 purchase。
+- 漏斗报表 `funnel`（复用 reports.view）：访问→商品浏览→加购→开始结账→成功下单五步，每步按 sessionId 去重；阶段转化率/总转化率用小样本保护（分母 < 20 显示数据不足）。分组闭集 step/device/source/locale/day（day 按店铺时区归属会话首见日）。筛选 locale/deviceClass/source/marketCode + groupBy；报表与导出共用同一筛选规范化与口径版本 FUNNEL_METRIC_VERSION=1.0。
+- 同意与开关：`analyticsEnabled` 加入 FEATURE_FLAGS（默认 false）、PUBLIC_FLAGS 与后台设置页开关；未经批准的追踪不默认启用，服务端独立判断开关（前端判断只是 UX，不是安全边界）。前台 SDK `lib/analytics-client.ts`：随机 sessionId 存 localStorage、告知同意标记 `ez_analytics_consent=granted` 才采集、fire-and-forget（keepalive）不阻塞加购/结账；首页/商品列表/商品详情挂页面浏览，加购成功后再计数、创建报价前上报开始结账。
+- 第 26 条迁移 `202611180026_analytics_events`：`AnalyticsSession`（sessionId 唯一、cartId 外键 SET NULL、seen 时间互锁 CHECK）与 `AnalyticsEvent`（eventId 唯一、eventName/consent/device 闭集 CHECK、schemaVersion 格式 CHECK）两表，schema 层无姓名/电话/邮箱/地址/完整 URL/支付凭证列。
+
+验证：契约 44 项、生成物一致、Prisma schema 有效、前后台 typecheck 与后台生产构建通过；分析纯规则 6/6、分析 HTTP 集成（真实 PG）全绿；浏览器端到端报表 6/6（新增漏斗查看用例 × 桌面/移动）；全量真实 PostgreSQL 顺序回归 36 文件 294/294 全绿（历史 287 + 新增分析纯规则 6 + 分析 HTTP 1）。
+
+边界：首期漏斗为「各步骤独立去重会话数」的近似口径，不做严格有序漏斗（不要求先访问再浏览）；不采集 purchase 浏览器事件；不含 P1 陈列（曝光 50%/1 秒判定、section_click/placement_add_to_cart、稳定 section_key 与发布版本筛选、24h 最后交互归因）；不做跨设备/跨店归因、A/B 实验与因果增量。分析开关默认关闭，需店主显式开启并配合同意告知；预览/员工/沙箱/测试流量过滤与已知爬虫排除留待 P1 一并实现。

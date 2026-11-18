@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { addToCart, formatMinor, notifyCartUpdated, type CartView } from '../../../lib/cart-client';
+import { trackAddToCart } from '../../../lib/analytics-client';
 import type { ProductVariant } from '../../../lib/products';
 
 type Props = {
@@ -41,6 +42,8 @@ export default function AddToCartForm({ productName, variants }: Props) {
     }
     setAdded(result.data);
     notifyCartUpdated();
+    // 加购成功（服务端已写入购物袋）后才计数，符合"加购仅在服务端成功写入后计数"口径。
+    void trackAddToCart(selected.id, `product:${productName}`);
   }
 
   if (added) {

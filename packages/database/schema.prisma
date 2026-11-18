@@ -430,6 +430,7 @@ model GuestCart {
   items CartItem[]
   quotes CheckoutQuote[]
   orders ShopOrder[]
+  analyticsSessions AnalyticsSession[]
   @@index([status, expiresAt])
 }
 
@@ -1371,4 +1372,47 @@ model ReportExport {
   expiresAt      DateTime  @db.Timestamptz(3)
   @@index([requestedBy, createdAt])
   @@index([expiresAt])
+}
+
+// 访问漏斗（M14 第二批）：第一方匿名事件采集。sessionId 是浏览器随机生成的高熵串，
+// 不来自手机号/邮箱/购物袋 token；cartId 仅在服务端读 HttpOnly cookie 后写入，用于把
+// 成功订单（ShopOrder.cartId）权威地归到会话，绝不采信浏览器的 purchase 事件。
+// 两张表都不存姓名/电话/邮箱/地址/完整 URL/支付凭证——schema 层面就没有这些列。
+model AnalyticsSession {
+  id           String    @id @default(uuid()) @db.Uuid
+  sessionId    String    @unique
+  cartId       String?   @db.Uuid
+  cart         GuestCart? @relation(fields: [cartId], references: [id], onDelete: SetNull)
+  firstSeenAt  DateTime  @db.Timestamptz(3)
+  lastSeenAt   DateTime  @db.Timestamptz(3)
+  locale       String?
+  deviceClass  String?
+  marketCode   String?
+  source       String?
+  consentState String    @default("unknown")
+  events       AnalyticsEvent[]
+  @@index([cartId])
+  @@index([firstSeenAt])
+}
+
+model AnalyticsEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  eventId       String    @unique
+  sessionId     String
+  session       AnalyticsSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  eventName     String
+  occurredAt    DateTime  @db.Timestamptz(3)
+  schemaVersion String
+  consentState  String
+  pageKey       String?
+  locale        String?
+  deviceClass   String?
+  marketCode    String?
+  variantId     String?
+  interactionId String?
+  source        String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  @@index([sessionId, occurredAt])
+  @@index([eventName, occurredAt])
+  @@index([occurredAt])
 }

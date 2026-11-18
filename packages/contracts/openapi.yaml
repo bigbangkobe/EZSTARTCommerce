@@ -1561,6 +1561,26 @@ paths:
         '503': { $ref: '#/components/responses/Unavailable' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
+  /storefront/analytics/events:
+    post:
+      tags: [Analytics]
+      operationId: ingestAnalyticsEvents
+      summary: Ingest first-party anonymous funnel events (no PII, consent-gated)
+      x-authentication: public
+      x-rate-limit: analytics-ingest
+      x-csrf: required
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyticsEventBatch' }
+      responses:
+        '202': { description: Events accepted (idempotent duplicates ignored) }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/member/otp/request:
     post:
       tags: [Members]
@@ -3153,6 +3173,10 @@ paths:
         - { name: timezone, in: query, required: true, schema: { type: string, description: IANA time zone identifier } }
         - { name: marketCode, in: query, required: false, schema: { type: string } }
         - { name: paymentMethodCode, in: query, required: false, schema: { type: string } }
+        - { name: locale, in: query, required: false, schema: { type: string }, description: Funnel only - IANA locale filter }
+        - { name: deviceClass, in: query, required: false, schema: { type: string, enum: [desktop, mobile, tablet] }, description: Funnel only - device class filter }
+        - { name: source, in: query, required: false, schema: { type: string }, description: Funnel only - UTM source filter }
+        - { name: groupBy, in: query, required: false, schema: { type: string, enum: [step, device, source, locale, day] }, description: Funnel only - grouping dimension }
       responses:
         '200': { $ref: '#/components/responses/ReportSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3579,7 +3603,7 @@ components:
       in: path
       required: true
       description: Server-computed report key from the closed set in components.schemas.ReportKey.
-      schema: { type: string, pattern: '^[a-z][a-z0-9_]{1,63}$', enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members] }
+      schema: { type: string, pattern: '^[a-z][a-z0-9_]{1,63}$', enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members, funnel] }
     Cursor:
       name: cursor
       in: query
@@ -7422,6 +7446,34 @@ components:
         subject: { type: [string, 'null'], maxLength: 200 }
         body: { type: string, minLength: 1, maxLength: 10000 }
         enabled: { type: boolean }
+    AnalyticsEventInput:
+      type: object
+      additionalProperties: false
+      required: [eventId, sessionId, eventName, occurredAt, schemaVersion, consentState]
+      properties:
+        eventId: { type: string, minLength: 16, maxLength: 128, description: Client-generated idempotency key (UUID) }
+        sessionId: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$', description: Random anonymous session id; not derived from any PII }
+        eventName: { type: string, enum: [page_view, view_item, add_to_cart, begin_checkout] }
+        occurredAt: { type: string, format: date-time }
+        schemaVersion: { type: string, pattern: '^[0-9]+\.[0-9]+$' }
+        consentState: { type: string, enum: [granted, denied, unknown] }
+        pageKey: { type: string, maxLength: 128 }
+        locale: { type: string, maxLength: 32 }
+        deviceClass: { type: string, enum: [desktop, mobile, tablet] }
+        marketCode: { type: string, maxLength: 32 }
+        variantId: { type: string, maxLength: 128 }
+        interactionId: { type: string, maxLength: 128 }
+        source: { type: string, maxLength: 128, description: Anonymous UTM source bucket, never a full URL }
+    AnalyticsEventBatch:
+      type: object
+      additionalProperties: false
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: '#/components/schemas/AnalyticsEventInput' }
     ReportExportRequest:
       type: object
       additionalProperties: false
@@ -7437,7 +7489,7 @@ components:
     ReportKey:
       type: string
       description: Server-computed aggregate report. PII is never included in report rows.
-      enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members]
+      enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members, funnel]
     ReportRow:
       type: object
       additionalProperties: false
@@ -7446,8 +7498,8 @@ components:
         dimensions:
           type: object
           additionalProperties: { type: [string, 'null'] }
-          propertyNames: { enum: [day, status, method, sku, productName, code, tier, market, currency, locale] }
-          description: Dimension keys (status, method, sku, ...) with their bucket value. Only non-PII dimension keys are allowed.
+          propertyNames: { enum: [day, status, method, sku, productName, code, tier, market, currency, locale, step, device, source] }
+          description: Dimension keys (status, method, sku, step, device, source, ...) with their bucket value. Only non-PII dimension keys are allowed; funnel uses step/device/source.
         metrics:
           type: object
           additionalProperties: { type: number }
