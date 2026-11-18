@@ -603,3 +603,5 @@
 验证：前台生产构建通过（三种语言 × 8 个路由静态预渲染，商品详情按需渲染）；新增 `e2e/storefront.spec.ts` 6 项 × 桌面/移动共 12 项，覆盖根路径与旧地址跳转、`html lang`/canonical/hreflang、语言切换保留页面、购物袋三语文案（受控 API 响应）、robots/sitemap 收录边界、缺商品 404 与本地化文案。
 
 边界：文案仍在代码字典里，M04 内容 CMS 落地后应由后台内容替换（首页区块正文、政策文本尤其如此）；`site.policies` 的条款版本号仍是 `demo-v1`，上线前须换成客户审核过的真实政策版本；页面没有语言协商（不做 `Accept-Language` 自动跳转），进站固定 `/zh-HK`，由语言切换交给访客决定；商品/分类 slug 若在不同语言下不同，跨语言跳转仍按各自语言列表返回的 slug 生成，不会互相猜；本批未改客户专属前端（按 M02 规格另建）。
+
+部署：提交 78e3de7 已推送 origin/main 并部署 mrinhk（本次无迁移，仍为 28 条）。deploy.sh 备份→快进拉取→重建 api/admin/storefront 镜像→API 健康→Caddy 链路 200。生产冒烟：`/` 307 到 `/zh-HK`、旧 `/products` 308 到 `/zh-HK/products`、`/zh-HK` `/zh-CN` `/en` 均 200、英文页 `html lang="en"` 且 canonical 为 `https://mrinhk.com/en`、robots 含 `/api/` 与 `/*/checkout` 等 disallow、sitemap 12 条（3 页 × 3 语言 + 商品 × 3 语言）、`admin.mrinhk.com/admin/login` 200。注意：商品与站点地图是 ISR 页面，镜像内构建时连不上 API，部署后需一个 1 分钟周期才换成真实商品；冒烟时对三种语言的首页与商品页各预热一次即恢复（首次预热仍可能返回上一版缓存，属预期）。
