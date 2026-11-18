@@ -104,3 +104,56 @@ test('an operator views the anonymous funnel with five steps and grouping', asyn
   await expect(page.getByRole('cell', { name: '成功下单' })).toBeVisible();
   await expect(page.getByText(/样本不足 20 时不展示/)).toBeVisible();
 });
+
+test('an operator reviews section placement performance with section filters', async ({ page }) => {
+  const placementResult = {
+    reportKey: 'placement', metricDefinitionVersion: '1.0',
+    generatedAt: '2026-11-18T02:00:00.000Z',
+    from: '2026-11-11T00:00:00.000Z', to: '2026-11-18T00:00:00.000Z',
+    timezone: 'Asia/Hong_Kong', currencies: ['HKD'], filters: { groupBy: 'section' },
+    totals: { sections: 2, impressionSessions: 641, clicks: 96, addToCarts: 33, orderCount: 8,
+      orderItems: 9, netRevenueMinor: 288000, unallocatedRefundMinor: 0 },
+    rows: [
+      { dimensions: { sectionKey: 'home.hero', currency: 'HKD' }, metrics: { impressionSessions: 420,
+        clicks: 70, clickSessions: 66, addToCarts: 24, addSessions: 22, orderItems: 6, orderCount: 6,
+        clickRate: 15.71, addRate: 5.24, orderRate: 1.43, netRevenueMinor: 198000 } },
+      { dimensions: { sectionKey: 'home.products', currency: 'HKD' }, metrics: { impressionSessions: 12,
+        clicks: 3, clickSessions: 3, addToCarts: 1, addSessions: 1, orderItems: 0, orderCount: 0,
+        insufficientSample: 1 } },
+    ],
+    coverage: { sourceOrderCount: 8, lastDataAt: '2026-11-17T18:00:00.000Z', complete: true,
+      note: '区块埋点采集正常。' },
+  };
+  const queries: string[] = [];
+  await page.route('**/api/v1/admin/**', async route => {
+    const request = route.request(); const url = new URL(request.url()); const method = request.method();
+    if (url.pathname.endsWith('/auth/session')) {
+      return route.fulfill({ json: { data: { user: { id: 'staff-4' }, csrfToken: 'csrf-test-token',
+        permissionCodes: ['reports.view'] } } });
+    }
+    if (method === 'GET' && url.pathname.includes('/reports/placement')) {
+      queries.push(url.search);
+      return route.fulfill({ json: { data: placementResult, meta: { requestId: 'req' } } });
+    }
+    return route.fulfill({ json: { data: {}, meta: { requestId: 'req' } } });
+  });
+
+  await page.goto('/admin/reports');
+  await page.getByRole('combobox').first().selectOption('placement');
+  const sectionInput = page.getByRole('textbox', { name: '区块' });
+  const versionInput = page.getByRole('textbox', { name: '发布版本' });
+  await expect(versionInput).toBeVisible();
+  await sectionInput.fill('home.hero');
+  await versionInput.fill('rel-2026-11');
+  await page.getByRole('button', { name: '生成报表' }).click();
+
+  await expect(page.getByRole('heading', { name: '区块陈列效果', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'home.hero' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'home.products' })).toBeVisible();
+  await expect(page.getByText('HKD 1980.00').first()).toBeVisible();
+  await expect(page.getByText('是（曝光会话 < 20）').first()).toBeVisible();
+  await expect(page.getByText(/50% 可见持续 1 秒/)).toBeVisible();
+  expect(queries.at(-1)).toContain('groupBy=section');
+  expect(queries.at(-1)).toContain('sectionKey=home.hero');
+  expect(queries.at(-1)).toContain('publishVersionId=rel-2026-11');
+});

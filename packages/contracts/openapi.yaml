@@ -3208,7 +3208,10 @@ paths:
         - { name: locale, in: query, required: false, schema: { type: string }, description: Funnel only - IANA locale filter }
         - { name: deviceClass, in: query, required: false, schema: { type: string, enum: [desktop, mobile, tablet] }, description: Funnel only - device class filter }
         - { name: source, in: query, required: false, schema: { type: string }, description: Funnel only - UTM source filter }
-        - { name: groupBy, in: query, required: false, schema: { type: string, enum: [step, device, source, locale, day] }, description: Funnel only - grouping dimension }
+        - { name: pageKey, in: query, required: false, schema: { type: string, maxLength: 128 }, description: Placement only - page identifier filter }
+        - { name: sectionKey, in: query, required: false, schema: { type: string, maxLength: 64 }, description: Placement only - stable section key filter }
+        - { name: publishVersionId, in: query, required: false, schema: { type: string, maxLength: 64 }, description: Placement only - content release filter }
+        - { name: groupBy, in: query, required: false, schema: { type: string, enum: [step, device, source, locale, day, section, sectionId, page, version] }, description: Funnel or placement grouping dimension }
       responses:
         '200': { $ref: '#/components/responses/ReportSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3653,7 +3656,7 @@ components:
       in: path
       required: true
       description: Server-computed report key from the closed set in components.schemas.ReportKey.
-      schema: { type: string, pattern: '^[a-z][a-z0-9_]{1,63}$', enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members, funnel] }
+      schema: { type: string, pattern: '^[a-z][a-z0-9_]{1,63}$', enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members, funnel, placement] }
     Cursor:
       name: cursor
       in: query
@@ -6355,6 +6358,22 @@ components:
       properties:
         variantId: { type: string, format: uuid }
         quantity: { type: integer, minimum: 1, maximum: 99 }
+        attribution: { $ref: '#/components/schemas/CartItemAttribution' }
+    CartItemAttribution:
+      type: object
+      additionalProperties: false
+      description: Optional anonymous section attribution captured by the theme adapter; the server decides whether it counts.
+      required: [sectionId, sectionKey, publishVersionId, interactionId, consentState]
+      properties:
+        sectionId: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$' }
+        sectionKey: { type: string, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$' }
+        placementId: { type: [string, 'null'], maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$' }
+        publishVersionId: { type: string, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$' }
+        interactionId: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+        pageKey: { type: [string, 'null'], maxLength: 128 }
+        sessionId: { type: [string, 'null'], minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+        consentState: { type: string, enum: [granted, denied, unknown] }
+        occurredAt: { type: [string, 'null'], format: date-time }
     CartItemUpdateRequest:
       type: object
       additionalProperties: false
@@ -7543,7 +7562,7 @@ components:
       properties:
         eventId: { type: string, minLength: 16, maxLength: 128, description: Client-generated idempotency key (UUID) }
         sessionId: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$', description: Random anonymous session id; not derived from any PII }
-        eventName: { type: string, enum: [page_view, view_item, add_to_cart, begin_checkout] }
+        eventName: { type: string, enum: [page_view, view_item, add_to_cart, begin_checkout, section_impression, section_click] }
         occurredAt: { type: string, format: date-time }
         schemaVersion: { type: string, pattern: '^[0-9]+\.[0-9]+$' }
         consentState: { type: string, enum: [granted, denied, unknown] }
@@ -7554,6 +7573,12 @@ components:
         variantId: { type: string, maxLength: 128 }
         interactionId: { type: string, maxLength: 128 }
         source: { type: string, maxLength: 128, description: Anonymous UTM source bucket, never a full URL }
+        sectionId: { type: string, maxLength: 128, description: Section instance id on a page; stable within a publish version, no HTML or URL }
+        sectionKey: { type: string, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$', description: Stable logical section key shared across publish versions }
+        placementId: { type: string, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$', description: Optional placement slot inside a section (e.g. product card slot) }
+        publishVersionId: { type: string, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$', description: Content release marker the theme rendered; used for version filtering }
+        environment: { type: string, enum: [production, preview, staff, sandbox], description: Traffic environment; only production counts toward merchandising metrics }
+        trafficClass: { type: string, enum: [human, suspected_bot], description: Anonymous traffic class; suspected bots are excluded from metrics but kept for audit }
     AnalyticsEventBatch:
       type: object
       additionalProperties: false
@@ -7579,7 +7604,7 @@ components:
     ReportKey:
       type: string
       description: Server-computed aggregate report. PII is never included in report rows.
-      enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members, funnel]
+      enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members, funnel, placement]
     ReportRow:
       type: object
       additionalProperties: false
@@ -7588,8 +7613,8 @@ components:
         dimensions:
           type: object
           additionalProperties: { type: [string, 'null'] }
-          propertyNames: { enum: [day, status, method, sku, productName, code, tier, market, currency, locale, step, device, source] }
-          description: Dimension keys (status, method, sku, step, device, source, ...) with their bucket value. Only non-PII dimension keys are allowed; funnel uses step/device/source.
+          propertyNames: { enum: [day, status, method, sku, productName, code, tier, market, currency, locale, step, device, source, sectionKey, sectionId, page, version] }
+          description: Dimension keys (status, method, sku, step, device, source, sectionKey, ...) with their bucket value. Only non-PII dimension keys are allowed; funnel uses step/device/source, placement uses sectionKey/sectionId/page/version.
         metrics:
           type: object
           additionalProperties: { type: number }

@@ -11,9 +11,10 @@ const FROM = '2026-11-01T00:00:00.000Z';
 const TO = '2026-11-08T00:00:00.000Z';
 
 test('reports: report keys and formats are closed sets', () => {
-  assert.equal(REPORT_KEYS.length, 9);
-  assert.equal(new Set(REPORT_KEYS).size, 9);
+  assert.equal(REPORT_KEYS.length, 10);
+  assert.equal(new Set(REPORT_KEYS).size, 10);
   assert.ok(REPORT_KEYS.includes('funnel'));
+  assert.ok(REPORT_KEYS.includes('placement'));
   for (const key of REPORT_KEYS) assert.equal(assertReportKey(key), key);
   assert.throws(() => assertReportKey('drop_all_tables'), ReportRuleError);
   assert.throws(() => assertReportKey('sales'), ReportRuleError);

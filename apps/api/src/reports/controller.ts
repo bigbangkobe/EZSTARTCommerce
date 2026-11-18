@@ -32,6 +32,8 @@ export class ReportsController extends ManagementHttp {
     @Query('timezone') timezone: unknown, @Query('marketCode') marketCode: unknown,
     @Query('paymentMethodCode') paymentMethodCode: unknown, @Query('locale') locale: unknown,
     @Query('deviceClass') deviceClass: unknown, @Query('source') source: unknown, @Query('groupBy') groupBy: unknown,
+    @Query('pageKey') pageKey: unknown, @Query('sectionKey') sectionKey: unknown,
+    @Query('publishVersionId') publishVersionId: unknown,
     @Req() request: ApiRequest, @Res() response: ServerResponse) {
     const result = await this.reportsService().report(cookie(request, 'ez_admin_session'), reportKey, {
       from, to, timezone,
@@ -41,6 +43,9 @@ export class ReportsController extends ManagementHttp {
       ...(this.optional(deviceClass) ? { deviceClass: this.optional(deviceClass) } : {}),
       ...(this.optional(source) ? { source: this.optional(source) } : {}),
       ...(this.optional(groupBy) ? { groupBy: this.optional(groupBy) } : {}),
+      ...(this.optional(pageKey) ? { pageKey: this.optional(pageKey) } : {}),
+      ...(this.optional(sectionKey) ? { sectionKey: this.optional(sectionKey) } : {}),
+      ...(this.optional(publishVersionId) ? { publishVersionId: this.optional(publishVersionId) } : {}),
     });
     this.send(response, request, 200, result);
   }

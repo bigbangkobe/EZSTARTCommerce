@@ -7,6 +7,7 @@ import { assertQuoteActive, assertQuoteMath, assertQuoteVersion, CheckoutRuleErr
   normalizeAddress, normalizeContact, normalizeCouponCode, normalizePolicyAcceptances, orderRequestFingerprint,
   publicOrderNumber, quoteExpiry, QUOTE_TTL_SECONDS, type Address, type Contact } from '../../../../packages/domain/src/checkout.js';
 import { effectiveReviewStatus, normalizeMarketCode } from '../../../../packages/domain/src/store.js';
+import { pickAttribution } from '../../../../packages/domain/src/placement.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import { resolveMemberSession } from '../members/session.js';
 import type { PaymentsService } from '../payments/service.js';
@@ -266,6 +267,27 @@ export class CheckoutService {
     await tx.inventoryReservation.create({ data: { orderId, variantId: line.variantId, quantity: line.quantity, expiresAt } });
   }
 
+  /**
+   * 把购物袋里同变体的加购归因绑到本单订单行。
+   * 每个订单行只取下单前 24 小时内最后一次交互；绑定时带 `orderItemId: null` 条件，
+   * 并发重试也不会把同一行归因改到别的订单行上（orderItemId 唯一）。
+   */
+  private async attributePlacement(tx: Tx, cartId: string, orderId: string, placedAt: Date): Promise<void> {
+    const [touches, items] = await Promise.all([
+      tx.placementAttribution.findMany({ where: { cartId, orderItemId: null } }),
+      tx.orderItem.findMany({ where: { orderId }, select: { id: true, variantId: true } }),
+    ]);
+    if (!touches.length || !items.length) return;
+    for (const item of items) {
+      if (!item.variantId) continue;
+      const picked = pickAttribution(touches.filter(touch => touch.variantId === item.variantId)
+        .map(touch => ({ id: touch.id, variantId: touch.variantId, occurredAt: touch.addedAt })), placedAt);
+      if (!picked) continue;
+      await tx.placementAttribution.updateMany({ where: { id: picked.id, orderItemId: null },
+        data: { orderItemId: item.id, attributedAt: placedAt } });
+    }
+  }
+
   async placeOrder(token: string, idempotencyKey: string, body: OrderBody, ctx: RequestContext,
     memberToken: string | null = null) {
     if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 16 || idempotencyKey.length > 128) throw new AuthError(422, 'VALIDATION_ERROR');
@@ -350,6 +372,8 @@ export class CheckoutService {
             sku: line.sku, productName: line.productName, variantName: line.variantName, quantity: line.quantity,
             unitPriceMinor: line.unitPriceMinor, lineSubtotalMinor: line.lineSubtotalMinor,
             lineDiscountMinor: line.lineDiscountMinor, lineTotalMinor: line.lineTotalMinor })) });
+          // 订单行归因：只把下单前 24 小时内的最后一次区块交互绑到订单行；过期交互留台账不归因。
+          await this.attributePlacement(tx, cart.id, created.id, now);
           // 台账与订单同事务：下单即有一条待收流水，收款登记只推进状态，不补造记录。
           await this.payments.openLedger(tx, created, method.definition, method.row);
           for (const line of quote.lines) await this.reserve(tx, created.id, line, expiresAt);

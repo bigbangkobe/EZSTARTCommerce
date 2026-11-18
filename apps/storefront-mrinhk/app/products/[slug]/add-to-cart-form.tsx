@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { addToCart, formatMinor, notifyCartUpdated, type CartView } from '../../../lib/cart-client';
 import { trackAddToCart } from '../../../lib/analytics-client';
+import { attributionFor } from '../../../lib/placement-client';
 import type { ProductVariant } from '../../../lib/products';
 
 type Props = {
@@ -32,7 +33,14 @@ export default function AddToCartForm({ productName, variants }: Props) {
   async function submit() {
     setBusy(true);
     setError(null);
-    const result = await addToCart(selected.id, quantity);
+    // 24 小时内最后一次区块点击的匿名归因随加购提交；服务端复核窗口与同意状态后才落库。
+    const interaction = attributionFor(selected.id);
+    const result = await addToCart(selected.id, quantity, interaction ? {
+      sectionId: interaction.sectionId, sectionKey: interaction.sectionKey,
+      placementId: interaction.placementId, publishVersionId: interaction.publishVersionId,
+      interactionId: interaction.interactionId, pageKey: interaction.pageKey,
+      occurredAt: new Date(interaction.at).toISOString(),
+    } : null);
     setBusy(false);
     if (!result.ok) {
       setError(result.code === 'OUT_OF_STOCK' || result.status === 409

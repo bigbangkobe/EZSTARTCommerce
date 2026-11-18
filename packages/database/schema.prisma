@@ -621,6 +621,7 @@ model OrderItem {
   lineTotalMinor Int
   shipmentItems ShipmentItem[]
   afterSalesItems AfterSalesItem[]
+  placement PlacementAttribution?
   @@index([orderId])
 }
 
@@ -1430,8 +1431,46 @@ model AnalyticsEvent {
   variantId     String?
   interactionId String?
   source        String?
+  sectionId     String?
+  sectionKey    String?
+  placementId   String?
+  publishVersionId String?
+  environment   String    @default("production")
+  trafficClass  String    @default("human")
   createdAt     DateTime  @default(now()) @db.Timestamptz(3)
   @@index([sessionId, occurredAt])
   @@index([eventName, occurredAt])
+  @@index([sectionKey, occurredAt])
   @@index([occurredAt])
+}
+
+/// 区块加购/订单归因（M14 P1）。匿名交互关联，不含任何顾客标识。
+/// 一行代表一次「带区块归因的成功加购」；下单时若交互在 24h 窗口内，
+/// 回填 orderItemId 成为订单行归因（唯一，一个订单行只归因一个区块）。
+model PlacementAttribution {
+  id               String    @id @default(uuid()) @db.Uuid
+  cartId           String?   @db.Uuid
+  variantId        String    @db.Uuid
+  productId        String?   @db.Uuid
+  orderItemId      String?   @unique @db.Uuid
+  orderItem        OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  sectionId        String
+  sectionKey       String
+  placementId      String?
+  publishVersionId String
+  interactionId    String
+  pageKey          String?
+  sessionId        String?
+  locale           String?
+  deviceClass      String?
+  marketCode       String?
+  consentState     String    @default("granted")
+  ruleVersion      String
+  addedAt          DateTime  @db.Timestamptz(3)
+  attributedAt     DateTime? @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  @@index([addedAt])
+  @@index([sectionKey, addedAt])
+  @@index([cartId, variantId])
+  @@index([publishVersionId, addedAt])
 }

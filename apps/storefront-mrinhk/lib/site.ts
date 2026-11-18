@@ -15,6 +15,8 @@ export const site = {
   marketCode: 'HK',
   /** 结账界面语言（服务端已启用的 locale 之一） */
   checkoutLocale: 'zh-HK',
+  /** 内容发布版本标记：区块埋点随事件上报，用于按版本对比陈列效果（改版时更新） */
+  contentRelease: 'mrinhk-2026-11',
   /** 政策同意：上线前应替换为真实政策的最新版本号 */
   policies: [{ policyKey: 'terms-of-service', version: 'demo-v1', label: '我已閱讀並同意條款及細則' }],
 } as const;

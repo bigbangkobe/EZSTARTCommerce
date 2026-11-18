@@ -7,6 +7,10 @@ import {
   exportPreamble, csvDocument,
   type ReportKey, type ReportFilters, type ReportRowInput, ReportRuleError,
 } from '../../../../packages/domain/src/reports.js';
+import {
+  PLACEMENT_METRIC_VERSION, PLACEMENT_MIN_IMPRESSION_SESSIONS, allocateRefund, impressionKey,
+  netRevenueMinor, placementCoverage, placementRatio,
+} from '../../../../packages/domain/src/placement.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -53,6 +57,8 @@ interface Snapshot {
   tiers: Map<string, TierRow>;
   /** 漏斗报表专用快照：仅在 reportKey=funnel 时加载。 */
   funnel?: FunnelData;
+  /** 陈列报表专用快照：仅在 reportKey=placement 时加载。 */
+  placement?: PlacementData;
 }
 
 interface FunnelData {
@@ -63,6 +69,27 @@ interface FunnelData {
 }
 
 const EMPTY_FUNNEL: FunnelData = { events: [], sessions: [], orders: [] };
+
+/** 陈列报表数据源：曝光/点击来自事件，加购/订单/净实收来自服务端归因与订单行。 */
+interface PlacementData {
+  events: { sessionId: string; eventName: string; pageKey: string | null; sectionId: string | null;
+    sectionKey: string | null; publishVersionId: string | null }[];
+  pageViewSessions: number;
+  lastSectionEventAt: Date | null;
+  added: { id: string; sessionId: string | null; sectionId: string; sectionKey: string;
+    pageKey: string | null; publishVersionId: string; currency: string | null }[];
+  items: { orderItemId: string; orderId: string; lineTotalMinor: number; currency: string;
+    placedAt: Date; collected: boolean; cancelled: boolean;
+    sectionId: string; sectionKey: string; pageKey: string | null; publishVersionId: string;
+    sessionId: string | null }[];
+  refundByItem: Map<string, number>;
+  unallocatedRefundMinor: number;
+}
+
+const EMPTY_PLACEMENT: PlacementData = {
+  events: [], pageViewSessions: 0, lastSectionEventAt: null, added: [], items: [],
+  refundByItem: new Map(), unallocatedRefundMinor: 0,
+};
 
 /**
  * 交易经营报表（M14 第一批）：服务端权威数据的只读聚合。
@@ -94,6 +121,7 @@ export class ReportsService {
     const run = async (client: Tx) => {
       const snap = await this.load(client, from, to, filters);
       if (reportKey === 'funnel') snap.funnel = await this.loadFunnel(client, from, to, filters);
+      if (reportKey === 'placement') snap.placement = await this.loadPlacement(client, from, to, filters);
       return this.aggregate(reportKey, filters, from, to, snap);
     };
     // 导出调用方已经在外层事务里（withPermission），不能嵌套 $transaction。
@@ -215,6 +243,7 @@ export class ReportsService {
       case 'coupons': return this.coupons(filters, from, to, snap);
       case 'members': return this.members(filters, from, to, snap);
       case 'funnel': return this.funnel(filters, from, to, snap);
+      case 'placement': return this.placement(filters, from, to, snap);
     }
   }
 
@@ -485,8 +514,240 @@ export class ReportsService {
     };
   }
 
-  // ---- 导出任务（M14）--------------------------------------------------------
+  // ---- 陈列效果（M14 P1）--------------------------------------------------
 
+  /** 陈列归因的筛选：只认匿名区块/页面/发布版本与设备/语言/市场快照。 */
+  private attributionWhere(filters: ReportFilters): Prisma.PlacementAttributionWhereInput {
+    return {
+      ...(filters.sectionKey ? { sectionKey: filters.sectionKey } : {}),
+      ...(filters.pageKey ? { pageKey: filters.pageKey } : {}),
+      ...(filters.publishVersionId ? { publishVersionId: filters.publishVersionId } : {}),
+      ...(filters.locale ? { locale: filters.locale } : {}),
+      ...(filters.deviceClass ? { deviceClass: filters.deviceClass } : {}),
+      ...(filters.marketCode ? { marketCode: filters.marketCode } : {}),
+    };
+  }
+
+  /**
+   * 陈列数据源。曝光/点击来自第一方事件；加购来自服务端归因行（浏览器不能直接写）；
+   * 订单/净实收只认已归因的订单行，退款按售后明细分摊到订单行，无法关联的退款单独列示。
+   */
+  private async loadPlacement(tx: Tx, from: Date, to: Date, filters: ReportFilters): Promise<PlacementData> {
+    const eventFilter = {
+      ...(filters.sectionKey ? { sectionKey: filters.sectionKey } : {}),
+      ...(filters.pageKey ? { pageKey: filters.pageKey } : {}),
+      ...(filters.publishVersionId ? { publishVersionId: filters.publishVersionId } : {}),
+      ...(filters.locale ? { locale: filters.locale } : {}),
+      ...(filters.deviceClass ? { deviceClass: filters.deviceClass } : {}),
+      ...(filters.marketCode ? { marketCode: filters.marketCode } : {}),
+    };
+    const pageFilter = {
+      ...(filters.pageKey ? { pageKey: filters.pageKey } : {}),
+      ...(filters.locale ? { locale: filters.locale } : {}),
+      ...(filters.deviceClass ? { deviceClass: filters.deviceClass } : {}),
+      ...(filters.marketCode ? { marketCode: filters.marketCode } : {}),
+    };
+    const attributionFilter = this.attributionWhere(filters);
+    const [events, pageViews, lastSection, added, attributed] = await Promise.all([
+      tx.analyticsEvent.findMany({ where: {
+        occurredAt: { gte: from, lt: to }, consentState: 'granted', environment: 'production',
+        trafficClass: 'human', eventName: { in: ['section_impression', 'section_click'] },
+        sectionKey: { not: null }, ...eventFilter } }),
+      tx.analyticsEvent.findMany({ where: {
+        occurredAt: { gte: from, lt: to }, consentState: 'granted', environment: 'production',
+        trafficClass: 'human', eventName: 'page_view', ...pageFilter }, select: { sessionId: true } }),
+      tx.analyticsEvent.findFirst({ where: { eventName: { in: ['section_impression', 'section_click'] },
+        sectionKey: { not: null } }, orderBy: { occurredAt: 'desc' }, select: { occurredAt: true } }),
+      tx.placementAttribution.findMany({ where: { addedAt: { gte: from, lt: to }, ...attributionFilter } }),
+      tx.placementAttribution.findMany({ where: { orderItemId: { not: null }, ...attributionFilter,
+        orderItem: { is: { order: { is: { placedAt: { gte: from, lt: to } } } } } },
+        include: { orderItem: { include: { order: true } } } }),
+    ]);
+
+    const orderIds = [...new Set(attributed.map(row => row.orderItem!.orderId))];
+    const [payments, refunds, orderItems] = await Promise.all([
+      orderIds.length ? tx.payment.findMany({ where: { orderId: { in: orderIds },
+        status: { in: [...PAID_PAYMENT_STATUSES] } }, select: { orderId: true } }) : Promise.resolve([]),
+      orderIds.length ? tx.refund.findMany({ where: { orderId: { in: orderIds }, status: REFUNDED_STATUS } }) : Promise.resolve([]),
+      orderIds.length ? tx.orderItem.findMany({ where: { orderId: { in: orderIds } } }) : Promise.resolve([]),
+    ]);
+    const caseIds = refunds.map(refund => refund.caseId).filter((value): value is string => Boolean(value));
+    const caseItems = caseIds.length ? await tx.afterSalesItem.findMany({ where: { caseId: { in: caseIds } } }) : [];
+
+    const refundByItem = new Map<string, number>();
+    let unallocatedRefundMinor = 0;
+    for (const refund of refunds) {
+      const rows = caseItems.filter(item => item.caseId === refund.caseId).map(item => {
+        const line = orderItems.find(orderItem => orderItem.id === item.orderItemId);
+        const base = item.amountMinor ?? ((item.approvedQuantity ?? item.requestedQuantity) * (line?.unitPriceMinor ?? 0));
+        return { id: item.orderItemId, lineTotalMinor: base };
+      });
+      // 订单级/无售后明细的退款不按比例伪造区块归因，单独列示。
+      if (!rows.length) { unallocatedRefundMinor += refund.amountMinor; continue; }
+      for (const [id, amount] of allocateRefund(rows, refund.amountMinor)) {
+        refundByItem.set(id, (refundByItem.get(id) ?? 0) + amount);
+      }
+    }
+
+    const paidOrders = new Set(payments.map(payment => payment.orderId));
+    return {
+      events: events.map(event => ({ sessionId: event.sessionId, eventName: event.eventName,
+        pageKey: event.pageKey, sectionId: event.sectionId, sectionKey: event.sectionKey,
+        publishVersionId: event.publishVersionId })),
+      pageViewSessions: new Set(pageViews.map(event => event.sessionId)).size,
+      lastSectionEventAt: lastSection?.occurredAt ?? null,
+      added: added.map(row => ({ id: row.id, sessionId: row.sessionId, sectionId: row.sectionId,
+        sectionKey: row.sectionKey, pageKey: row.pageKey, publishVersionId: row.publishVersionId,
+        currency: null })),
+      items: attributed.map(row => ({
+        orderItemId: row.orderItem!.id, orderId: row.orderItem!.orderId,
+        lineTotalMinor: row.orderItem!.lineTotalMinor, currency: row.orderItem!.order.currency,
+        placedAt: row.orderItem!.order.placedAt, collected: paidOrders.has(row.orderItem!.orderId),
+        cancelled: row.orderItem!.order.orderStatus === CANCELLED_ORDER_STATUS,
+        sectionId: row.sectionId, sectionKey: row.sectionKey, pageKey: row.pageKey,
+        publishVersionId: row.publishVersionId, sessionId: row.sessionId,
+      })),
+      refundByItem, unallocatedRefundMinor,
+    };
+  }
+
+  /**
+   * 区块效果报表：按 sectionKey（默认）/ sectionId / page / version 聚合。
+   * 阶段转化率分母是该范围内去重后的曝光会话；曝光会话不足 20 时给 insufficientSample=1 且不输出比率。
+   * 金额按币种分行：同一区块出现多币种时，会话行不带金额，金额各自成行，绝不跨币种相加。
+   */
+  private placement(filters: ReportFilters, from: Date, to: Date, snap: Snapshot): ReportResult {
+    const data = snap.placement ?? EMPTY_PLACEMENT;
+    const groupBy = filters.groupBy && ['sectionId', 'page', 'version'].includes(filters.groupBy)
+      ? filters.groupBy : 'section';
+    const dimKey = groupBy === 'section' ? 'sectionKey' : groupBy === 'sectionId' ? 'sectionId'
+      : groupBy === 'page' ? 'page' : 'version';
+
+    const bucketOf = (row: { sectionKey: string | null; sectionId: string | null;
+      pageKey: string | null; publishVersionId: string | null }) => {
+      switch (groupBy) {
+        case 'sectionId': return row.sectionId ?? 'unknown';
+        case 'page': return row.pageKey ?? 'unknown';
+        case 'version': return row.publishVersionId ?? 'unknown';
+        default: return row.sectionKey ?? 'unknown';
+      }
+    };
+
+    interface Bucket {
+      impressions: Set<string>; clicks: number; clickSessions: Set<string>;
+      addToCarts: number; addSessions: Set<string>; orderItems: number;
+      orders: Set<string>; money: Map<string, { net: number; refunds: number }>;
+    }
+    const buckets = new Map<string, Bucket>();
+    const bucket = (key: string): Bucket => {
+      let row = buckets.get(key);
+      if (!row) { row = { impressions: new Set(), clicks: 0, clickSessions: new Set(), addToCarts: 0,
+        addSessions: new Set(), orderItems: 0, orders: new Set(), money: new Map() }; buckets.set(key, row); }
+      return row;
+    };
+
+    for (const event of data.events) {
+      if (!event.sectionKey) continue;
+      const row = bucket(bucketOf(event));
+      if (event.eventName === 'section_impression') row.impressions.add(impressionKey(event.sessionId, event.pageKey, event.sectionKey));
+      else { row.clicks += 1; row.clickSessions.add(event.sessionId + '\u0000' + (event.pageKey ?? '')); }
+    }
+    for (const added of data.added) {
+      const row = bucket(bucketOf(added));
+      row.addToCarts += 1;
+      if (added.sessionId) row.addSessions.add(added.sessionId);
+    }
+    for (const item of data.items) {
+      const row = bucket(bucketOf(item));
+      row.orderItems += 1;
+      row.orders.add(item.orderId);
+      // 只有已收款且未取消的订单进净实收；待收 COD 与取消订单不计。
+      if (!item.collected || item.cancelled) continue;
+      const refund = data.refundByItem.get(item.orderItemId) ?? 0;
+      const money = row.money.get(item.currency) ?? { net: 0, refunds: 0 };
+      money.net += netRevenueMinor(item.lineTotalMinor, refund);
+      money.refunds += Math.max(0, refund);
+      row.money.set(item.currency, money);
+    }
+
+    const rows: ReportRowInput[] = [];
+    for (const [key, row] of buckets) {
+      const impressionSessions = row.impressions.size;
+      const clickSessions = row.clickSessions.size;
+      const addSessions = row.addSessions.size;
+      const orderCount = row.orders.size;
+      const metrics: Record<string, number> = {
+        impressionSessions, clicks: row.clicks, clickSessions,
+        addToCarts: row.addToCarts, addSessions, orderItems: row.orderItems, orderCount,
+      };
+      if (impressionSessions < PLACEMENT_MIN_IMPRESSION_SESSIONS) metrics.insufficientSample = 1;
+      const clickRate = placementRatio(clickSessions, impressionSessions);
+      const addRate = placementRatio(addSessions, impressionSessions);
+      const orderRate = placementRatio(orderCount, impressionSessions);
+      if (clickRate !== null) metrics.clickRate = clickRate;
+      if (addRate !== null) metrics.addRate = addRate;
+      if (orderRate !== null) metrics.orderRate = orderRate;
+
+      const currencies = [...row.money.keys()].sort();
+      const single = currencies.length === 1 ? currencies[0] : null;
+      if (single) {
+        metrics.netRevenueMinor = row.money.get(single)!.net;
+        metrics.refundMinor = row.money.get(single)!.refunds;
+      }
+      rows.push({ dimensions: { [dimKey]: key, ...(currencies.length === 1 ? { currency: single } : {}) }, metrics });
+      if (currencies.length > 1) {
+        for (const currency of currencies) {
+          const money = row.money.get(currency)!;
+          rows.push({ dimensions: { [dimKey]: key, currency },
+            metrics: { netRevenueMinor: money.net, refundMinor: money.refunds } });
+        }
+      }
+    }
+
+    const totals: Record<string, number> = {
+      sections: buckets.size,
+      impressionSessions: data.events.filter(e => e.eventName === 'section_impression')
+        .reduce((set, e) => set.add(impressionKey(e.sessionId, e.pageKey, e.sectionKey ?? '')), new Set<string>()).size,
+      clicks: data.events.filter(e => e.eventName === 'section_click').length,
+      addToCarts: data.added.length,
+      orderItems: data.items.length,
+      orderCount: new Set(data.items.map(item => item.orderId)).size,
+      unallocatedRefundMinor: data.unallocatedRefundMinor,
+    };
+    // 覆盖率判定直接用局部值，避免 Record 索引在严格模式下退化成 number | undefined。
+    const impressionTotal = totals['impressionSessions'] ?? 0;
+    const orderTotal = totals['orderCount'] ?? 0;
+    const currencies = [...new Set(data.items.map(item => item.currency))].sort();
+    if (currencies.length === 1) {
+      totals.netRevenueMinor = sumMinor(data.items.filter(item => item.collected && !item.cancelled)
+        .map(item => netRevenueMinor(item.lineTotalMinor, data.refundByItem.get(item.orderItemId) ?? 0)));
+    }
+
+    const coverageStatus = placementCoverage({
+      pageViewSessions: data.pageViewSessions,
+      impressionSessions: impressionTotal,
+      sectionEvents: data.events.length,
+      lastSectionEventAt: data.lastSectionEventAt,
+      to, now: new Date(),
+    });
+    return {
+      reportKey: 'placement', metricDefinitionVersion: PLACEMENT_METRIC_VERSION,
+      generatedAt: new Date().toISOString(), from: from.toISOString(), to: to.toISOString(),
+      timezone: filters.timezone, currencies,
+      filters: { ...filters }, totals, rows,
+      coverage: {
+        sourceOrderCount: orderTotal,
+        lastDataAt: data.lastSectionEventAt?.toISOString() ?? null,
+        complete: coverageStatus.status === 'ok',
+        note: `${coverageStatus.note} 曝光按「区块 50% 可见且持续 1 秒」由主题上报并已去重；` +
+          `加购为服务端成功写入购物袋的归因行；订单与净实收只认下单前 24 小时内最后一次区块交互，` +
+          `退款按售后明细分摊，未关联明细的退款单列 ${data.unallocatedRefundMinor} 分。` +
+          `曝光会话少于 ${PLACEMENT_MIN_IMPRESSION_SESSIONS} 时不给阶段转化率。`,
+      },
+    };
+  }
+
+  // ---- 导出任务（M14）--------------------------------------------------------
   /** 把行转成扁平 CSV：前导注释带筛选/时区/币种/口径版本/覆盖状态，随后 totals 与 rows。 */
   private toCsv(result: ReportResult, includePii: boolean): string {
     const lines: (string | number | boolean | null)[][] = exportPreamble(

@@ -113,10 +113,25 @@ export async function api<T>(method: string, path: string, body?: unknown,
   return { ok: true, data: (json?.data ?? (text === '' ? null : json)) as T };
 }
 
-export async function addToCart(variantId: string, quantity: number): Promise<ApiOutcome<CartView>> {
+/** 区块归因（可选）：只带匿名标识，服务端在同意门槛内决定是否落库。 */
+export type CartAttribution = {
+  sectionId: string;
+  sectionKey: string;
+  placementId: string | null;
+  publishVersionId: string;
+  interactionId: string;
+  pageKey: string | null;
+  occurredAt: string;
+};
+
+export async function addToCart(variantId: string, quantity: number,
+  attribution: CartAttribution | null = null): Promise<ApiOutcome<CartView>> {
   const ensured = await ensureCart();
   if (!ensured.ok) return ensured;
-  return api<CartView>('POST', '/storefront/cart/items', { variantId, quantity }, { write: true });
+  return api<CartView>('POST', '/storefront/cart/items', {
+    variantId, quantity,
+    ...(attribution ? { attribution: { ...attribution, consentState: 'granted' } } : {}),
+  }, { write: true });
 }
 
 export async function updateCartItem(itemId: string, quantity: number): Promise<ApiOutcome<CartView>> {

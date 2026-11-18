@@ -3743,6 +3743,21 @@ export interface components {
             /** Format: uuid */
             variantId: string;
             quantity: number;
+            attribution?: components["schemas"]["CartItemAttribution"];
+        };
+        /** @description Optional anonymous section attribution captured by the theme adapter; the server decides whether it counts. */
+        CartItemAttribution: {
+            sectionId: string;
+            sectionKey: string;
+            placementId?: string | null;
+            publishVersionId: string;
+            interactionId: string;
+            pageKey?: string | null;
+            sessionId?: string | null;
+            /** @enum {string} */
+            consentState: "granted" | "denied" | "unknown";
+            /** Format: date-time */
+            occurredAt?: string | null;
         };
         CartItemUpdateRequest: {
             quantity: number;
@@ -4731,7 +4746,7 @@ export interface components {
             /** @description Random anonymous session id; not derived from any PII */
             sessionId: string;
             /** @enum {string} */
-            eventName: "page_view" | "view_item" | "add_to_cart" | "begin_checkout";
+            eventName: "page_view" | "view_item" | "add_to_cart" | "begin_checkout" | "section_impression" | "section_click";
             /** Format: date-time */
             occurredAt: string;
             schemaVersion: string;
@@ -4746,6 +4761,24 @@ export interface components {
             interactionId?: string;
             /** @description Anonymous UTM source bucket */
             source?: string;
+            /** @description Section instance id on a page; stable within a publish version */
+            sectionId?: string;
+            /** @description Stable logical section key shared across publish versions */
+            sectionKey?: string;
+            /** @description Optional placement slot inside a section (e.g. product card slot) */
+            placementId?: string;
+            /** @description Content release marker the theme rendered; used for version filtering */
+            publishVersionId?: string;
+            /**
+             * @description Traffic environment; only production counts toward merchandising metrics
+             * @enum {string}
+             */
+            environment?: "production" | "preview" | "staff" | "sandbox";
+            /**
+             * @description Anonymous traffic class; suspected bots are excluded from metrics but kept for audit
+             * @enum {string}
+             */
+            trafficClass?: "human" | "suspected_bot";
         };
         AnalyticsEventBatch: {
             events: components["schemas"]["AnalyticsEventInput"][];
@@ -4770,9 +4803,9 @@ export interface components {
          * @description Server-computed aggregate report. PII is never included in report rows.
          * @enum {string}
          */
-        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members" | "funnel";
+        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members" | "funnel" | "placement";
         ReportRow: {
-            /** @description Dimension keys (status, method, sku, step, device, source, ...) with their bucket value. Only non-PII dimension keys are allowed; funnel uses step/device/source. */
+            /** @description Dimension keys (status, method, sku, step, device, source, sectionKey, ...) with their bucket value. Only non-PII dimension keys are allowed; funnel uses step/device/source, placement uses sectionKey/sectionId/page/version. */
             dimensions: {
                 [key: string]: string | null;
             };
@@ -5978,7 +6011,7 @@ export interface components {
         /** @description v1=HMAC-SHA256(secret, timestamp + "." + canonicalJson(body)), lowercase hex. */
         CarrierSignature: string;
         /** @description Server-computed report key from the closed set in components.schemas.ReportKey. */
-        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members" | "funnel";
+        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members" | "funnel" | "placement";
         Cursor: string;
         Limit: number;
         SearchQuery: string;
@@ -9634,8 +9667,14 @@ export interface operations {
                 deviceClass?: "desktop" | "mobile" | "tablet";
                 /** @description Funnel only - UTM source filter */
                 source?: string;
-                /** @description Funnel only - grouping dimension */
-                groupBy?: "step" | "device" | "source" | "locale" | "day";
+                /** @description Placement only - page identifier filter */
+                pageKey?: string;
+                /** @description Placement only - stable section key filter */
+                sectionKey?: string;
+                /** @description Placement only - content release filter */
+                publishVersionId?: string;
+                /** @description Funnel or placement grouping dimension */
+                groupBy?: "step" | "device" | "source" | "locale" | "day" | "section" | "sectionId" | "page" | "version";
             };
             header?: never;
             path: {

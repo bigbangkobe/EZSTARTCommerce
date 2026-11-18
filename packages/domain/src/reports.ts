@@ -32,7 +32,7 @@ export const REPORT_MAX_RANGE_DAYS = 366;
 
 export const REPORT_KEYS = [
   'sales_summary', 'orders_by_status', 'orders_by_payment', 'orders_by_method',
-  'product_sales', 'inventory', 'coupons', 'members', 'funnel',
+  'product_sales', 'inventory', 'coupons', 'members', 'funnel', 'placement',
 ] as const;
 export type ReportKey = typeof REPORT_KEYS[number];
 
@@ -57,10 +57,16 @@ export interface ReportFilters {
   source: string | null;
   /** 漏斗分组维度：step（默认，五步汇总）/ device / source / locale / day。 */
   groupBy: string | null;
+  /** 陈列报表专用筛选（其余报表忽略）：页面、稳定区块键、发布版本。 */
+  pageKey: string | null;
+  sectionKey: string | null;
+  publishVersionId: string | null;
 }
 
 /** 漏斗允许的分组维度闭集：不含任何 PII 维度键。 */
 export const FUNNEL_GROUP_BY = ['step', 'device', 'source', 'locale', 'day'] as const;
+/** 陈列报表分组维度：区块（默认）/ 区块实例 / 页面 / 发布版本。 */
+export const PLACEMENT_GROUP_BY = ['section', 'sectionId', 'page', 'version'] as const;
 
 export interface ReportRowInput {
   dimensions: Record<string, string | null>;
@@ -103,7 +109,10 @@ export function normalizeReportFilters(raw: Record<string, unknown>): { filters:
   const deviceClass = optionalCode(raw['deviceClass'], 'deviceClass');
   if (deviceClass && !['desktop', 'mobile', 'tablet'].includes(deviceClass)) fail('deviceClass');
   const groupByRaw = optionalCode(raw['groupBy'], 'groupBy');
-  if (groupByRaw && !FUNNEL_GROUP_BY.includes(groupByRaw as never)) fail('groupBy');
+  if (groupByRaw && !FUNNEL_GROUP_BY.includes(groupByRaw as never) && !PLACEMENT_GROUP_BY.includes(groupByRaw as never)) fail('groupBy');
+  const sectionKey = raw['sectionKey'] === undefined || raw['sectionKey'] === null || raw['sectionKey'] === ''
+    ? null : optionalText(raw['sectionKey'], 'sectionKey', 64);
+  if (sectionKey && !/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/.test(sectionKey)) fail('sectionKey');
   return {
     from, to,
     filters: {
@@ -114,8 +123,19 @@ export function normalizeReportFilters(raw: Record<string, unknown>): { filters:
       deviceClass,
       source: optionalCode(raw['source'], 'source'),
       groupBy: groupByRaw,
+      pageKey: optionalText(raw['pageKey'], 'pageKey', 128),
+      sectionKey,
+      publishVersionId: optionalText(raw['publishVersionId'], 'publishVersionId', 64),
     },
   };
+}
+
+/** 报表通用短文本：允许点号/冒号（页面键、版本标识），但不接受空白、URL 与联系方式字符。 */
+function optionalText(value: unknown, field: string, max: number): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || value.length > max) fail(field);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(value)) fail(field);
+  return value;
 }
 
 export function assertReportKey(value: unknown): ReportKey {

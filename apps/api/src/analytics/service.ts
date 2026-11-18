@@ -73,7 +73,9 @@ export class AnalyticsService {
           occurredAt, schemaVersion: event.schemaVersion, consentState: event.consentState,
           pageKey: event.pageKey, locale: event.locale, deviceClass: event.deviceClass,
           marketCode: event.marketCode, variantId: event.variantId, interactionId: event.interactionId,
-          source: event.source,
+          source: event.source, sectionId: event.sectionId, sectionKey: event.sectionKey,
+          placementId: event.placementId, publishVersionId: event.publishVersionId,
+          environment: event.environment, trafficClass: event.trafficClass,
         } });
         accepted.push(event.eventId);
       }

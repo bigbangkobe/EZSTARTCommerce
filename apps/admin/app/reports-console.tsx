@@ -23,6 +23,7 @@ const REPORT_KEYS = [
   ['coupons', '优惠券效果'],
   ['members', '会员概览'],
   ['funnel', '访问漏斗'],
+  ['placement', '区块陈列效果'],
 ] as const;
 
 const METRIC_LABEL: Record<string, string> = {
@@ -34,13 +35,21 @@ const METRIC_LABEL: Record<string, string> = {
   lowStockLevel: '低库存线', variantCount: '规格数', lowStockCount: '低库存数', outOfStockCount: '缺货数',
   registeredMembers: '新增会员', activeMembers: '活跃会员', pointsIssued: '发放积分',
   pointsRedeemed: '兑换积分', lifetimeSpendMinor: '累计消费', activeMembersCount: '活跃会员',
+  sessions: '会话数', sessionsPurchased: '下单会话', eventCount: '事件数', stepRate: '环节转化(%)', overallRate: '整体转化(%)',
+  sections: '区块数', impressionSessions: '曝光会话', clicks: '点击次数', clickSessions: '点击会话',
+  addToCarts: '加购次数', addSessions: '加购会话', orderItems: '归因订单行',
+  netRevenueMinor: '归因净实收', refundMinor: '退款分摊', unallocatedRefundMinor: '未分摊退款',
+  clickRate: '点击率(%)', addRate: '加购率(%)', orderRate: '下单率(%)', insufficientSample: '样本不足',
 };
 const DIM_LABEL: Record<string, string> = {
   day: '日期', status: '状态', method: '付款方式', sku: 'SKU', productName: '商品',
   code: '券码', tier: '会员等级', market: '市场', currency: '币种', locale: '语言',
+  step: '步骤', device: '设备', source: '来源',
+  sectionKey: '区块', sectionId: '区块实例', page: '页面', version: '发布版本',
 };
 const AMOUNT_KEYS = new Set(['placedMinor', 'discountMinor', 'shippingMinor', 'collectedMinor', 'codCollectedMinor',
-  'refundedMinor', 'netSalesMinor', 'cancelledMinor', 'lifetimeSpendMinor']);
+  'refundedMinor', 'netSalesMinor', 'cancelledMinor', 'lifetimeSpendMinor',
+  'netRevenueMinor', 'refundMinor', 'unallocatedRefundMinor']);
 
 function defaultRange(days: number) {
   const to = new Date();
@@ -55,7 +64,9 @@ function toUtc(local: string) {
 }
 function fmtValue(key: string, value: number, currency: string | null) {
   if (AMOUNT_KEYS.has(key) && currency) return `${currency} ${(value / 100).toFixed(2)}`;
-  if (key === 'usageRate') return `${value}%`;
+  if (AMOUNT_KEYS.has(key)) return `${value} 分`;
+  if (key === 'insufficientSample') return value ? '是（曝光会话 < 20）' : '否';
+  if (key === 'usageRate' || key.endsWith('Rate')) return `${value}%`;
   return String(value);
 }
 
@@ -71,6 +82,10 @@ export function ReportsConsole() {
   const [paymentMethodCode, setPaymentMethodCode] = useState('');
   const [deviceClass, setDeviceClass] = useState('');
   const [source, setSource] = useState('');
+  const [locale, setLocale] = useState('');
+  const [pageKey, setPageKey] = useState('');
+  const [sectionKey, setSectionKey] = useState('');
+  const [publishVersionId, setPublishVersionId] = useState('');
   const [groupBy, setGroupBy] = useState('step');
   const [result, setResult] = useState<ReportResult | null>(null);
   const [exports, setExports] = useState<ReportExport[]>([]);
@@ -116,6 +131,15 @@ export function ReportsConsole() {
     if (reportKey === 'funnel') {
       if (deviceClass) params.set('deviceClass', deviceClass);
       if (source) params.set('source', source);
+      if (locale) params.set('locale', locale);
+      if (groupBy) params.set('groupBy', groupBy);
+    }
+    if (reportKey === 'placement') {
+      if (deviceClass) params.set('deviceClass', deviceClass);
+      if (locale) params.set('locale', locale);
+      if (pageKey) params.set('pageKey', pageKey);
+      if (sectionKey) params.set('sectionKey', sectionKey);
+      if (publishVersionId) params.set('publishVersionId', publishVersionId);
       if (groupBy) params.set('groupBy', groupBy);
     }
     return params.toString();
@@ -150,6 +174,15 @@ export function ReportsConsole() {
         ...(reportKey === 'funnel' ? {
           ...(deviceClass ? { deviceClass } : {}),
           ...(source ? { source } : {}),
+          ...(locale ? { locale } : {}),
+          ...(groupBy ? { groupBy } : {}),
+        } : {}),
+        ...(reportKey === 'placement' ? {
+          ...(deviceClass ? { deviceClass } : {}),
+          ...(locale ? { locale } : {}),
+          ...(pageKey ? { pageKey } : {}),
+          ...(sectionKey ? { sectionKey } : {}),
+          ...(publishVersionId ? { publishVersionId } : {}),
           ...(groupBy ? { groupBy } : {}),
         } : {}),
         format: 'csv',
@@ -177,9 +210,14 @@ export function ReportsConsole() {
     {error && <p className="error" role="alert">{error}</p>}{notice && <p className="notice" role="status">{notice}</p>}
     <p><small>报表以订单、支付、退款与积分为准（服务端权威数据），不含顾客资料。金额按币种分别展示，不跨币种相加。</small></p>
     <p><small>访问漏斗依赖店铺「访问漏斗采集」开关与访客明示同意；成功下单由服务端订单归因，阶段转化率在样本不足 20 时不展示。</small></p>
+    <p><small>区块陈列效果只统计正式环境、已同意且非可疑机器人的事件；曝光由主题按「50% 可见持续 1 秒」上报并去重，加购为服务端写入，订单与净实收取下单前 24 小时内最后一次区块交互。</small></p>
 
     <form onSubmit={(event: FormEvent) => { event.preventDefault(); void load(); }}>
-      <label>报表<select value={reportKey} onChange={event => setReportKey(event.target.value)}>
+      <label>报表<select value={reportKey} onChange={event => {
+        const next = event.target.value;
+        setReportKey(next);
+        setGroupBy(next === 'placement' ? 'section' : 'step');
+      }}>
         {REPORT_KEYS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
       </select></label>
       <label>开始<input type="datetime-local" value={from} onChange={event => setFrom(event.target.value)} /></label>
@@ -187,15 +225,27 @@ export function ReportsConsole() {
       <label>时区<input value={timezone} onChange={event => setTimezone(event.target.value)} maxLength={64} /></label>
       <label>市场<input value={marketCode} onChange={event => setMarketCode(event.target.value)} maxLength={16} placeholder="可选，如 HK" /></label>
       <label>付款方式<input value={paymentMethodCode} onChange={event => setPaymentMethodCode(event.target.value)} maxLength={32} placeholder="可选，如 cod" /></label>
-      {reportKey === 'funnel' && <>
+      {(reportKey === 'funnel' || reportKey === 'placement') && <>
         <label>设备<select value={deviceClass} onChange={event => setDeviceClass(event.target.value)}>
           <option value="">全部</option><option value="desktop">桌面</option>
           <option value="mobile">手机</option><option value="tablet">平板</option>
         </select></label>
+        <label>语言<input value={locale} onChange={event => setLocale(event.target.value)} maxLength={32} placeholder="可选，如 zh-HK" /></label>
+      </>}
+      {reportKey === 'funnel' && <>
         <label>来源<input value={source} onChange={event => setSource(event.target.value)} maxLength={64} placeholder="可选，UTM 来源" /></label>
         <label>分组<select value={groupBy} onChange={event => setGroupBy(event.target.value)}>
           <option value="step">按步骤</option><option value="device">按设备</option>
           <option value="source">按来源</option><option value="locale">按语言</option><option value="day">按日期</option>
+        </select></label>
+      </>}
+      {reportKey === 'placement' && <>
+        <label>页面<input value={pageKey} onChange={event => setPageKey(event.target.value)} maxLength={128} placeholder="可选，如 home" /></label>
+        <label>区块<input value={sectionKey} onChange={event => setSectionKey(event.target.value)} maxLength={64} placeholder="可选，如 home.hero" /></label>
+        <label>发布版本<input value={publishVersionId} onChange={event => setPublishVersionId(event.target.value)} maxLength={64} placeholder="可选，如 rel-2026-11" /></label>
+        <label>分组<select value={groupBy} onChange={event => setGroupBy(event.target.value)}>
+          <option value="section">按区块</option><option value="sectionId">按区块实例</option>
+          <option value="page">按页面</option><option value="version">按发布版本</option>
         </select></label>
       </>}
       <button disabled={busy} type="submit">生成报表</button>

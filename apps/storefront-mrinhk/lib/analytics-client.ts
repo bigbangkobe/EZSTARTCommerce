@@ -7,7 +7,8 @@
 // - 不上报 purchase：成交由服务端订单权威归因，浏览器事件不进经营指标。
 // - fire-and-forget：上报失败绝不影响加购/结账主流程；事件用随机 eventId 幂等。
 
-export type AnalyticsEventName = 'page_view' | 'view_item' | 'add_to_cart' | 'begin_checkout';
+export type AnalyticsEventName = 'page_view' | 'view_item' | 'add_to_cart' | 'begin_checkout'
+  | 'section_impression' | 'section_click';
 export type DeviceClass = 'desktop' | 'mobile' | 'tablet';
 
 const SESSION_KEY = 'ez_analytics_session_id';
@@ -23,6 +24,10 @@ type EventInput = {
   variantId?: string;
   interactionId?: string;
   source?: string;
+  sectionId?: string;
+  sectionKey?: string;
+  placementId?: string;
+  publishVersionId?: string;
 };
 
 let enabledCache: boolean | null = null;
@@ -99,6 +104,10 @@ export async function track(input: EventInput): Promise<void> {
       ...(input.variantId ? { variantId: input.variantId } : {}),
       ...(input.interactionId ? { interactionId: input.interactionId } : {}),
       ...(input.source ? { source: input.source } : {}),
+      ...(input.sectionId ? { sectionId: input.sectionId } : {}),
+      ...(input.sectionKey ? { sectionKey: input.sectionKey } : {}),
+      ...(input.placementId ? { placementId: input.placementId } : {}),
+      ...(input.publishVersionId ? { publishVersionId: input.publishVersionId } : {}),
     };
     // keepalive 保证页面跳转时事件仍能送达；不 await 结果，绝不阻塞主流程。
     void fetch('/api/v1/storefront/analytics/events', {
@@ -130,4 +139,19 @@ export function trackAddToCart(variantId: string, pageKey: string, locale?: stri
 /** 开始结账：在创建报价（createQuote）之前调用。 */
 export function trackBeginCheckout(pageKey: string, locale?: string, marketCode?: string): void {
   void track({ eventName: 'begin_checkout', pageKey, ...(locale ? { locale } : {}), ...(marketCode ? { marketCode } : {}) });
+}
+
+/**
+ * 区块曝光：主题按「区块至少 50% 进入可视区域并持续 1 秒」上报。
+ * 是否重复由调用方按会话+页面+区块去重；服务端再按 sessionId 去重一次。
+ */
+export function trackSectionImpression(input: { pageKey: string; sectionId: string; sectionKey: string;
+  publishVersionId: string; placementId?: string; locale?: string }): void {
+  void track({ eventName: 'section_impression', ...input });
+}
+
+/** 区块点击：带上被点击商品（若有）与本次交互的随机 interactionId，供 24 小时归因。 */
+export function trackSectionClick(input: { pageKey: string; sectionId: string; sectionKey: string;
+  publishVersionId: string; placementId?: string; locale?: string; variantId?: string; interactionId: string }): void {
+  void track({ eventName: 'section_click', ...input });
 }

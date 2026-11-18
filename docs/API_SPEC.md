@@ -398,7 +398,9 @@ Webhook 原始 body 由 adapter 验签；进入内部标准事件前，规范字
 | 会员积分调整 | `memberId`、`deltaPoints`（非零整数）、`reasonCode`、`reason`、`Idempotency-Key` | 正负方向受权限/限额约束；只新增 PointLedger，不改历史流水 |
 | 隐私请求 | `requestType`、`customerRef`（可空）、`scope`、`sourceChannel`、`dueAt`、`verificationMethod` | 状态由服务端状态机驱动；导出/删除必须通过 identity verify、授权审批及处理 action |
 | 通知模板 | `eventType`、`purpose`（`transactional|marketing`）、`locale`、`channel`、`subject`、`body`、`enabled`、`version` | 营销发送另校验 consent；交易模板不能携带营销用途 |
-| 报表查询 | `from`、`to`、`timezone`、`market`、`paymentMethod`、`currency`、分页/维度参数 | from/to 为含起不含止；单店只汇总基础币种；响应带 `metricDefinitionVersion`、`generatedAt`、filters 和 totals |
+| 报表查询 | `from`、`to`、`timezone`、`market`、`paymentMethod`、`currency`、分页/维度参数；`placement` 另接受 `pageKey`、`sectionKey`、`publishVersionId`、`groupBy`（`section/sectionId/page/version`） | from/to 为含起不含止；单店只汇总基础币种；响应带 `metricDefinitionVersion`、`generatedAt`、filters 和 totals |
+| 区块埋点事件 | `eventId`、`sessionId`、`eventName`（`section_impression/section_click`）、`sectionId`、`sectionKey`、`placementId`、`publishVersionId`、`environment`（`production/preview/staff/sandbox`）、`trafficClass`（`human/suspected_bot`）、`variantId`、`interactionId` | 只收匿名标识（拒邮箱/电话/URL/客户号）；曝光由主题按「50% 可见持续 1 秒」上报，服务端按会话去重；预览/员工/机器人事件保留但不进指标；`purchase` 仍不可由浏览器上报 |
+| 加购归因 | `CartItemWriteRequest.attribution`（`sectionId`、`sectionKey`、`placementId`、`publishVersionId`、`interactionId`、`pageKey`、`sessionId`、`consentState`、`occurredAt`） | 仅 `consentState=granted` 落归因行；服务端写入，浏览器不能直接写；下单时只把 24 小时内最后一次交互绑到订单行，过期交互留台账不归因 |
 
 ### 3.6.8 OTP、通知和通用后台列表
 

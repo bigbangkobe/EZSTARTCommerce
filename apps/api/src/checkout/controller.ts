@@ -69,7 +69,8 @@ export class CartController extends ManagementHttp {
   }
 
   @Post('items')
-  async add(@Body() body: { variantId: string; quantity: number }, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+  async add(@Body() body: { variantId: string; quantity: number; attribution?: unknown },
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
     assertCsrf(request);
     this.schemas.assert('CartItemWriteRequest', body);
     this.send(response, request, 200, await this.cartService().addItem(cartToken(request), body, this.context(request)));

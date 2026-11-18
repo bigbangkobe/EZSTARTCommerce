@@ -14,17 +14,30 @@
  * 5. 所有字段都是页面标识/ anonymous 桶，不含联系方式、完整 URL 或支付凭证。
  */
 
+import {
+  assertEnvironment, assertPlacementId, assertPublishVersionId, assertSectionId, assertSectionKey,
+  assertTrafficClass, PlacementRuleError,
+} from './placement.js';
+
 export class AnalyticsRuleError extends Error {
   constructor(readonly field: string, readonly code = 'VALIDATION_ERROR') { super(field); }
 }
-
 function fail(field: string, code = 'VALIDATION_ERROR'): never { throw new AnalyticsRuleError(field, code); }
+
+/** 区块字段校验委托给 M14 P1 规则层，错误统一转成 ANALYTICS 的 422 字段错误。 */
+function sectionField<T>(fn: () => T): T {
+  try { return fn(); } catch (error) {
+    if (error instanceof PlacementRuleError) return fail(error.field, error.code);
+    throw error;
+  }
+}
 
 /** 采集事件 schema 版本：字段口径或事件语义变了必须升版本。 */
 export const ANALYTICS_SCHEMA_VERSION = '1.0';
 
 /** 浏览器可上报的事件闭集。purchase 不在其中——由服务端订单权威生成。 */
-export const ANALYTICS_EVENT_NAMES = ['page_view', 'view_item', 'add_to_cart', 'begin_checkout'] as const;
+export const ANALYTICS_EVENT_NAMES = ['page_view', 'view_item', 'add_to_cart', 'begin_checkout',
+  'section_impression', 'section_click'] as const;
 export type AnalyticsEventName = typeof ANALYTICS_EVENT_NAMES[number];
 export const ANALYTICS_EVENT_NAME_SET = new Set<string>(ANALYTICS_EVENT_NAMES);
 
@@ -51,6 +64,13 @@ export interface AnalyticsEventInput {
   variantId: string | null;
   interactionId: string | null;
   source: string | null;
+  /** 区块事件专用：区块实例/稳定键/展示位/发布版本，全部是匿名标识。 */
+  sectionId: string | null;
+  sectionKey: string | null;
+  placementId: string | null;
+  publishVersionId: string | null;
+  environment: 'production' | 'preview' | 'staff' | 'sandbox';
+  trafficClass: 'human' | 'suspected_bot';
 }
 
 function optionalText(value: unknown, field: string, max = 128): string | null {
@@ -132,6 +152,13 @@ export function normalizeAnalyticsEvent(raw: Record<string, unknown>): Analytics
   const occurredAt = assertInstant(raw['occurredAt']);
   const schemaVersion = assertSchemaVersion(raw['schemaVersion']);
   const consentState = assertConsentState(raw['consentState']);
+  // 区块事件必须带稳定区块键与发布版本：没有这两项无法跨版本比较，也不能进陈列指标。
+  const sectionEvent = eventName === 'section_impression' || eventName === 'section_click';
+  const sectionId = raw['sectionId'] === undefined || raw['sectionId'] === null || raw['sectionId'] === ''
+    ? null : sectionField(() => assertSectionId(raw['sectionId']));
+  const sectionKey = raw['sectionKey'] === undefined || raw['sectionKey'] === null || raw['sectionKey'] === ''
+    ? null : sectionField(() => assertSectionKey(raw['sectionKey']));
+  if (sectionEvent && (!sectionId || !sectionKey)) fail(sectionId ? 'sectionKey' : 'sectionId');
   return {
     eventId, sessionId, eventName, occurredAt: occurredAt.toISOString(), schemaVersion, consentState,
     pageKey: optionalText(raw['pageKey'], 'pageKey'),
@@ -141,6 +168,12 @@ export function normalizeAnalyticsEvent(raw: Record<string, unknown>): Analytics
     variantId: optionalText(raw['variantId'], 'variantId'),
     interactionId: optionalText(raw['interactionId'], 'interactionId'),
     source: assertSource(raw['source']),
+    sectionId, sectionKey,
+    placementId: sectionField(() => assertPlacementId(raw['placementId'])),
+    publishVersionId: sectionField(() => (raw['publishVersionId'] === undefined || raw['publishVersionId'] === null
+      || raw['publishVersionId'] === '' ? null : assertPublishVersionId(raw['publishVersionId']))),
+    environment: raw['environment'] === undefined ? 'production' : sectionField(() => assertEnvironment(raw['environment'])),
+    trafficClass: raw['trafficClass'] === undefined ? 'human' : sectionField(() => assertTrafficClass(raw['trafficClass'])),
   };
 }
 

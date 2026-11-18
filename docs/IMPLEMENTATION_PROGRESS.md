@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表首批（服务端权威数据聚合与受控导出）已完成并上线；M14 第二批「访问漏斗」（第一方匿名事件采集 + 漏斗报表）已完成。剩余：陈列效果分析（M14 P1，依赖发布版本埋点与 section 归因，另行估算）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、三语参考前台（M02 前台部分）与页面内容（M04）。承运商签名状态回传（M09 剩余）已于本批完成。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表首批（服务端权威数据聚合与受控导出）、第二批「访问漏斗」（第一方匿名事件采集 + 漏斗报表）与第三批「区块陈列效果」（标准区块埋点 + 服务端加购/订单归因 + 区块报表）均已完成。剩余：结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、三语参考前台（M02 前台部分）与内容/陈列 CMS（M04，落地后区块报表的 `publishVersionId` 可换成真实发布版本 ID）。承运商签名状态回传（M09 剩余）已完成。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -571,3 +571,19 @@
 边界：签名回传只证明承运商说过什么，不替代员工的库存扣减与授权；不做自动下单、承运商 API 主动查询/轨迹聚合、路由器由或异常件自动售后（exception/returned 只入台账，需人工处理）；未登记承运商没有 webhook 密钥，配置变化需重启 API；批量发放真实通知投递、SMTP/worker 与 HTTPS 链路仍未启动/验收，与此前边界一致。
 
 部署：提交 5bd72d9（功能）与 3cf69ca（配置透传与部署记录）已推送 origin/main 并部署 mrinhk。deploy.sh 备份数据库→快进拉取→重建镜像→第 27 条迁移 202611180027_carrier_status_webhooks 应用成功（共 27 条）→ API 健康→ Caddy/公网 health/live 200。生产冒烟：health/ready 200、`https://admin.mrinhk.com/admin/orders` 200、承运商回调在未登记密钥时返回 404（安全默认，未配置来源不入库）。另补 `.env.example`/compose 的 `CARRIER_WEBHOOK_SECRETS` 传递项：店主与具体承运商约定共享密钥后写入该变量并重建 API，端点才会验签放行；密钥未配齐前不伪装为已对接。
+
+## 2026-11-18：M14 第三批 区块陈列效果分析（标准区块埋点 + 服务端归因 + 区块报表）
+
+范围：补上 M14 D 段（P1）的区块陈列效果。本批把「区块曝光/点击/加购/订单/净实收」串成一条可复核的链路：曝光与点击来自主题按标准口径上报的第一方事件，加购由服务端在写入购物袋时落归因行，订单与净实收只认下单前 24 小时内最后一次区块交互，退款按售后明细分摊。仍不含 A/B 实验、跨设备/跨店归因与因果增量。
+
+- 契约：`AnalyticsEventInput.eventName` 扩到 6 项（新增 `section_impression`/`section_click`），新增 `sectionId`/`sectionKey`/`placementId`/`publishVersionId`/`environment`/`trafficClass` 六个匿名字段（`additionalProperties: false` 继续阻断 PII）；新增 `CartItemAttribution` 并挂到 `CartItemWriteRequest.attribution`；`ReportKey` 扩到 10 项（新增 `placement`），报表查询新增 `pageKey`/`sectionKey`/`publishVersionId` 筛选与 `section`/`sectionId`/`page`/`version` 分组，`ReportRow` 维度闭集同步扩四个键。契约测试 +1 项，共 46 项。
+- 领域规则 `packages/domain/src/placement.ts`：区块键/实例/展示位/发布版本的形态校验（拒 URL、空白、`@`）；加购归因只接受 `consentState=granted`（未同意的加购照常成功但不写归因，不能靠加购接口绕过同意门槛）；24 小时归因窗口（未来时间不算有效交互）；同一订单行取窗口内最后一次交互（同值按 id 稳定排序）；退款按订单行金额比例分摊、分币余数按固定行序补 1 分、全零金额落到第一行；净实收不为负；曝光会话按 `sessionId+pageKey+sectionKey` 去重；覆盖状态区分 `no_traffic`/`tracking_missing`/`partial`/`stale`/`ok`，不把未知当 0 曝光。
+- 服务端采集：`apps/api/src/analytics/service.ts` 落库区块字段；`environment` 默认 `production`、`trafficClass` 默认 `human`，非法值 422。加购 `CartService.addItem` 接收 `attribution`，在**同一事务**内写 `PlacementAttribution`（会话快照补语言/设备/市场；客户端时钟漂移按服务端时间封顶），库存不足或资格不符时归因与加购一起回滚。下单 `CheckoutService.attributePlacement` 在订单行写入后按变体匹配、窗口内取最后一次交互并条件回填 `orderItemId`（唯一约束 + `orderItemId IS NULL` 条件，重试不会串行）。
+- 区块报表 `placement`（复用 `reports.view`）：曝光会话/点击/加购/订单行/订单数 + 阶段转化率（分母为曝光会话，< 20 给 `insufficientSample=1` 且不给比率）+ 归因净实收与退款分摊；只统计 `consentState=granted`、`environment=production`、`trafficClass=human` 的事件；预览/员工/沙箱/机器人流量保留原始事件供审计但不进指标；未关联售后明细的退款单列 `unallocatedRefundMinor`，不按比例伪造区块归因。金额按币种分行，同一区块出现多币种时会话行不带金额、金额各自成行。
+- 第 28 条迁移 `202611180028_placement_analytics`：`AnalyticsEvent` 增 6 列并重建 `eventName` CHECK（含区块事件）与 `environment`/`trafficClass`/区块必填 CHECK，新增 `(sectionKey, occurredAt)` 索引；新增 `PlacementAttribution` 表（`orderItemId` 唯一、`attributedAt >= addedAt` CHECK、区块键/发布版本/interactionId 形态 CHECK、无任何 PII 列）与四个查询索引。
+- 前台适配器（参考主题）：`lib/placement-client.ts` + `app/section-tracker.tsx` 按「50% 可见持续 1 秒」上报曝光（同会话同页同区块只报一次）、点击时生成随机 `interactionId` 并记住 24 小时交互；首页 hero/关于/推荐与商品列表挂 `data-ez-section`/`data-ez-section-id`，商品卡挂 `data-ez-variant`，加购表单携带 `attribution`（未同意时 analytics-client 直接不发）。发布版本标记来自主题配置 `site.contentRelease`，等到 M04 发布版本落地后换成真实版本 ID。
+- 后台 `/admin/reports`：新增「区块陈列效果」报表、页面/区块/发布版本筛选、按区块/实例/页面/版本分组，以及曝光会话/点击/加购/归因订单行/净实收/未分摊退款/样本不足等指标的中文标签与百分比格式。
+
+验证：契约 46 项、生成物一致、Prisma schema 有效、前后台与参考主题 typecheck、后台生产构建通过；纯规则 6 项、真实 PostgreSQL HTTP 集成 1 项（覆盖预览/机器人排除、未同意归因不落库、非法区块键 422、下单绑定订单行、退款分摊、覆盖率、分组与筛选、过期交互不归因）；浏览器端到端报表 8/8（新增区块报表用例 × 桌面/移动）。
+
+边界：`publishVersionId` 目前是主题的内容发布标记（`site.contentRelease`），不是 M04 的发布版本 ID——M04 内容/陈列 CMS 尚未实现，等 CMS 落地后由真实发布版本替换，历史事件仍按当时标记保留；报表暂不支持按商品筛选（曝光/点击是区块级事件，商品维度需商品级展示位事件）；员工/预览流量过滤靠事件自报的 `environment`（服务端校验闭集），不做到 IP/后台会话强绑定；疑似机器人只做标记与排除，不做规则库维护与自动识别；报告仍不含 A/B 实验、跨设备归因与因果增量。

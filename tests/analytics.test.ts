@@ -16,7 +16,10 @@ const baseEvent = {
 };
 
 test('analytics: event names are a closed set that never includes purchase', () => {
-  assert.deepEqual([...ANALYTICS_EVENT_NAMES], ['page_view', 'view_item', 'add_to_cart', 'begin_checkout']);
+  assert.deepEqual([...ANALYTICS_EVENT_NAMES], ['page_view', 'view_item', 'add_to_cart', 'begin_checkout',
+    'section_impression', 'section_click']);
+  // 区块事件仍在浏览器白名单内（曝光/点击由主题上报），但 purchase 不在。
+  assert.equal(assertBrowserEventName('section_impression'), 'section_impression');
   for (const name of ANALYTICS_EVENT_NAMES) assert.equal(assertBrowserEventName(name), name);
   // 浏览器 purchase 必须拒绝：成交只认服务端订单。
   assert.throws(() => assertBrowserEventName('purchase'), AnalyticsRuleError);

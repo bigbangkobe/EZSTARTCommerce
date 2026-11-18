@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import { CheckoutRuleError, MAX_CART_LINES, MAX_CART_QUANTITY, normalizeQuantity } from '../../../../packages/domain/src/checkout.js';
+import { PLACEMENT_RULE_VERSION, PlacementRuleError, normalizeCartAttribution } from '../../../../packages/domain/src/placement.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -28,7 +29,11 @@ export class CartService {
   private get db() { return this.identity.db; }
 
   private rule<T>(fn: () => T): T {
-    try { return fn(); } catch (error) { if (error instanceof CheckoutRuleError) throw new AuthError(422, error.code); throw error; }
+    try { return fn(); } catch (error) {
+      if (error instanceof CheckoutRuleError) throw new AuthError(422, error.code);
+      if (error instanceof PlacementRuleError) throw new AuthError(422, error.code);
+      throw error;
+    }
   }
 
   private digest(token: string) { return createHash('sha256').update(token).digest('hex'); }
@@ -120,7 +125,7 @@ export class CartService {
     return variant;
   }
 
-  async addItem(token: string, body: { variantId: string; quantity: number }, ctx: RequestContext) {
+  async addItem(token: string, body: { variantId: string; quantity: number; attribution?: unknown }, ctx: RequestContext) {
     await this.identity.limitIp(ctx);
     const quantity = this.rule(() => normalizeQuantity(body.quantity));
     return this.db.$transaction(async tx => {
@@ -135,8 +140,35 @@ export class CartService {
       if (available < total) throw new AuthError(409, 'OUT_OF_STOCK');
       if (existing) await tx.cartItem.update({ where: { id: existing.id }, data: { quantity: total } });
       else await tx.cartItem.create({ data: { cartId: cart.id, variantId: variant.id, quantity } });
+      await this.recordAttribution(tx, cart, variant, body.attribution);
       return this.view(tx, cart);
     });
+  }
+
+  /**
+   * 加购归因：只有明示同意的匿名区块交互才落库；服务端写入，浏览器不能直接造归因行。
+   * 加购失败（库存/资格）时事务回滚，归因行也不会留下——加购与归因要么一起成功，要么都不算。
+   */
+  private async recordAttribution(tx: Tx, cart: CartRow,
+    variant: { id: string; productId: string }, raw: unknown): Promise<void> {
+    const attribution = this.rule(() => normalizeCartAttribution(raw));
+    if (!attribution) return;
+    const now = new Date();
+    // 会话快照补齐语言/设备/市场：报表按这些维度筛选时不必再回表。
+    const session = attribution.sessionId
+      ? await tx.analyticsSession.findUnique({ where: { sessionId: attribution.sessionId } })
+      : null;
+    await tx.placementAttribution.create({ data: {
+      cartId: cart.id, variantId: variant.id, productId: variant.productId,
+      sectionId: attribution.sectionId, sectionKey: attribution.sectionKey,
+      placementId: attribution.placementId, publishVersionId: attribution.publishVersionId,
+      interactionId: attribution.interactionId, pageKey: attribution.pageKey,
+      sessionId: attribution.sessionId, locale: session?.locale ?? cart.locale,
+      deviceClass: session?.deviceClass ?? null, marketCode: session?.marketCode ?? cart.marketCode,
+      consentState: 'granted', ruleVersion: PLACEMENT_RULE_VERSION,
+      // 未来时间戳（客户端时钟漂移）按服务端时间落库，避免归因时间晚于下单时间。
+      addedAt: attribution.occurredAt.getTime() > now.getTime() ? now : attribution.occurredAt,
+    } });
   }
 
   private async line(tx: Tx, cartId: string, id: string) {

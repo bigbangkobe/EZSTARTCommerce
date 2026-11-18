@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { copy, site, whatsappLink } from '../lib/site';
 import { fetchProducts, formatPrice } from '../lib/products';
 import AnalyticsTracker from './analytics-tracker';
+import SectionTracker from './section-tracker';
 
 function SectionHead({ num, title, jp }: { num: string; title: string; jp: string }) {
   return (
@@ -23,8 +24,9 @@ export default async function HomePage() {
   return (
     <>
       <AnalyticsTracker pageKey="home" locale={site.defaultLanguage} />
+      <SectionTracker pageKey="home" publishVersionId={site.contentRelease} locale={site.defaultLanguage} />
       {/* HERO */}
-      <section className="hero">
+      <section className="hero" data-ez-section="home.hero" data-ez-section-id="home:hero">
         <div className="hero-copy">
           <h1>
             {copy.hero.title1}
@@ -51,7 +53,7 @@ export default async function HomePage() {
       </section>
 
       {/* ABOUT */}
-      <section className="section" id="about">
+      <section className="section" id="about" data-ez-section="home.about" data-ez-section-id="home:about">
         <SectionHead num="壱" title={copy.about.heading} jp={copy.about.jp} />
         <div className="cards">
           {copy.about.cards.map((card) => (
@@ -65,7 +67,7 @@ export default async function HomePage() {
       </section>
 
       {/* FEATURED PRODUCTS */}
-      <section className="section" id="products">
+      <section className="section" id="products" data-ez-section="home.products" data-ez-section-id="home:products">
         <SectionHead num="弐" title={copy.products.heading} jp={copy.products.jp} />
         {!result.ok && featured.length === 0 ? (
           <div className="empty-state">{copy.products.error}</div>
@@ -81,7 +83,8 @@ export default async function HomePage() {
         ) : (
           <div className="cards">
             {featured.map((product) => (
-              <div className="card product-card" key={product.id}>
+              <div className="card product-card" key={product.id}
+                data-ez-placement={product.id} data-ez-variant={product.variants[0]?.id ?? undefined}>
                 <div className="product-thumb">{product.category ?? '商品圖片'}</div>
                 <div className="product-body">
                   <h3>{product.name}</h3>

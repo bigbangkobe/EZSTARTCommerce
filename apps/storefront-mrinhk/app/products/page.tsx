@@ -1,7 +1,8 @@
 import Link from 'next/link';
-import { copy, whatsappLink } from '../../lib/site';
+import { copy, site, whatsappLink } from '../../lib/site';
 import { fetchProducts, formatPrice } from '../../lib/products';
 import AnalyticsTracker from '../analytics-tracker';
+import SectionTracker from '../section-tracker';
 
 export const metadata = { title: '商品 | IN先生' };
 
@@ -10,8 +11,9 @@ export default async function ProductsPage() {
   const products = result.ok ? result.products : [];
 
   return (
-    <section className="section">
-      <AnalyticsTracker pageKey="products" />
+    <section className="section" data-ez-section="products.list" data-ez-section-id="products:list">
+      <AnalyticsTracker pageKey="products" locale={site.defaultLanguage} />
+      <SectionTracker pageKey="products" publishVersionId={site.contentRelease} locale={site.defaultLanguage} />
       <div className="red-line" />
       <div className="section-head">
         <span className="num">壱</span>
@@ -33,7 +35,8 @@ export default async function ProductsPage() {
       ) : (
         <div className="cards">
           {products.map((product) => (
-            <div className="card product-card" key={product.id}>
+            <div className="card product-card" key={product.id}
+              data-ez-placement={product.id} data-ez-variant={product.variants[0]?.id ?? undefined}>
               <div className="product-thumb">{product.name}</div>
               <div className="product-body">
                 <h3>

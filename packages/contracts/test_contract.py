@@ -653,7 +653,7 @@ class ContractTests(unittest.TestCase):
 
     def test_report_key_is_a_closed_set_across_parameter_and_request(self):
         expected = ["sales_summary", "orders_by_status", "orders_by_payment", "orders_by_method",
-                    "product_sales", "inventory", "coupons", "members", "funnel"]
+                    "product_sales", "inventory", "coupons", "members", "funnel", "placement"]
         schemas = SPEC["components"]["schemas"]
         self.assertEqual(expected, schemas["ReportKey"]["enum"])
         self.assertEqual(expected, SPEC["components"]["parameters"]["ReportKey"]["schema"]["enum"])
@@ -699,12 +699,42 @@ class ContractTests(unittest.TestCase):
 
     def test_funnel_is_in_report_key_closed_set_and_dimensions_allow_funnel_keys(self):
         expected = ["sales_summary", "orders_by_status", "orders_by_payment", "orders_by_method",
-                    "product_sales", "inventory", "coupons", "members", "funnel"]
+                    "product_sales", "inventory", "coupons", "members", "funnel", "placement"]
         self.assertEqual(expected, SPEC["components"]["schemas"]["ReportKey"]["enum"])
         self.assertEqual(expected, SPEC["components"]["parameters"]["ReportKey"]["schema"]["enum"])
         props = SPEC["components"]["schemas"]["ReportRow"]["properties"]["dimensions"]
         allowed = props["propertyNames"]["enum"]
         for key in ("step", "device", "source"):
+            self.assertIn(key, allowed)
+
+    def test_placement_report_and_section_events_are_closed_sets(self):
+        # 区块事件必须带稳定 sectionKey/sectionId 与发布版本；字段闭集仍禁止任何 PII。
+        event = {"eventId": UUID, "sessionId": "sess_abcdefghijklmnop", "eventName": "section_impression",
+                 "occurredAt": NOW, "schemaVersion": "1.0", "consentState": "granted", "pageKey": "home",
+                 "sectionId": "home:hero", "sectionKey": "home.hero", "publishVersionId": "rel-2026-11",
+                 "environment": "production", "trafficClass": "human"}
+        self.assertEqual([], errors("AnalyticsEventInput", event))
+        self.assertEqual([], errors("AnalyticsEventInput", dict(
+            event, eventName="section_click", placementId="card-1", interactionId=UUID)))
+        self.assertTrue(errors("AnalyticsEventInput", dict(event, sectionKey=None)))
+        self.assertTrue(errors("AnalyticsEventInput", dict(event, sectionKey="https://x/?q=1")))
+        self.assertTrue(errors("AnalyticsEventInput", dict(event, environment="staging")))
+        self.assertTrue(errors("AnalyticsEventInput", dict(event, trafficClass="robot")))
+        # 加购归因只接受匿名区块标识与同意状态；不接受邮箱/电话/客户号。
+        attribution = {"sectionId": "home:hero", "sectionKey": "home.hero", "publishVersionId": "rel-2026-11",
+                       "interactionId": UUID, "consentState": "granted"}
+        self.assertEqual([], errors("CartItemAttribution", attribution))
+        self.assertEqual([], errors("CartItemWriteRequest",
+                                    {"variantId": UUID, "quantity": 1, "attribution": attribution}))
+        self.assertTrue(errors("CartItemAttribution", dict(attribution, email="a@b.com")))
+        self.assertTrue(errors("CartItemAttribution", dict(attribution, interactionId="short")))
+        # 区块分组维度是闭集：只允许区块/区块实例/页面/发布版本。
+        ops = SPEC["paths"]["/admin/reports/{reportKey}"]["get"]["parameters"]
+        group_by = next(p for p in ops if p.get("name") == "groupBy")["schema"]["enum"]
+        for key in ("section", "sectionId", "page", "version"):
+            self.assertIn(key, group_by)
+        allowed = SPEC["components"]["schemas"]["ReportRow"]["properties"]["dimensions"]["propertyNames"]["enum"]
+        for key in ("sectionKey", "sectionId", "page", "version"):
             self.assertIn(key, allowed)
 
     def test_analytics_ingest_rejects_pii_and_requires_consent_and_idempotency(self):
