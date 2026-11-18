@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成。剩余：报表（M14）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表（服务端权威数据聚合与受控导出）首批已完成。剩余：网站访问漏斗与陈列效果分析（M14 第二批，依赖第一方事件采集与前台埋点）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -521,3 +521,19 @@
 验证：真实 PostgreSQL 18.7 上优惠定向 **26/26**、全量 **278/278** 全绿；契约 39 项、生成物一致、Prisma schema 有效、前台/后台 typecheck、后台生产构建通过；浏览器端到端 **72/72**（新增会员等级勾选与批量发放确认 2 例 × 桌面/移动）。已部署 mrinhk（第 24 条迁移），生产冒烟见下。
 
 边界：批量发放目前冻结的是「发给谁、多少位」，渠道 account_only/email/sms 已记录但未接真实通知投递（worker 与 SMTP 仍未起，与邀请/OTP 邮件同等待投递）；筛选发放支持按会员等级，不支持更细的消费/地域分群；专属券只按「当前等级」判定，等级是发放时的动态状态而非下单快照（券折扣金额本身仍由报价快照冻结）；部分退款按比例扣回积分仍未接。
+
+## 2026-11-18：M14 经营报表（服务端权威数据聚合 + 受控导出，第一批）
+
+范围：M14 分两批。本批先落地不依赖前台埋点的「交易经营报表」——只从 Order/OrderItem/Payment/Refund/CouponRedemption/Inventory/Member/PointLedger 做服务端只读聚合；网站访问漏斗与陈列效果分析（第二方事件、曝光/点击/加购归因）需先建第一方采集与埋点 SDK，留待第二批。
+
+- 契约：`ReportKey` 参数与 `ReportExportRequest.reportKey` 改为 8 项闭集（`sales_summary`/`orders_by_status`/`orders_by_payment`/`orders_by_method`/`product_sales`/`inventory`/`coupons`/`members`）；新增 `ReportResult`/`ReportRow`/`ReportCoverage`/`ReportEnvelope`/`ReportExport`/`ReportExportEnvelope` schema，三个报表端点改用具体响应；新增 `GET /admin/report-exports/{id}/download`（text/csv，`reports.export`）。`ReportRow.dimensions` 用 `propertyNames` 闭集在契约层阻断联系方式等 PII 维度键。契约测试 +3 项，共 42 项。
+- 领域规则 `packages/domain/src/reports.ts`：指标口径版本、`localDay`（Intl 按时区归属本地日）、半开区间 `within`、整数分求和、`ratio`（经营聚合）与 `smallSampleRatio`（P1 陈列/漏斗小样本保护，样本 < 20 返回 null）、`RowAccumulator`、CSV 转义（RFC 4180 + 对 `=+-@` 起始单元格前置单引号防公式注入）、导出前导注释（筛选/时区/币种/口径版本/数据覆盖）。
+- 服务端 `apps/api/src/reports/{service,controller}.ts`：八类报表聚合；权威时间各取所需（下单 `placedAt`、收款 `paidAt`、退款 `executedAt`、注册 `joinedAt`、积分 `createdAt`）；金额按币种分行、绝不跨币种相加；销售汇总附按店铺日的趋势行。导出受 `reports.export` + CSRF + Idempotency-Key 保护，同步生成 CSV 落库并记审计；下载校验任务状态与 30 分钟过期。xlsx 首期明确 422 拒绝，不静默生成伪装文件。
+- 第 25 条迁移 `202611170024_report_exports`：`ReportExport` 表（幂等键唯一、状态与完成时间互锁 CHECK、结果无 PII 故以明文存储聚合 CSV）。
+- 后台 `/admin/reports`：报表选择、时间/时区/市场/付款方式筛选、合计与分组表格、CSV 导出与短时下载；按 `reports.view`/`reports.export` 控制可见性；六个运营页导航加「报表」入口。
+
+口径要点：订单数按成功创建计（含之后取消），取消/退款额另列；已收金额只计 `succeeded`/`collected` 与 COD `collected`，待收 COD/unknown/failed 不计；净销售额 = 已收 - 成功退款，配送费/税/积分抵扣分别展示不与商品额混加；报表与导出共用同一筛选规范化与口径版本，导出文件写明筛选、时区、币种、口径版本与覆盖率。
+
+验证：契约 42 项、生成物一致、Prisma schema 有效、前后台 typecheck 与后台生产构建通过；真实 PostgreSQL 18 顺序全量 **287/287** 全绿（新增报表纯规则 8 项 + HTTP 集成 1 项）；浏览器端到端 **76/76**（新增报表生成/导出与权限提示 2 例 × 桌面/移动）。
+
+边界：本批不含访问漏斗（PV/会话/商品浏览/加购/结账事件）与陈列曝光归因（P1）；积分发放/兑换与会员订单占比为聚合快照，会员级明细不在报表内；导出为同步生成（数据量受单次最大跨度 366 天约束），异步分块与 Excel 原生格式留待后续；worker/SMTP 仍未启动，与既有边界一致。

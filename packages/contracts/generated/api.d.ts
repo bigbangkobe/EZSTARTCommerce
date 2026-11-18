@@ -2348,6 +2348,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/report-exports/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download a completed, unexpired CSV export */
+        get: operations["downloadReportExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/audit-logs": {
         parameters: {
             query?: never;
@@ -4649,7 +4666,7 @@ export interface components {
             enabled: boolean;
         };
         ReportExportRequest: {
-            reportKey: string;
+            reportKey: components["schemas"]["ReportKey"];
             /** Format: date-time */
             from: string;
             /** Format: date-time */
@@ -4663,6 +4680,91 @@ export interface components {
             };
             /** @default false */
             includePii: boolean;
+        };
+        /**
+         * @description Server-computed aggregate report. PII is never included in report rows.
+         * @enum {string}
+         */
+        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members";
+        ReportRow: {
+            /** @description Dimension keys (status, method, sku, ...) with their bucket value. Only non-PII dimension keys are allowed. */
+            dimensions: {
+                [key: string]: string | null;
+            };
+            /** @description Numeric metrics in minor units or counts; unit is defined by the metric definition. */
+            metrics: {
+                [key: string]: number;
+            };
+        };
+        ReportResult: {
+            reportKey: components["schemas"]["ReportKey"];
+            metricDefinitionVersion: string;
+            /** Format: date-time */
+            generatedAt: string;
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /** @description IANA time zone used to group timestamps into local days */
+            timezone: string;
+            /** @description ISO 4217 codes present in the result; amounts are never added across currencies. */
+            currencies: string[];
+            filters: {
+                [key: string]: unknown;
+            };
+            /** @description Overall metrics for the selected range; amounts are in minor units. */
+            totals: {
+                [key: string]: number;
+            };
+            rows: components["schemas"]["ReportRow"][];
+            coverage: components["schemas"]["ReportCoverage"];
+        };
+        ReportCoverage: {
+            sourceOrderCount: number;
+            /** Format: date-time */
+            lastDataAt: string | null;
+            complete: boolean;
+            note?: string;
+        };
+        ReportEnvelope: {
+            data: components["schemas"]["ReportResult"];
+            meta: {
+                requestId: string;
+                nextCursor?: string | null;
+                hasMore?: boolean;
+            };
+        };
+        ReportExport: {
+            /** Format: uuid */
+            id: string;
+            reportKey: components["schemas"]["ReportKey"];
+            /** @enum {string} */
+            format: "csv" | "xlsx";
+            /** @enum {string} */
+            status: "pending" | "completed" | "failed";
+            includePii: boolean;
+            filters: {
+                [key: string]: unknown;
+            };
+            fileName?: string | null;
+            rowCount?: number | null;
+            errorCode?: string | null;
+            /** @description Short-lived relative URL */
+            downloadUrl?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            completedAt?: string | null;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ReportExportEnvelope: {
+            data: components["schemas"]["ReportExport"];
+            meta: {
+                requestId: string;
+                nextCursor?: string | null;
+                hasMore?: boolean;
+            };
         };
         BackupRequest: {
             includeMedia: boolean;
@@ -5193,6 +5295,36 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["SuccessEnvelope"];
+            };
+        };
+        /** @description Aggregated report with metric definitions and data coverage */
+        ReportSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ReportEnvelope"];
+            };
+        };
+        /** @description Export job accepted for asynchronous processing */
+        ReportExportAccepted: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ReportExportEnvelope"];
+            };
+        };
+        /** @description Export job status with short-lived download URL when ready */
+        ReportExportSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ReportExportEnvelope"];
             };
         };
         /** @description Stock page with server-computed availability */
@@ -5744,7 +5876,8 @@ export interface components {
         PageKey: string;
         Slug: string;
         ProviderCode: string;
-        ReportKey: string;
+        /** @description Server-computed report key from the closed set in components.schemas.ReportKey. */
+        ReportKey: "sales_summary" | "orders_by_status" | "orders_by_payment" | "orders_by_method" | "product_sales" | "inventory" | "coupons" | "members";
         Cursor: string;
         Limit: number;
         SearchQuery: string;
@@ -9333,13 +9466,14 @@ export interface operations {
             };
             header?: never;
             path: {
+                /** @description Server-computed report key from the closed set in components.schemas.ReportKey. */
                 reportKey: components["parameters"]["ReportKey"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["ReportSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -9363,7 +9497,7 @@ export interface operations {
             };
         };
         responses: {
-            202: components["responses"]["Accepted"];
+            202: components["responses"]["ReportExportAccepted"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
@@ -9381,10 +9515,39 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["ReportExportSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    downloadReportExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV payload with report filters and metric definitions in the preamble */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["UnexpectedError"];
         };
     };

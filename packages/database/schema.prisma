@@ -1350,3 +1350,25 @@ model CustomerConsent {
   @@unique([customerId, channel, purpose])
   @@index([customerId, status])
 }
+
+// 经营报表导出（M14）：异步任务 + 短时下载。默认不含 PII；下载 URL 只在有效期内可用。
+// 导出的 CSV 是聚合结果，不含联系方式/订单明细，因此以明文存储即可（无个人资料可泄露）。
+model ReportExport {
+  id             String    @id @default(uuid()) @db.Uuid
+  idempotencyKey String    @unique
+  requestedBy    String    @db.Uuid
+  reportKey      String
+  format         String    @default("csv")
+  status         String    @default("pending")
+  filters        Json
+  includePii     Boolean   @default(false)
+  fileName       String?
+  rowCount       Int?
+  errorCode      String?
+  content        String?
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt    DateTime? @db.Timestamptz(3)
+  expiresAt      DateTime  @db.Timestamptz(3)
+  @@index([requestedBy, createdAt])
+  @@index([expiresAt])
+}

@@ -651,5 +651,52 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(errors("CheckoutQuoteRequest", dict(quote, couponCustomerKey="forged")))
 
 
+    def test_report_key_is_a_closed_set_across_parameter_and_request(self):
+        expected = ["sales_summary", "orders_by_status", "orders_by_payment", "orders_by_method",
+                    "product_sales", "inventory", "coupons", "members"]
+        schemas = SPEC["components"]["schemas"]
+        self.assertEqual(expected, schemas["ReportKey"]["enum"])
+        self.assertEqual(expected, SPEC["components"]["parameters"]["ReportKey"]["schema"]["enum"])
+        request = {"reportKey": "sales_summary", "from": NOW, "to": NOW, "timezone": "Asia/Hong_Kong", "format": "csv"}
+        self.assertEqual([], errors("ReportExportRequest", request))
+        self.assertTrue(errors("ReportExportRequest", dict(request, reportKey="drop_all_tables")))
+        self.assertTrue(errors("ReportExportRequest", dict(request, includePii=True, unexpected=True)))
+        # xlsx 在契约里是允许值，服务端首期可明确以 422 拒绝，但不能静默生成伪装成 Excel 的 CSV。
+        self.assertEqual([], errors("ReportExportRequest", dict(request, format="xlsx")))
+
+    def test_report_result_carries_definitions_coverage_and_no_identifiers(self):
+        result = {
+            "reportKey": "sales_summary", "metricDefinitionVersion": "1.0", "generatedAt": NOW,
+            "from": NOW, "to": NOW, "timezone": "Asia/Hong_Kong", "currencies": ["HKD"],
+            "filters": {"marketCode": "HK"},
+            "totals": {"orderCount": 3, "placedAmountMinor": 59000, "collectedAmountMinor": 23000},
+            "rows": [{"dimensions": {"status": "completed"}, "metrics": {"orderCount": 1, "placedAmountMinor": 10000}}],
+            "coverage": {"sourceOrderCount": 3, "lastDataAt": NOW, "complete": True, "note": "ok"},
+        }
+        self.assertEqual([], errors("ReportResult", result))
+        self.assertEqual([], errors("ReportEnvelope", {"data": result, "meta": {"requestId": "req-test"}}))
+        # 报表不承载联系方式/会员号等标识字段；指标必须是数字。
+        self.assertTrue(errors("ReportResult", dict(result, email="a@b.com")))
+        self.assertTrue(errors("ReportResult", dict(result, totals={"orderCount": "3"})))
+        self.assertTrue(errors("ReportRow", {"dimensions": {"email": "a@b.com"}, "metrics": {}}))
+        # 覆盖率必须显式声明，不能让缺失数据被当成完整数据。
+        missing = copy.deepcopy(result)
+        del missing["coverage"]
+        self.assertTrue(errors("ReportResult", missing))
+
+    def test_report_export_status_never_exposes_permanent_download(self):
+        export = {"id": UUID, "reportKey": "sales_summary", "format": "csv", "status": "completed",
+                  "includePii": False, "filters": {}, "fileName": "sales.csv", "rowCount": 2,
+                  "downloadUrl": "/api/v1/admin/report-exports/" + UUID + "/download",
+                  "createdAt": NOW, "completedAt": NOW, "expiresAt": NOW}
+        self.assertEqual([], errors("ReportExport", export))
+        self.assertEqual([], errors("ReportExportEnvelope", {"data": export, "meta": {"requestId": "req-test"}}))
+        self.assertTrue(errors("ReportExport", dict(export, status="running")))
+        self.assertTrue(errors("ReportExport", dict(export, reportKey="unknown")))
+        self.assertTrue(errors("ReportExport", dict(export, includePii="false")))
+        # 进行中的任务不应带下载链接。
+        self.assertEqual([], errors("ReportExport", dict(export, status="pending", downloadUrl=None, completedAt=None)))
+
+
 if __name__ == "__main__":
     unittest.main()

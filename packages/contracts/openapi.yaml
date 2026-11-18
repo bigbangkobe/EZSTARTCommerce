@@ -3154,7 +3154,7 @@ paths:
         - { name: marketCode, in: query, required: false, schema: { type: string } }
         - { name: paymentMethodCode, in: query, required: false, schema: { type: string } }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/ReportSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3174,7 +3174,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReportExportRequest' }
       responses:
-        '202': { $ref: '#/components/responses/Accepted' }
+        '202': { $ref: '#/components/responses/ReportExportAccepted' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -3188,10 +3188,32 @@ paths:
       x-permission: reports.export
       parameters: [{ $ref: '#/components/parameters/UuidId' }]
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/ReportExportSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/report-exports/{id}/download:
+    get:
+      tags: [Reports]
+      operationId: downloadReportExport
+      summary: Download a completed, unexpired CSV export
+      security: [{ AdminSession: [] }]
+      x-permission: reports.export
+      parameters: [{ $ref: '#/components/parameters/UuidId' }]
+      responses:
+        '200':
+          description: CSV payload with report filters and metric definitions in the preamble
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+            Content-Disposition: { schema: { type: string, description: Attachment filename } }
+          content:
+            text/csv:
+              schema: { type: string, description: RFC 4180 CSV with UTF-8 BOM }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/audit-logs:
     get:
@@ -3556,7 +3578,8 @@ components:
       name: reportKey
       in: path
       required: true
-      schema: { type: string, pattern: '^[a-z][a-z0-9_]{1,63}$' }
+      description: Server-computed report key from the closed set in components.schemas.ReportKey.
+      schema: { type: string, pattern: '^[a-z][a-z0-9_]{1,63}$', enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members] }
     Cursor:
       name: cursor
       in: query
@@ -3904,6 +3927,27 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+    ReportSuccess:
+      description: Aggregated report with metric definitions and data coverage
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ReportEnvelope' }
+    ReportExportAccepted:
+      description: Export job accepted for asynchronous processing
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ReportExportEnvelope' }
+    ReportExportSuccess:
+      description: Export job status with short-lived download URL when ready
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ReportExportEnvelope' }
     InventoryListSuccess:
       description: Stock page with server-computed availability
       headers:
@@ -7383,13 +7427,110 @@ components:
       additionalProperties: false
       required: [reportKey, from, to, timezone, format]
       properties:
-        reportKey: { type: string, maxLength: 64 }
+        reportKey: { $ref: '#/components/schemas/ReportKey' }
         from: { type: string, format: date-time }
         to: { type: string, format: date-time }
         timezone: { type: string, description: IANA time zone identifier }
         format: { type: string, enum: [csv, xlsx] }
         filters: { type: object, additionalProperties: true }
         includePii: { type: boolean, default: false }
+    ReportKey:
+      type: string
+      description: Server-computed aggregate report. PII is never included in report rows.
+      enum: [sales_summary, orders_by_status, orders_by_payment, orders_by_method, product_sales, inventory, coupons, members]
+    ReportRow:
+      type: object
+      additionalProperties: false
+      required: [dimensions, metrics]
+      properties:
+        dimensions:
+          type: object
+          additionalProperties: { type: [string, 'null'] }
+          propertyNames: { enum: [day, status, method, sku, productName, code, tier, market, currency, locale] }
+          description: Dimension keys (status, method, sku, ...) with their bucket value. Only non-PII dimension keys are allowed.
+        metrics:
+          type: object
+          additionalProperties: { type: number }
+          description: Numeric metrics in minor units or counts; unit is defined by the metric definition.
+    ReportResult:
+      type: object
+      additionalProperties: false
+      required: [reportKey, metricDefinitionVersion, generatedAt, from, to, timezone, currencies, filters, totals, rows, coverage]
+      properties:
+        reportKey: { $ref: '#/components/schemas/ReportKey' }
+        metricDefinitionVersion: { type: string, pattern: '^[0-9]+\.[0-9]+$' }
+        generatedAt: { type: string, format: date-time }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        timezone: { type: string, description: IANA time zone used to group timestamps into local days }
+        currencies:
+          type: array
+          description: ISO 4217 codes present in the result; amounts are never added across currencies.
+          items: { type: string }
+        filters: { type: object, additionalProperties: true }
+        totals:
+          type: object
+          additionalProperties: { type: number }
+          description: Overall metrics for the selected range; amounts are in minor units.
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ReportRow' }
+        coverage: { $ref: '#/components/schemas/ReportCoverage' }
+    ReportCoverage:
+      type: object
+      additionalProperties: false
+      required: [sourceOrderCount, lastDataAt, complete]
+      properties:
+        sourceOrderCount: { type: integer, minimum: 0 }
+        lastDataAt: { type: [string, 'null'], format: date-time }
+        complete: { type: boolean }
+        note: { type: string, maxLength: 500 }
+    ReportEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/ReportResult' }
+        meta:
+          type: object
+          additionalProperties: false
+          required: [requestId]
+          properties:
+            requestId: { type: string, maxLength: 128 }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
+    ReportExport:
+      type: object
+      additionalProperties: false
+      required: [id, reportKey, format, status, includePii, filters, createdAt, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        reportKey: { $ref: '#/components/schemas/ReportKey' }
+        format: { type: string, enum: [csv, xlsx] }
+        status: { type: string, enum: [pending, completed, failed] }
+        includePii: { type: boolean }
+        filters: { type: object, additionalProperties: true }
+        fileName: { type: [string, 'null'], maxLength: 200 }
+        rowCount: { type: [integer, 'null'], minimum: 0 }
+        errorCode: { type: [string, 'null'], maxLength: 100 }
+        downloadUrl: { type: [string, 'null'], description: Short-lived relative URL, present only when completed. }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+        expiresAt: { type: string, format: date-time }
+    ReportExportEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/ReportExport' }
+        meta:
+          type: object
+          additionalProperties: false
+          required: [requestId]
+          properties:
+            requestId: { type: string, maxLength: 128 }
+            nextCursor: { type: [string, 'null'] }
+            hasMore: { type: boolean }
     BackupRequest:
       type: object
       additionalProperties: false
