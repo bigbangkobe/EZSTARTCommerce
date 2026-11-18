@@ -450,3 +450,57 @@
 验证：真实 PostgreSQL 18.7 上 `node --test` **264/264 全绿**（新增 12 项纯规则 + 9 个 HTTP 子测：未核验批准/完成 409、拒绝无需核验、核验幂等重放不推高版本、重复核验 409、幂等键跨请求复用 409、删除完成缺保留依据 422、批准与完成分两步且分别记录审批人、口径快照与延期版本控制、逾期排序与计数、详情只给有 `customers.read_masked` 的账号顾客姓名）；契约 37 项、生成物一致、根与后台 `tsc`、后台 `next build` 产出 `/admin/privacy`、后台端到端 **70/70**（新增 `e2e/privacy.spec.ts` 2 例 × 桌面/移动）。
 
 边界：本批只做受理与审批，**数据处置本身仍是人工**——导出文件生成（`ExportJob`）、会员资料更正、删除/匿名化改写都还没接；营销退订也没有结构化同意模型可改（现在只有 `MemberProfile.consentRef` 一个自由文本）。`PrivacyRequest.sourceChannel` 没有 `storefront` 自助入口，前台顾客尚不能自己提交请求（首期只承诺后台受理）。
+
+## 2026-11-18：M10 批次七 C（邮件投递自检通道）
+
+范围：真实 SMTP 凭据仍未提供，Worker 已具备投递程序却无法端到端验证。本批给后台一个**不需要真实邮箱、也不发送真实营销邮件**的自检通道：发起一封指定类型的测试任务，走同一条加密入队 → Worker 领取 → SMTP 投递链路，结果掩码留痕。
+
+- 第 21 条迁移 `202611170020_mail_test`：`IdentityNotificationJob` 的 `kind` 配对约束放宽以容纳 `admin_mail_test`，新增 `maskedTarget`（只存掩码收件人，明文只在一次性密文载荷里）。
+- Worker 新增 `admin_mail_test` 投递分支：`apps/worker/src/mail.ts` 的 `MailKind` 扩出该类型与三语文案/tag，`notifications.ts` 解密载荷后投递。自检与目标类型共用同一套 AES-GCM + AAD 绑定，密钥不外泄。
+- API 新增 `NotificationService.sendTest()/listTests()` 与 `GET/POST /admin/mail/test`：发起（`notifications.manage`）与看结果（`notifications.read`）分开；`targetVersion` 固定为 1 以满足旧任务版本约束。controller 内 `service()` 因与基类重名改为 `mailService()`。
+- 后台 `/admin/settings` 增邮件自检卡片（`notifications.read` 可见），可按类型发起并查看掩码目标与投递状态。
+
+修正的真实缺陷：自检任务最初写 `targetVersion: 0`，被旧 CHECK 约束（`targetVersion >= 1`）拒绝，接口 500；改为 1。远程测试环境旧 Prisma Client 不认识 `maskedTarget`，容器内重新 `prisma generate` 后解决。
+
+验证：真实 PostgreSQL 18.7 上邮件自检定向 **13/13**、全量回归全绿；契约 38 项、生成物一致、Prisma schema 有效、后台 typecheck 通过。已部署 mrinhk（第 21 条迁移），生产冒烟 `admin/mail/test` 匿名 401。
+
+边界：**仍无真实 SMTP 凭据，未发送任何真实邮件**；自检通道验证的是队列与 Worker 链路，不是外部服务商可达性。凭据填入实例参数并启动 worker 后才算真实投递闭环。
+
+## 2026-11-18：M10 批次七 A（隐私请求数据处置执行）
+
+范围：批次六把受理与审批建成了骨架，但「标记完成」只是改状态——导出文件、匿名化改写、营销退订都没发生。本批让完成动作在**同一事务内真实改写数据**，且交易事实与审计不可抹除。
+
+- 第 22 条迁移 `202611170021_privacy_disposition`：新增 `CustomerDataExportJob`（加密快照入队、限时下载、下载留审计）与 `CustomerConsent`（按 `customerId + channel + purpose` 唯一的结构化同意状态）；`Customer` 增 `anonymized` 终态。
+- 导出：`POST /admin/privacy-requests/{id}/export` 生成顾客/会员/同意的结构化快照，用 AES-GCM 加密（AAD 绑定任务 id）存库，明文不落盘；`GET .../{jobId}` 解密下载并写 `privacy.export.downloaded` 审计。快照挪到另一行即无法解密。
+- 匿名化：删除/匿名化请求标记完成时，`anonymizeCustomerInTx` 把顾客姓名改为不可逆掩码、清空邮箱/电话/标签/内部备注、状态转 `anonymized`，会员转 `closed` 且 `consentRef` 记为撤回；订单/支付/售后的交易事实保留，靠必填的 `retentionExceptionRef` 说明依据。
+- 营销退订：`withdraw_marketing` 请求完成时，对每个渠道 upsert `CustomerConsent(status=withdrawn)` 并更新会员 `consentRef`，退订变成**可被下游消费**的结构化状态，不再是一句自由文本。
+- 权限沿用四段分离；处置动作与 `privacy.request.completed` 一起记审计（审计对象归属到顾客，而非请求，避免处置记录与顾客资料对不上）。
+
+修正的真实缺陷：匿名化事务里对顾客状态写入用了 `Customer` CHECK 不允许的枚举值，改为 `anonymized`；处置审计最初挂在请求 id 上，改为挂在顾客 id，保证「处置了谁」在对账时可追溯。
+
+验证：真实 PostgreSQL 18.7 上隐私定向 **26/26**、全量 **270/270** 全绿；契约 38 项、生成物一致、Prisma schema 有效、后台 typecheck 通过。已部署 mrinhk（第 22 条迁移，两张新表就位），生产冒烟新接口匿名 401。
+
+边界：导出是加密快照下载，不是任意格式的合规文件包；匿名化不可逆、无恢复路径（设计如此）；前台顾客仍不能自助提交资料请求（首期只承诺后台受理）。
+
+## 2026-11-18：M10 批次七 B（积分兑换结账抵扣）
+
+范围：积分此前只能发放、调整、到期，没有「花出去」的业务动作。本批把积分抵扣接入报价与下单，让账面积分真正能结账用。
+
+- 第 23 条迁移 `202611170022_points_redemption`：报价表冻结 `pointsRequested/pointsRedeemed/pointsValueMinor/pointsMemberId/pointsRuleVersion`，订单表快照 `pointsRedeemed/pointsValueMinor/pointsMemberId/pointsRuleVersion`；换掉旧的总额恒等式 CHECK 为含积分项的版本（`total = subtotal - discount - pointsValue + shipping + tax`），新增列全部 `DEFAULT 0`，既有订单的等式与新约束等价——**旧数据可直接升级，无需回填**。
+- 域规则：`packages/domain/src/loyalty.ts` 新增 `redeemPoints`（按余额与商品金额双重封顶，请求超额收敛到可抵扣上限并标记 `cappedByAmount`，余额不足是明确拒绝而非静默少扣）；`checkout.ts` 的 `assertQuoteMath` 纳入积分抵扣项。固定 `LOYALTY_REDEEM_RULE_VERSION`，账面可解释。
+- 报价：`POST /storefront/checkout/quote` 接受可选 `pointsToUse`，登录会员按余额与商品金额封顶冻结实扣点数与换算金额，未登录携带该参数 401；下单读报价快照、同事务扣减（会员级 advisory lock + 先扫到期 + 幂等键 `order:{id}:redeem`），过期的点不能拿来抵扣。
+- 返还：取消订单与整单退款在同一事务补回实扣点数（追加 `entryType='reversal'` 流水，不改写原扣减行，幂等键 `order:{id}:points_refund`）。补偿积分不设到期。
+- 前台结账页新增积分抵扣输入，展示请求点数、实扣与折算金额；报价与下单响应带积分快照字段。契约与 `test_contract.py` 同步新增字段与校验。
+
+修正的真实缺陷：返还流水最初写 `entryType='refund'`，被 `PointLedger_entryType_check`（仅允许 earn/adjust/redeem/expire/reversal）拒绝导致取消订单 500；改为 `reversal`（冲销语义、正数流水可再次消费且不带到期日）。总额恒等式迁移第一次漏掉重建两条旧 CHECK，抵扣订单会被旧约束拒绝；补齐后再跑全绿。
+
+验证：真实 PostgreSQL 18.7 上结账与积分定向 **55/55**、全量 **272/272** 全绿；契约 38 项、生成物一致、Prisma schema 有效、前台与后台 typecheck 通过。已部署 mrinhk（第 23 条迁移），生产冒烟：前台 `/checkout` 200、新 API 匿名受保护。
+
+边界：部分退款按比例扣回积分未接（当前仅整单退款/取消返还）；积分兑换不找零（超额部分收敛为少扣，不产生现金找补）；worker 与 SMTP 仍未启动，验证码邮件仍在队列里等投递。
+
+## 2026-11-18：批次七收尾（全量回归、部署与冒烟）
+
+- 全量真实 PostgreSQL 18.7 回归 **272/272** 全绿；契约 38 项、生成物一致、Prisma schema 有效、前台/后台 typecheck 通过。
+- C/A/B 三个提交（`67a3264`/`7935f15`/`ad69133`）已推送 origin/main，生产服务器快进合并到 `ad69133` 并一键部署：备份库 → 重建 api/admin/storefront 镜像 → migrate 容器依次应用第 21/22/23 条迁移 → 健康检查通过。
+- 生产冒烟：`mrinhk.com` 首页、`/cart`、`/login`、`/member`、`/checkout` 均 200；`admin.mrinhk.com/admin/privacy`、`/admin/members`、`/admin/settings`、`/admin/login` 均 200；`admin/mail/test`、`admin/privacy-requests` 匿名访问 401；`health/live` 200。生产库确认 `CustomerConsent`、`CustomerDataExportJob` 两张新表就位。
+- 部署回滚点已由脚本打上 `:prev` 镜像标签；数据库迁移只前进，回滚不还原数据结构。
