@@ -1533,6 +1533,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/QuoteSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
@@ -1553,6 +1554,7 @@ paths:
       responses:
         '201': { $ref: '#/components/responses/OrderCreatedSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
@@ -5767,7 +5769,7 @@ components:
     CheckoutQuote:
       type: object
       additionalProperties: false
-      required: [quoteId, version, expiresAt, lines, shippingMethod, couponSummary, ruleVersions, warnings, currency, subtotalMinor, discountMinor, shippingMinor, taxMinor, totalMinor]
+      required: [quoteId, version, expiresAt, lines, shippingMethod, couponSummary, ruleVersions, warnings, currency, subtotalMinor, discountMinor, shippingMinor, taxMinor, totalMinor, pointsRequested, pointsRedeemed, pointsValueMinor, pointsRuleVersion]
       properties:
         currency: { type: string, pattern: '^[A-Z]{3}$' }
         subtotalMinor: { type: integer, minimum: 0 }
@@ -5775,6 +5777,10 @@ components:
         shippingMinor: { type: integer, minimum: 0 }
         taxMinor: { type: integer, minimum: 0 }
         totalMinor: { type: integer, minimum: 0 }
+        pointsRequested: { type: integer, minimum: 0, description: Points the customer asked to use before server-side capping. }
+        pointsRedeemed: { type: integer, minimum: 0, description: Points actually frozen into this immutable quote. }
+        pointsValueMinor: { type: integer, minimum: 0, description: Merchandise amount covered by the redeemed points. }
+        pointsRuleVersion: { type: [string, 'null'], description: Conversion rule frozen into the quote. }
         quoteId: { type: string, format: uuid }
         version: { type: integer, minimum: 1, description: Immutable quote revision echoed as confirmedQuoteVersion when ordering. }
         expiresAt: { type: string, format: date-time }
@@ -5800,7 +5806,7 @@ components:
     CheckoutOrderCreated:
       type: object
       additionalProperties: false
-      required: [orderId, publicOrderNumber, orderStatus, paymentStatus, currency, totalMinor, paymentAction]
+      required: [orderId, publicOrderNumber, orderStatus, paymentStatus, currency, totalMinor, paymentAction, pointsRedeemed, pointsValueMinor]
       properties:
         orderId: { type: string, format: uuid }
         publicOrderNumber: { type: string, maxLength: 64 }
@@ -5808,6 +5814,8 @@ components:
         paymentStatus: { type: string, enum: [created, requires_action, processing, unknown, cod_due] }
         currency: { type: string, pattern: '^[A-Z]{3}$' }
         totalMinor: { type: integer, minimum: 0 }
+        pointsRedeemed: { type: integer, minimum: 0 }
+        pointsValueMinor: { type: integer, minimum: 0 }
         paymentAction: { $ref: '#/components/schemas/PaymentAction' }
     PaymentAction:
       type: object
@@ -6231,6 +6239,7 @@ components:
         shippingAddress: { $ref: '#/components/schemas/AddressInput' }
         shippingMethodId: { type: string, format: uuid }
         couponCode: { type: [string, 'null'], maxLength: 80 }
+        pointsToUse: { type: [integer, 'null'], minimum: 0, maximum: 1000000, description: Optional points the member wants to apply; server caps by balance and eligible merchandise amount. }
         policyAcceptances: { type: array, items: { $ref: '#/components/schemas/PolicyAcceptanceInput' } }
     ContactInput:
       type: object

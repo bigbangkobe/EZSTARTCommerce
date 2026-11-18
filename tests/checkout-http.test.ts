@@ -8,6 +8,7 @@ import { IdentityService } from '../apps/api/src/identity/service.js';
 import { totp } from '../apps/api/src/identity/crypto.js';
 import { connectDatabase } from '../packages/database/src/client.js';
 import { digest } from '../packages/domain/src/identity.js';
+import { memberNumber, sessionTokenDigest } from '../packages/domain/src/members.js';
 import { testPostgres } from './helpers/postgres.js';
 
 test('checkout: guest cart, immutable quote, idempotent order and stock reservation', { timeout: 300_000 }, async t => {
@@ -391,6 +392,80 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
       assert.equal(ledger.channel, 'manual');
       assert.equal(ledger.status, 'pending');
       assert.equal(ledger.amountMinor, 13_000);
+    });
+
+    await t.test('member points freeze in the quote, deduct at order and return on cancellation', async () => {
+      await resetLimits();
+      await db.loyaltySetting.update({ where: { id: 1 }, data: { enabled: true, minorPerPoint: 100 } });
+      const customer = await db.customer.create({ data: { displayName: 'Points Buyer', emailNormalized: 'points@example.com' } });
+      const member = await db.memberProfile.create({ data: { customerId: customer.id,
+        memberNo: memberNumber('20261117', randomUUID().replaceAll('-', '').slice(0, 6).toUpperCase()),
+        consentRef: 'consent-v1', joinedAt: new Date(), createdAt: new Date(), updatedAt: new Date() } });
+      await db.pointAccount.create({ data: { memberId: member.id, balance: 100, createdAt: new Date(), updatedAt: new Date() } });
+      const memberToken = randomBytes(32).toString('base64url');
+      await db.memberSession.create({ data: { memberId: member.id, tokenDigest: sessionTokenDigest(memberToken),
+        expiresAt: new Date(Date.now() + 3_600_000), createdAt: new Date(), updatedAt: new Date() } });
+      jar.set('ez_member_session', memberToken);
+
+      await newCart();
+      assert.equal((await front('POST', 'storefront/cart/items', { variantId, quantity: 1 })).status, 200);
+      const plain = await front('POST', 'storefront/checkout/quote', quoteBody(cart.id, methodId), 'QuoteEnvelope');
+      assert.equal(plain.status, 200, JSON.stringify(plain.body));
+      assert.equal(plain.body.data.pointsRedeemed, 0);
+      assert.equal(plain.body.data.totalMinor, 13_000);
+
+      const tooMany = await front('POST', 'storefront/checkout/quote', { ...quoteBody(cart.id, methodId), pointsToUse: 200 });
+      assert.equal(tooMany.status, 409);
+      assert.equal(tooMany.body.error.code, 'POINT_BALANCE_INSUFFICIENT');
+      const anonymous = await request('POST', 'storefront/checkout/quote', { ...quoteBody(cart.id, methodId), pointsToUse: 10 },
+        { 'X-CSRF-Token': cart.csrf, Cookie: `ez_guest_cart=${cart.token}; ez_cart_csrf=${cart.csrf}` });
+      assert.equal(anonymous.status, 401);
+
+      const quoted = await front('POST', 'storefront/checkout/quote', { ...quoteBody(cart.id, methodId), pointsToUse: 60 }, 'QuoteEnvelope');
+      assert.equal(quoted.status, 200, JSON.stringify(quoted.body));
+      const quote = quoted.body.data;
+      assert.equal(quote.pointsRequested, 60);
+      assert.equal(quote.pointsRedeemed, 60);
+      assert.equal(quote.pointsValueMinor, 6_000);
+      assert.equal(quote.pointsRuleVersion, 'loyalty-redeem-v1');
+      assert.equal(quote.totalMinor, 7_000, '积分只抵扣商品金额，运费照收');
+
+      // 报价冻结了会员：换人（这里模拟未登录）下单必须拒绝，不能把点扣到别人账上。
+      jar.delete('ez_member_session');
+      const mismatched = await front('POST', 'storefront/checkout/orders', { quoteId: quote.quoteId,
+        confirmedQuoteVersion: quote.version, paymentMethodCode: 'cod' }, 'OrderCreatedEnvelope',
+      { 'Idempotency-Key': randomUUID() });
+      assert.equal(mismatched.status, 403);
+      assert.equal(mismatched.body.error.code, 'POINTS_MEMBER_MISMATCH');
+      jar.set('ez_member_session', memberToken);
+
+      const key = randomUUID();
+      const created = await front('POST', 'storefront/checkout/orders', { quoteId: quote.quoteId,
+        confirmedQuoteVersion: quote.version, paymentMethodCode: 'cod' }, 'OrderCreatedEnvelope',
+      { 'Idempotency-Key': key });
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      assert.equal(created.body.data.pointsRedeemed, 60);
+      assert.equal(created.body.data.pointsValueMinor, 6_000);
+      assert.equal((await db.pointAccount.findUniqueOrThrow({ where: { memberId: member.id } })).balance, 40);
+      const redeem = await db.pointLedger.findUniqueOrThrow({ where: { idempotencyKey: `order:${created.body.data.orderId}:redeem` } });
+      assert.equal(redeem.deltaPoints, -60);
+      assert.equal(redeem.sourceRef, created.body.data.publicOrderNumber);
+
+      const replay = await front('POST', 'storefront/checkout/orders', { quoteId: quote.quoteId,
+        confirmedQuoteVersion: quote.version, paymentMethodCode: 'cod' }, 'OrderCreatedEnvelope',
+      { 'Idempotency-Key': key });
+      assert.equal(replay.status, 201);
+      assert.equal(await db.pointLedger.count({ where: { memberId: member.id, entryType: 'redeem' } }), 1);
+
+      const cancelled = await request('POST', `admin/orders/${created.body.data.orderId}/cancel`,
+        { reason: 'Customer changed mind', expectedVersion: 1 },
+        { Origin: origin, 'X-CSRF-Token': adminCsrf, 'Idempotency-Key': randomUUID() }, 'SuccessEnvelope');
+      assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+      assert.equal((await db.pointAccount.findUniqueOrThrow({ where: { memberId: member.id } })).balance, 100);
+      const refund = await db.pointLedger.findUniqueOrThrow({ where: { idempotencyKey: `order:${created.body.data.orderId}:points_refund` } });
+      assert.equal(refund.deltaPoints, 60);
+      assert.equal(refund.entryType, 'reversal');
+      jar.delete('ez_member_session');
     });
 
     // 兜底断言：若子测试未执行，orderNumber 为空会在这里失败，而不是静默“通过”。

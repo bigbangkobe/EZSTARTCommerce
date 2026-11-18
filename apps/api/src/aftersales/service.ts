@@ -11,6 +11,7 @@ import { maskContact, type ContactSnapshot } from '../../../../packages/domain/s
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import { releaseOrderReservations } from '../orders/reservations.js';
 import { releaseCouponInTx, restoreCouponQuotaInTx } from '../promotions/redeem.js';
+import { restoreOrderPointsInTx } from '../members/loyalty-service.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -362,6 +363,7 @@ export class AfterSalesService {
         this.rule(() => assertCancelCaseOrder(order));
         await releaseOrderReservations(tx, order.id);
         await releaseCouponInTx(tx, order.id, 'aftersales_cancel', { id: actor.id, type: 'admin' }, now);
+        await restoreOrderPointsInTx(tx, order.id, now, 'aftersales_cancel');
         await tx.shopOrder.update({ where: { id: order.id }, data: { orderStatus: 'cancelled', cancelledAt: now,
           cancelReasonCode: reasonCode ?? 'aftersales_cancel', cancelReason: reason, customerNotified: false,
           version: { increment: 1 } } });
@@ -896,6 +898,7 @@ export class AfterSalesService {
         const order = await tx.shopOrder.findUnique({ where: { id: row.orderId } });
         if (order && (settled._sum.amountMinor ?? 0) + row.amountMinor >= order.totalMinor) {
           await restoreCouponQuotaInTx(tx, order.id, id, 'full_refund', now);
+          await restoreOrderPointsInTx(tx, order.id, now, 'full_refund');
         }
       }
 

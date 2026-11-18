@@ -276,6 +276,7 @@ class ContractTests(unittest.TestCase):
             "quoteId": UUID, "version": 1, "expiresAt": "2026-10-19T10:00:00Z",
             "currency": "HKD", "subtotalMinor": 1000, "discountMinor": 0,
             "shippingMinor": 0, "taxMinor": 0, "totalMinor": 1000,
+            "pointsRequested": 0, "pointsRedeemed": 0, "pointsValueMinor": 0, "pointsRuleVersion": None,
             "lines": [{"variantId": UUID, "sku": "SKU-1", "productName": "Item",
                        "quantity": 1, "unitPriceMinor": 1000, "lineSubtotalMinor": 1000,
                        "lineDiscountMinor": 0, "lineTotalMinor": 1000}],
@@ -292,6 +293,23 @@ class ContractTests(unittest.TestCase):
             self.assertTrue(errors("CheckoutQuote", invalid), key)
         quote["totalMinor"] = 1.5
         self.assertTrue(errors("CheckoutQuote", quote))
+        quote["totalMinor"] = 1000
+
+        # 积分抵扣只减商品金额，不减运费；下单回执必须把扣了多少点/多少钱说清楚。
+        request_schema = SPEC["components"]["schemas"]["CheckoutQuoteRequest"]
+        self.assertIn("pointsToUse", request_schema["properties"])
+        redeemed = copy.deepcopy(quote)
+        redeemed.update({"pointsRequested": 12, "pointsRedeemed": 10, "pointsValueMinor": 300,
+                         "pointsRuleVersion": "loyalty-redeem-v1", "shippingMinor": 50, "totalMinor": 750})
+        self.assertEqual([], errors("CheckoutQuote", redeemed))
+        self.assertTrue(errors("CheckoutQuote", dict(redeemed, pointsValueMinor=-1)))
+        self.assertTrue(errors("CheckoutQuote", dict(redeemed, pointsRuleVersion=42)))
+        created = {"orderId": UUID, "publicOrderNumber": "EZ-20261117-ABC123",
+                   "orderStatus": "awaiting_confirmation", "paymentStatus": "cod_due",
+                   "currency": "HKD", "totalMinor": 750, "pointsRedeemed": 10, "pointsValueMinor": 300,
+                   "paymentAction": {"type": "none", "redirectUrl": None, "instructions": None}}
+        self.assertEqual([], errors("CheckoutOrderCreated", created))
+        self.assertTrue(errors("CheckoutOrderCreated", dict(created, pointsRedeemed="10")))
 
     def test_cart_response_is_typed_and_never_carries_client_prices(self):
         line = {"id": UUID, "variantId": UUID, "sku": "SKU-1", "productName": "Item", "variantName": None,

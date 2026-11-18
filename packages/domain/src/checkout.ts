@@ -29,6 +29,8 @@ export interface Address {
 export interface ShippingRateRule { fixedFeeMinor: number; freeAboveMinor: number | null }
 export interface QuoteAmounts {
   subtotalMinor: number; discountMinor: number; shippingMinor: number; taxMinor: number; totalMinor: number;
+  /** 积分抵扣金额（最小货币单位）；缺省表示没有用积分。 */
+  pointsValueMinor?: number;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -151,8 +153,11 @@ export function assertQuoteMath(amounts: QuoteAmounts): void {
     const value = amounts[field];
     if (!Number.isInteger(value) || value < 0) fail(field);
   }
+  const pointsValue = amounts.pointsValueMinor ?? 0;
+  if (!Number.isInteger(pointsValue) || pointsValue < 0) fail('pointsValueMinor');
   if (amounts.discountMinor > amounts.subtotalMinor) fail('discountMinor');
-  const expected = amounts.subtotalMinor - amounts.discountMinor + amounts.shippingMinor + amounts.taxMinor;
+  if (pointsValue > amounts.subtotalMinor - amounts.discountMinor) fail('pointsValueMinor');
+  const expected = amounts.subtotalMinor - amounts.discountMinor - pointsValue + amounts.shippingMinor + amounts.taxMinor;
   if (expected !== amounts.totalMinor) fail('totalMinor');
 }
 

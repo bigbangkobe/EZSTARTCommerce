@@ -6,6 +6,7 @@ import {
   api, createQuote, formatMinor, listShippingMethods, notifyCartUpdated, placeOrder,
   type ApiOutcome, type CartView, type OrderCreatedView, type ShippingMethodView,
 } from '../../lib/cart-client';
+import { fetchProfile, type MemberProfileView } from '../../lib/member-client';
 import { site } from '../../lib/site';
 import MemberNudge from './member-nudge';
 
@@ -21,6 +22,8 @@ export default function CheckoutPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [order, setOrder] = useState<OrderCreatedView | null>(null);
+  const [member, setMember] = useState<MemberProfileView | null>(null);
+  const [pointsToUse, setPointsToUse] = useState('');
   const [form, setForm] = useState({
     fullName: '', phone: '', recipientName: '', city: '', district: '', addressLine1: '', addressLine2: '',
   });
@@ -35,6 +38,15 @@ export default function CheckoutPage() {
   }, [loadCart]);
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const result = await fetchProfile();
+      if (!cancelled && result.ok) setMember(result.data);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     if (!cart || cart.items.length === 0) return;
     let cancelled = false;
     void (async () => {
@@ -47,6 +59,8 @@ export default function CheckoutPage() {
   }, [cart]);
 
   const method = methods?.find((item) => item.id === methodId) ?? null;
+  // 输入框只是「想用多少」；实际抵扣以服务端报价为准，页面不自己算钱。
+  const points = Math.max(0, Math.min(Number.parseInt(pointsToUse, 10) || 0, member?.loyalty.balance ?? 0));
 
   function update(field: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -71,6 +85,7 @@ export default function CheckoutPage() {
         addressLine2: form.addressLine2,
       },
       shippingMethodId: method.id,
+      ...(points > 0 ? { pointsToUse: points } : {}),
       policyAcceptances: site.policies.map((policy) => ({ ...policy, accepted: true as const })),
     });
     if (!quote.ok) {
@@ -107,6 +122,7 @@ export default function CheckoutPage() {
             <li>訂單狀態：<strong>{order.orderStatus === 'awaiting_confirmation' ? '待確認' : order.orderStatus}</strong></li>
             <li>付款方式：<strong>貨到付款（現金）</strong></li>
             <li>應付金額：<strong>{formatMinor(order.totalMinor, order.currency)}</strong></li>
+            {order.pointsRedeemed > 0 && <li>已用積分：<strong>{order.pointsRedeemed} 分（抵 {formatMinor(order.pointsValueMinor, order.currency)}）</strong></li>}
           </ul>
           {order.paymentAction?.instructions && <p className="form-note">{order.paymentAction.instructions}</p>}
           <div className="cta-row" style={{ marginTop: 24 }}>
@@ -211,6 +227,11 @@ export default function CheckoutPage() {
                 <span>運費</span>
                 <strong>{method ? (method.feeMinor === 0 ? '免運' : formatMinor(method.feeMinor)) : '—'}</strong>
               </div>
+              {member?.loyalty.pointsEnabled && member.loyalty.balance > 0 && <label className="summary-line">
+                <span>使用積分<small>可用 {member.loyalty.balance} 分，{member.loyalty.minorPerPoint} 分抵 1 元</small></span>
+                <input type="number" min={0} max={member.loyalty.balance} value={pointsToUse}
+                  onChange={(event) => setPointsToUse(event.target.value)} placeholder="0" />
+              </label>}
               <MemberNudge />
               <p className="form-note">金額以下單時的服務端報價為準。</p>
               <button className="btn btn-primary checkout-btn" type="button" disabled={!canSubmit} onClick={() => void submit()}>
@@ -229,6 +250,9 @@ function describe(result: Extract<ApiOutcome<unknown>, { ok: false }>): string {
   if (result.status === 409 || result.code === 'OUT_OF_STOCK') return '存貨不足或購物袋已變動，請返回購物袋確認後再試。';
   if (result.code === 'MARKET_NOT_AVAILABLE') return '商店暫未在此市場開放，請稍後再試。';
   if (result.code === 'QUOTE_EXPIRED') return '報價已過期，請重新確認下單。';
+  if (result.code === 'POINT_BALANCE_INSUFFICIENT') return '積分不足，請減少使用點數後再試。';
+  if (result.code === 'POINTS_MEMBER_REQUIRED' || result.code === 'POINTS_MEMBER_MISMATCH') return '使用積分需要先登入會員，且下單時請保持同一會員身份。';
+  if (result.code === 'POINTS_DISABLED') return '店鋪暫未開啟積分抵扣。';
   if (result.status === 429) return '操作太頻繁，請稍後再試。';
   return result.message ?? '下單失敗，請稍後再試。';
 }

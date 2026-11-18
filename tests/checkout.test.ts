@@ -104,6 +104,13 @@ test('quote math is an invariant, not a preference', () => {
   rejects(() => assertQuoteMath({ subtotalMinor: 10_000, discountMinor: 0, shippingMinor: 3_000, taxMinor: 0, totalMinor: 12_999 }));
   rejects(() => assertQuoteMath({ subtotalMinor: 1_000, discountMinor: 1_001, shippingMinor: 0, taxMinor: 0, totalMinor: 0 }));
   rejects(() => assertQuoteMath({ subtotalMinor: 1_000.5, discountMinor: 0, shippingMinor: 0, taxMinor: 0, totalMinor: 1_000.5 }));
+  // 积分抵扣只减商品金额：1 万分小计、2 千分运费、用 3 千分积分，总额应为 9 千。
+  assert.doesNotThrow(() => assertQuoteMath({ subtotalMinor: 10_000, discountMinor: 0, pointsValueMinor: 3_000,
+    shippingMinor: 2_000, taxMinor: 0, totalMinor: 9_000 }));
+  rejects(() => assertQuoteMath({ subtotalMinor: 10_000, discountMinor: 0, pointsValueMinor: 3_000,
+    shippingMinor: 2_000, taxMinor: 0, totalMinor: 12_000 }));
+  rejects(() => assertQuoteMath({ subtotalMinor: 10_000, discountMinor: 9_000, pointsValueMinor: 1_001,
+    shippingMinor: 0, taxMinor: 0, totalMinor: 0 }));
 });
 
 test('quote version and lifetime gate order creation', () => {

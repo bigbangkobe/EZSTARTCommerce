@@ -32,6 +32,8 @@ function names(value: unknown): Record<string, string> {
 
 /** 流水里的规则版本：规则改了要升版本，历史流水保留旧版本号，便于解释当时的计算口径。 */
 export const LOYALTY_RULE_VERSION = 'loyalty-v1';
+/** 兑换快照单独标版本：换算率与上限改了以后，旧报价仍按当时的版本解释。 */
+export const LOYALTY_REDEEM_RULE_VERSION = 'loyalty-redeem-v1';
 
 export const loyaltyPolicy = Object.freeze({
   /** 单笔人工调整的绝对值上限：防止误操作一次性写入天文数字。 */
@@ -212,6 +214,31 @@ export function applyDelta(balance: number, delta: number): number {
   if (!Number.isSafeInteger(next)) fail('deltaPoints');
   if (next < 0) fail('deltaPoints', 'POINT_BALANCE_INSUFFICIENT');
   return next;
+}
+
+/**
+ * 结账抵扣：客户端只能「请求用多少点」，实际用多少由服务端按余额与可抵扣金额收敛。
+ *
+ * 三条口径：
+ * 1. 请求点数超过余额是直接拒绝（POINT_BALANCE_INSUFFICIENT），不静默少扣——
+ *    那是「我以为用了 100 点，其实只用了 30 点」的误解。
+ * 2. 可抵扣金额只算商品小计减优惠，不含运费与税；金额不够时按换算率向下取整收敛点数，
+ *    并在报价的 warnings 里说明，总额永远非负。
+ * 3. 换算率用会员当时的等级率；报价把它冻结在 pointsValueMinor 里，下单不重算。
+ */
+export interface PointsRedemption { points: number; valueMinor: number; cappedByAmount: boolean }
+
+export function redeemPoints(requested: unknown, available: number, minorPerPoint: number,
+  eligibleMinor: number): PointsRedemption {
+  const wanted = requested === undefined || requested === null ? 0 : requested;
+  if (!Number.isSafeInteger(wanted) || (wanted as number) < 0) fail('pointsToUse');
+  if (!Number.isSafeInteger(available) || available < 0) fail('balance');
+  if (!Number.isSafeInteger(minorPerPoint) || minorPerPoint < 1) fail('minorPerPoint');
+  if (!Number.isSafeInteger(eligibleMinor) || eligibleMinor < 0) fail('eligibleMinor');
+  if ((wanted as number) > available) fail('pointsToUse', 'POINT_BALANCE_INSUFFICIENT');
+  const byAmount = Math.floor(eligibleMinor / minorPerPoint);
+  const points = Math.min(wanted as number, available, byAmount);
+  return { points, valueMinor: points * minorPerPoint, cappedByAmount: (wanted as number) > byAmount };
 }
 
 /** 等级名按当前语言取，缺失时退到英文，再退到第一个可用的名字。 */

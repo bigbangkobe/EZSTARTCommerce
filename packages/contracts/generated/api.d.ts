@@ -3274,6 +3274,14 @@ export interface components {
             shippingMinor: number;
             taxMinor: number;
             totalMinor: number;
+            /** @description Points the customer asked to use before server-side capping. */
+            pointsRequested: number;
+            /** @description Points actually frozen into this immutable quote. */
+            pointsRedeemed: number;
+            /** @description Merchandise amount covered by the redeemed points. */
+            pointsValueMinor: number;
+            /** @description Conversion rule frozen into the quote. */
+            pointsRuleVersion: string | null;
             /** Format: uuid */
             quoteId: string;
             /** @description Immutable quote revision echoed as confirmedQuoteVersion when ordering. */
@@ -3321,6 +3329,8 @@ export interface components {
             paymentStatus: "created" | "requires_action" | "processing" | "unknown" | "cod_due";
             currency: string;
             totalMinor: number;
+            pointsRedeemed: number;
+            pointsValueMinor: number;
             paymentAction: components["schemas"]["PaymentAction"];
         };
         PaymentAction: {
@@ -3694,6 +3704,8 @@ export interface components {
             /** Format: uuid */
             shippingMethodId: string;
             couponCode?: string | null;
+            /** @description Optional points the member wants to apply; server caps by balance and eligible merchandise amount. */
+            pointsToUse?: number | null;
             policyAcceptances: components["schemas"]["PolicyAcceptanceInput"][];
         };
         ContactInput: {
@@ -7368,6 +7380,7 @@ export interface operations {
         responses: {
             200: components["responses"]["QuoteSuccess"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             429: components["responses"]["RateLimited"];
@@ -7393,6 +7406,7 @@ export interface operations {
         responses: {
             201: components["responses"]["OrderCreatedSuccess"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             429: components["responses"]["RateLimited"];

@@ -109,7 +109,8 @@ export class CheckoutController extends ManagementHttp {
   async quote(@Body() body: QuoteBody, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     assertCsrf(request);
     this.schemas.assert('CheckoutQuoteRequest', body);
-    this.send(response, request, 200, await this.checkoutService().quote(cartToken(request), body, this.context(request)));
+    this.send(response, request, 200, await this.checkoutService().quote(cartToken(request), body, this.context(request),
+      optionalMemberToken(request)));
   }
 
   @Post('orders')

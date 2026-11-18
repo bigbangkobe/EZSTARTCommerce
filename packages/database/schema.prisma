@@ -504,6 +504,11 @@ model CheckoutQuote {
   shippingMinor Int
   taxMinor Int
   totalMinor Int
+  pointsRequested Int @default(0)
+  pointsRedeemed Int @default(0)
+  pointsValueMinor Int @default(0)
+  pointsMemberId String? @db.Uuid
+  pointsRuleVersion String?
   couponId String? @db.Uuid
   coupon Coupon? @relation(fields: [couponId], references: [id], onDelete: Restrict)
   couponSnapshot Json?
@@ -557,6 +562,10 @@ model ShopOrder {
   shippingMinor Int
   taxMinor Int
   totalMinor Int
+  pointsRedeemed Int @default(0)
+  pointsValueMinor Int @default(0)
+  pointsMemberId String? @db.Uuid
+  pointsRuleVersion String?
   locale String
   marketCode String
   contact Json

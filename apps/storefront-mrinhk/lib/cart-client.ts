@@ -48,6 +48,10 @@ export type QuoteView = {
   shippingMinor: number;
   taxMinor: number;
   totalMinor: number;
+  pointsRequested: number;
+  pointsRedeemed: number;
+  pointsValueMinor: number;
+  pointsRuleVersion: string | null;
   shippingMethod: { code: string; name: string; estimatedMinDays: number | null; estimatedMaxDays: number | null };
   warnings: string[];
 };
@@ -59,6 +63,8 @@ export type OrderCreatedView = {
   paymentStatus: string;
   currency: string;
   totalMinor: number;
+  pointsRedeemed: number;
+  pointsValueMinor: number;
   paymentAction: { type: string; redirectUrl: string | null; instructions: string | null };
 };
 
@@ -134,6 +140,7 @@ export type QuoteRequest = {
   shippingAddress: { recipientName?: string; phone?: string; countryCode: string; city?: string;
     district?: string; addressLine1: string; addressLine2?: string };
   shippingMethodId: string;
+  pointsToUse?: number;
   policyAcceptances: { policyKey: string; version: string; accepted: true }[];
 };
 

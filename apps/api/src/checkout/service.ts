@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import { assertCouponUsable } from '../../../../packages/domain/src/promotions.js';
+import { LOYALTY_REDEEM_RULE_VERSION, LoyaltyRuleError, redeemPoints } from '../../../../packages/domain/src/loyalty.js';
+import { redeemOrderPointsInTx, sweepExpiredPointsInTx } from '../members/loyalty-service.js';
 import { assertQuoteActive, assertQuoteMath, assertQuoteVersion, CheckoutRuleError,
   normalizeAddress, normalizeContact, normalizeCouponCode, normalizePolicyAcceptances, orderRequestFingerprint,
   publicOrderNumber, quoteExpiry, QUOTE_TTL_SECONDS, type Address, type Contact } from '../../../../packages/domain/src/checkout.js';
@@ -20,7 +22,7 @@ type QuoteRow = Prisma.CheckoutQuoteGetPayload<{ include: { lines: true } }>;
 
 export interface QuoteBody {
   cartId: string; locale: string; marketCode: string; contact: Contact; shippingAddress: Address;
-  shippingMethodId: string; couponCode?: string | null;
+  shippingMethodId: string; couponCode?: string | null; pointsToUse?: number | null;
   policyAcceptances: { policyKey: string; version: string; accepted: true }[];
 }
 export interface OrderBody { quoteId: string; confirmedQuoteVersion: number; paymentMethodCode: string; customerNote?: string | null }
@@ -46,6 +48,16 @@ export class CheckoutService {
   private rule<T>(fn: () => T): T {
     try { return fn(); } catch (error) {
       if (error instanceof CheckoutRuleError) throw new AuthError(error.code === 'VALIDATION_ERROR' ? 422 : 409, error.code);
+      throw error;
+    }
+  }
+
+  /** 积分规则的错误码有自己一套：余额不足是业务冲突（409），字段错误才是 422。 */
+  private loyalty<T>(fn: () => T): T {
+    try { return fn(); } catch (error) {
+      if (error instanceof LoyaltyRuleError) {
+        throw new AuthError(error.code === 'POINT_BALANCE_INSUFFICIENT' ? 409 : 422, error.code);
+      }
       throw error;
     }
   }
@@ -106,6 +118,8 @@ export class CheckoutService {
         lineSubtotalMinor: line.lineSubtotalMinor, lineDiscountMinor: line.lineDiscountMinor, lineTotalMinor: line.lineTotalMinor })),
       subtotalMinor: row.subtotalMinor, discountMinor: row.discountMinor, shippingMinor: row.shippingMinor,
       taxMinor: row.taxMinor, totalMinor: row.totalMinor,
+      pointsRequested: row.pointsRequested, pointsRedeemed: row.pointsRedeemed,
+      pointsValueMinor: row.pointsValueMinor, pointsRuleVersion: row.pointsRuleVersion,
       shippingMethod: { code: method.code, name: method.name, estimatedMinDays: method.estimatedMinDays ?? null,
         estimatedMaxDays: method.estimatedMaxDays ?? null },
       couponSummary: (row.couponSummary ?? null) as { codeMasked: string; discountMinor: number } | null,
@@ -134,7 +148,7 @@ export class CheckoutService {
     }, { timeout: 15_000 });
   }
 
-  async quote(token: string, body: QuoteBody, ctx: RequestContext) {
+  async quote(token: string, body: QuoteBody, ctx: RequestContext, memberToken: string | null = null) {
     await this.identity.limitIp(ctx);
     return this.db.$transaction(async tx => {
       const cart = await this.cartService.requireCart(tx, token);
@@ -152,14 +166,37 @@ export class CheckoutService {
       const methods = await this.shipping.methodsFor(tx, address, subtotal, cart.currency, body.locale, settings.defaultLocale);
       const method = methods.find(item => item.id === body.shippingMethodId);
       if (!method) throw new AuthError(422, 'VALIDATION_ERROR');
+      const now = new Date();
       // 优惠码算不出来就明确失败：静默按原价下单比拒绝更糟。
       const priced = await this.promotions.priceQuote(tx, { code: couponCode, currency: cart.currency, contact,
         lines: lines.map(line => ({ key: line.variant.id, productId: line.productId, categoryIds: line.categoryIds,
-          amountMinor: line.lineSubtotalMinor, quantity: line.quantity })), now: new Date() });
+          amountMinor: line.lineSubtotalMinor, quantity: line.quantity })), now });
       const warnings: string[] = [];
-      const amounts = { subtotalMinor: subtotal, discountMinor: priced?.discountMinor ?? 0,
-        shippingMinor: method.feeMinor, taxMinor: 0,
-        totalMinor: subtotal - (priced?.discountMinor ?? 0) + method.feeMinor };
+      const discountMinor = priced?.discountMinor ?? 0;
+      let points = { points: 0, valueMinor: 0, cappedByAmount: false };
+      let pointsMemberId: string | null = null;
+      let pointsRuleVersion: string | null = null;
+      const requestedPoints = body.pointsToUse ?? 0;
+      if (requestedPoints > 0) {
+        // 积分是会员权益：想用积分却没有有效会员会话时明确拒绝，不能悄悄按原价报价。
+        if (!memberToken) throw new AuthError(401, 'POINTS_MEMBER_REQUIRED');
+        const { member } = await resolveMemberSession(tx, memberToken);
+        const loyalty = await tx.loyaltySetting.findUnique({ where: { id: 1 } });
+        if (!loyalty?.enabled) throw new AuthError(409, 'POINTS_DISABLED');
+        // 清到期后再读余额：已过期的点不能出现在「最多能用多少」里。
+        await sweepExpiredPointsInTx(tx, member.id, now);
+        const [account, tier] = await Promise.all([
+          tx.pointAccount.findUnique({ where: { memberId: member.id } }),
+          member.tierId === null ? Promise.resolve(null) : tx.membershipTier.findUnique({ where: { id: member.tierId } }),
+        ]);
+        points = this.loyalty(() => redeemPoints(requestedPoints, account?.balance ?? 0,
+          tier?.minorPerPoint ?? loyalty.minorPerPoint, subtotal - discountMinor));
+        if (points.cappedByAmount) warnings.push('POINTS_LIMITED_BY_MERCHANDISE_AMOUNT');
+        if (points.points > 0) { pointsMemberId = member.id; pointsRuleVersion = LOYALTY_REDEEM_RULE_VERSION; }
+      }
+      const amounts = { subtotalMinor: subtotal, discountMinor, shippingMinor: method.feeMinor, taxMinor: 0,
+        pointsValueMinor: points.valueMinor,
+        totalMinor: subtotal - discountMinor - points.valueMinor + method.feeMinor };
       this.rule(() => assertQuoteMath(amounts));
       await tx.checkoutQuote.updateMany({ where: { cartId: cart.id, status: 'active' }, data: { status: 'superseded' } });
       const rate = await tx.shippingRate.findUnique({ where: { id: method.id } });
@@ -171,13 +208,15 @@ export class CheckoutService {
           fixedFeeMinor: rate?.fixedFeeMinor ?? method.feeMinor, freeAboveMinor: rate?.freeAboveMinor ?? null },
         subtotalMinor: amounts.subtotalMinor, discountMinor: amounts.discountMinor, shippingMinor: amounts.shippingMinor,
         taxMinor: amounts.taxMinor, totalMinor: amounts.totalMinor,
+        pointsRequested: requestedPoints, pointsRedeemed: points.points, pointsValueMinor: points.valueMinor,
+        pointsMemberId, pointsRuleVersion,
         couponCode, ...(priced ? { couponId: priced.couponId,
           couponSnapshot: priced.snapshot as unknown as Prisma.InputJsonValue,
           couponSummary: priced.summary as unknown as Prisma.InputJsonValue } : {}),
         ruleVersions: { price: 'catalog.v1', promotion: priced?.ruleVersion ?? 'none',
           shipping: `rate:${rate?.version ?? 1}`, tax: null },
         warnings, policyAcceptances: policyAcceptances as unknown as Prisma.InputJsonValue,
-        expiresAt: quoteExpiry(new Date()),
+        expiresAt: quoteExpiry(now),
         lines: { create: lines.map(line => ({ variantId: line.variant.id, sku: line.variant.sku, productName: line.productName,
           variantName: line.variantName, quantity: line.quantity, unitPriceMinor: line.unitPriceMinor,
           lineSubtotalMinor: line.lineSubtotalMinor, lineDiscountMinor: priced?.lineDiscounts.get(line.variant.id) ?? 0,
@@ -205,6 +244,7 @@ export class CheckoutService {
   private orderView(row: Prisma.ShopOrderGetPayload<{}>, accountSummary?: string | null) {
     return { orderId: row.id, publicOrderNumber: row.publicOrderNumber, orderStatus: row.orderStatus,
       paymentStatus: row.paymentStatus, currency: row.currency, totalMinor: row.totalMinor,
+      pointsRedeemed: row.pointsRedeemed, pointsValueMinor: row.pointsValueMinor,
       paymentAction: this.paymentAction(row.locale, row.paymentStatus, accountSummary) };
   }
 
@@ -291,7 +331,10 @@ export class CheckoutService {
             idempotencyKey, requestDigest: digest, quoteId: quote.id, cartId: cart.id, shippingRateId: rate.id,
             orderStatus: 'awaiting_confirmation', paymentStatus, currency: quote.currency,
             subtotalMinor: quote.subtotalMinor, discountMinor: quote.discountMinor, shippingMinor: quote.shippingMinor,
-            taxMinor: quote.taxMinor, totalMinor: quote.totalMinor, locale: quote.locale, marketCode: quote.marketCode,
+            taxMinor: quote.taxMinor, totalMinor: quote.totalMinor,
+            pointsRedeemed: quote.pointsRedeemed, pointsValueMinor: quote.pointsValueMinor,
+            pointsMemberId: quote.pointsMemberId, pointsRuleVersion: quote.pointsRuleVersion,
+            locale: quote.locale, marketCode: quote.marketCode,
             contact: quote.contact as Prisma.InputJsonValue, shippingAddress: quote.shippingAddress as Prisma.InputJsonValue,
             shippingMethodSnapshot: quote.shippingMethodSnapshot as Prisma.InputJsonValue,
             ...(quote.couponId ? { couponId: quote.couponId,
@@ -320,7 +363,15 @@ export class CheckoutService {
           await tx.orderStatusEvent.create({ data: { orderId: created.id, fromStatus: null,
             toStatus: 'awaiting_confirmation', reason: 'order_placed', actorType: 'customer' } });
           // 已登录会员下单即建立关联：会员中心要能立刻看到这一单，而不是等下次登录按邮箱补齐。
-          if (memberToken) await this.linkMember(tx, created.id, memberToken);
+          const linkedMemberId = memberToken ? await this.linkMember(tx, created.id, memberToken) : null;
+          if (quote.pointsRedeemed > 0) {
+            // 积分按报价快照扣：换人登录或会话失效都必须拒绝，不能把 A 的点扣到 B 名下。
+            if (!linkedMemberId || linkedMemberId !== quote.pointsMemberId) {
+              throw new AuthError(403, 'POINTS_MEMBER_MISMATCH');
+            }
+            await redeemOrderPointsInTx(tx, created.id, linkedMemberId, created.publicOrderNumber,
+              quote.pointsRedeemed, quote.pointsRuleVersion ?? LOYALTY_REDEEM_RULE_VERSION, now);
+          }
           await this.identity.recordAudit(tx, ctx, null, 'checkout.order.created', created.id);
           return this.orderView(created, accountSummary);
         }, { timeout: 15_000 });
@@ -338,11 +389,12 @@ export class CheckoutService {
    * 会员关联是附加事实，不是结账前置条件：会员会话过期、被撤销或会员被停用时，
    * 订单照常成立，只是不产生关联（访客订单本来就允许存在）。
    */
-  private async linkMember(tx: Tx, orderId: string, token: string) {
+  private async linkMember(tx: Tx, orderId: string, token: string): Promise<string | null> {
     let memberId: string;
     try { memberId = (await resolveMemberSession(tx, token)).member.id; }
-    catch (error) { if (error instanceof AuthError) return; throw error; }
+    catch (error) { if (error instanceof AuthError) return null; throw error; }
     await tx.orderMemberLink.createMany({ data: [{ orderId, memberId, source: 'checkout' }], skipDuplicates: true });
+    return memberId;
   }
 
   /** 报价有效期用于前端倒计时与测试断言，不额外暴露内部字段。 */

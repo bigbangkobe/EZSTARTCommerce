@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  applyDelta, dueExpiry, earnPoints, expiryDate, LOYALTY_RULE_VERSION, LoyaltyRuleError, loyaltyPolicy,
-  normalizeAdjustment, normalizeSettingPatch, normalizeTierInput, normalizeTierPatch, resolveTier, tierName,
+  applyDelta, dueExpiry, earnPoints, expiryDate, LOYALTY_REDEEM_RULE_VERSION, LOYALTY_RULE_VERSION,
+  LoyaltyRuleError, loyaltyPolicy, normalizeAdjustment, normalizeSettingPatch, normalizeTierInput, normalizeTierPatch,
+  redeemPoints, resolveTier, tierName,
 } from '../packages/domain/src/loyalty.js';
 
 function rejects(fn: () => unknown, code = 'VALIDATION_ERROR') {
@@ -189,4 +190,20 @@ test('an expire entry writes off its own grant instead of consuming the oldest p
     { id: 'keep', deltaPoints: 30, entryType: 'adjust', sourceRef: null, expiresAt: null },
     { id: 'orphan', deltaPoints: -30, entryType: 'expire', sourceRef: 'missing', expiresAt: null },
   ], now), []);
+});
+
+test('checkout redemption caps by balance and merchandise amount but never invents points', () => {
+  assert.equal(LOYALTY_REDEEM_RULE_VERSION, 'loyalty-redeem-v1');
+  assert.deepEqual(redeemPoints(0, 500, 100, 1_000), { points: 0, valueMinor: 0, cappedByAmount: false });
+  assert.deepEqual(redeemPoints(undefined, 500, 100, 1_000), { points: 0, valueMinor: 0, cappedByAmount: false });
+  assert.deepEqual(redeemPoints(7, 10, 100, 1_000), { points: 7, valueMinor: 700, cappedByAmount: false });
+  // 金额只够 4 点：请求 7 点会收敛到 4 点并标记原因，不会让订单变成负数。
+  assert.deepEqual(redeemPoints(7, 10, 100, 450), { points: 4, valueMinor: 400, cappedByAmount: true });
+  assert.deepEqual(redeemPoints(2, 10, 100, 1_000), { points: 2, valueMinor: 200, cappedByAmount: false });
+  // 余额不足是明确拒绝，不是静默少扣。
+  rejects(() => redeemPoints(9, 2, 100, 1_000), 'POINT_BALANCE_INSUFFICIENT');
+  for (const value of [-1, 1.5, '5', Number.NaN]) rejects(() => redeemPoints(value, 10, 100, 1_000));
+  rejects(() => redeemPoints(1, -1, 100, 1_000));
+  rejects(() => redeemPoints(1, 10, 0, 1_000));
+  rejects(() => redeemPoints(1, 10, 100, -1));
 });

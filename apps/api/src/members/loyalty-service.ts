@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import {
-  applyDelta, dueExpiry, earnPoints, expiryDate, LOYALTY_RULE_VERSION, LoyaltyRuleError, normalizeAdjustment,
+  applyDelta, dueExpiry, earnPoints, expiryDate, LOYALTY_REDEEM_RULE_VERSION, LOYALTY_RULE_VERSION, LoyaltyRuleError, normalizeAdjustment,
   normalizeSettingPatch, normalizeTierInput, normalizeTierPatch, resolveTier,
 } from '../../../../packages/domain/src/loyalty.js';
 import { maskEmail } from '../../../../packages/domain/src/orders.js';
@@ -333,4 +333,54 @@ export async function sweepExpiredPointsInTx(tx: Tx, memberId: string, now: Date
   }
   await tx.pointAccount.update({ where: { id: account.id }, data: { balance, updatedAt: now, version: { increment: 1 } } });
   return due.reduce((sum, part) => sum + part.points, 0);
+}
+
+/**
+ * 下单扣积分（在调用方事务内执行）。
+ *
+ * 与发放、到期共用同一把会员级锁：三个动作不可能交错出一个「看起来够扣、实际已过期」的余额。
+ * 幂等键绑订单，重复下单不会重复扣；扣减先清到期，过期的点绝不能拿来抵扣。
+ */
+export async function redeemOrderPointsInTx(tx: Tx, orderId: string, memberId: string,
+  publicOrderNumber: string, points: number, ruleVersion: string, now: Date): Promise<void> {
+  if (points <= 0) return;
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'member-points:' + memberId}))::text`;
+  await sweepExpiredPointsInTx(tx, memberId, now);
+  const key = `order:${orderId}:redeem`;
+  if (await tx.pointLedger.findUnique({ where: { idempotencyKey: key } })) return;
+  const member = await tx.memberProfile.findUnique({ where: { id: memberId } });
+  if (!member || member.status !== 'active') throw new AuthError(403, 'POINTS_MEMBER_UNAVAILABLE');
+  const existing = await tx.pointAccount.findUnique({ where: { memberId } });
+  const account = existing ?? await tx.pointAccount.create({ data: { memberId, createdAt: now, updatedAt: now } });
+  // applyDelta 会挡住余额不足；这里不再单独查余额，避免锁内多读一次仍可能被并发绕过。
+  const balance = applyDelta(account.balance, -points);
+  await tx.pointAccount.update({ where: { id: account.id }, data: { balance, updatedAt: now, version: { increment: 1 } } });
+  await tx.pointLedger.create({ data: { id: randomUUID(), memberId, deltaPoints: -points, balanceAfter: balance,
+    entryType: 'redeem', sourceType: 'order', sourceRef: publicOrderNumber, reasonCode: 'order_points_used',
+    ruleVersion: ruleVersion || LOYALTY_REDEEM_RULE_VERSION, idempotencyKey: key, createdAt: now } });
+}
+
+/**
+ * 取消或整单退款时补回实扣点数（在调用方事务内执行）。
+ *
+ * 补回是一笔新的追加流水，不改写原扣减行；幂等键绑订单，取消与退款同时发生也只补一次。
+ * 补偿积分不设到期：顾客等了很久才拿到退款，不该因为原发放早已到期而拿不回点数。
+ */
+export async function restoreOrderPointsInTx(tx: Tx, orderId: string, now: Date,
+  reasonCode = 'order_refunded'): Promise<void> {
+  const order = await tx.shopOrder.findUnique({ where: { id: orderId } });
+  if (!order || order.pointsRedeemed <= 0) return;
+  const link = await tx.orderMemberLink.findFirst({ where: { orderId }, orderBy: { linkedAt: 'asc' } });
+  const memberId = order.pointsMemberId ?? link?.memberId;
+  if (!memberId) return;
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'member-points:' + memberId}))::text`;
+  const key = `order:${orderId}:points_refund`;
+  if (await tx.pointLedger.findUnique({ where: { idempotencyKey: key } })) return;
+  const existing = await tx.pointAccount.findUnique({ where: { memberId } });
+  const account = existing ?? await tx.pointAccount.create({ data: { memberId, createdAt: now, updatedAt: now } });
+  const balance = applyDelta(account.balance, order.pointsRedeemed);
+  await tx.pointAccount.update({ where: { id: account.id }, data: { balance, updatedAt: now, version: { increment: 1 } } });
+  await tx.pointLedger.create({ data: { id: randomUUID(), memberId, deltaPoints: order.pointsRedeemed, balanceAfter: balance,
+    entryType: 'reversal', sourceType: 'order', sourceRef: order.publicOrderNumber, reasonCode,
+    ruleVersion: order.pointsRuleVersion ?? LOYALTY_REDEEM_RULE_VERSION, idempotencyKey: key, createdAt: now } });
 }
