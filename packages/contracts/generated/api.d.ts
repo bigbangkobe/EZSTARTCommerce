@@ -4398,6 +4398,10 @@ export interface components {
             data: components["schemas"]["AdminCoupon"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        CouponBatchEnvelope: {
+            data: components["schemas"]["CouponBatch"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         CouponListEnvelope: {
             data: {
                 items: components["schemas"]["AdminCoupon"][];
@@ -4452,7 +4456,7 @@ export interface components {
             perCustomerLimit?: number | null;
             eligibleProductIds?: string[];
             eligibleCategoryIds?: string[];
-            /** @description Member-tier restriction. Rejected while no member directory exists (M10). */
+            /** @description Member-tier restriction. Tiers must exist and be active; only members holding an allowed tier may redeem. */
             memberTierIds?: string[];
             /**
              * @description restore returns the coupon quota through a new return record once the order is fully refunded; it never rewrites the original usage row.
@@ -4483,6 +4487,28 @@ export interface components {
         };
         CouponBatchIssueRequest: {
             confirmedRecipientCount: number;
+        };
+        CouponBatch: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            couponId: string;
+            /** @enum {string} */
+            channel: "account_only" | "email" | "sms";
+            recipientCount: number;
+            recipientMemberIds: string[];
+            /** @enum {string} */
+            status: "pending" | "issued";
+            confirmedRecipientCount?: number | null;
+            /** Format: uuid */
+            templateId?: string | null;
+            idempotencyKey: string;
+            /** Format: uuid */
+            createdBy?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            issuedAt?: string | null;
         };
         InventoryAdjustmentRequest: {
             /** Format: uuid */
@@ -5247,6 +5273,17 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["CouponEnvelope"];
+            };
+        };
+        /** @description Coupon issue batch with frozen recipient count and status */
+        CouponBatchSuccess: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CouponBatchEnvelope"];
             };
         };
         /** @description Coupon rule page */
@@ -9055,7 +9092,7 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["Created"];
+            201: components["responses"]["CouponBatchSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
@@ -9080,7 +9117,7 @@ export interface operations {
             };
         };
         responses: {
-            202: components["responses"]["Accepted"];
+            202: components["responses"]["CouponBatchSuccess"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

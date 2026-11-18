@@ -1,9 +1,11 @@
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import type { Contact } from '../../../../packages/domain/src/checkout.js';
+import { memberHmac } from '../../../../packages/domain/src/members.js';
 import {
-  allocateDiscount, assertCouponUsable, assertMinSubtotal, assertUsageLimits, couponDiscount, couponSnapshot,
-  eligibleLines, maskCouponCode, mergeCouponPatch, normalizeCoupon, PromotionRuleError,
+  allocateDiscount, assertBatchRecipientCount, assertCouponUsable, assertMemberTierEligible, assertMinSubtotal,
+  assertUsageLimits, couponDiscount, couponSnapshot, eligibleLines, maskCouponCode, memberLimitMaterial,
+  mergeCouponPatch, normalizeBatchIssue, normalizeCoupon, normalizeCouponBatch, PromotionRuleError,
   type CouponLine, type CouponRule,
 } from '../../../../packages/domain/src/promotions.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
@@ -15,7 +17,8 @@ type RedemptionRow = Prisma.CouponRedemptionGetPayload<{ include: { order: true 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RULE_CODES = new Set(['COUPON_NOT_FOUND', 'COUPON_DISABLED', 'COUPON_NOT_STARTED', 'COUPON_EXPIRED',
   'COUPON_CURRENCY_MISMATCH', 'COUPON_MIN_SUBTOTAL_NOT_MET', 'COUPON_NOT_APPLICABLE', 'COUPON_LIMIT_REACHED',
-  'COUPON_CUSTOMER_LIMIT_REACHED', 'COUPON_MEMBER_ONLY', 'COUPON_CHANGED', 'STATE_CONFLICT']);
+  'COUPON_CUSTOMER_LIMIT_REACHED', 'COUPON_MEMBER_ONLY', 'COUPON_CHANGED', 'STATE_CONFLICT',
+  'MEMBER_TIER_UNKNOWN', 'MEMBER_TIER_RETIRED', 'BATCH_RECIPIENT_COUNT_CHANGED']);
 
 export interface CouponFilters { q?: string | null; status?: string | null }
 
@@ -25,6 +28,8 @@ export interface PricedCoupon {
   coupon: CouponRow; couponId: string; couponCode: string; discountMinor: number;
   lineDiscounts: Map<string, number>; summary: { codeMasked: string; discountMinor: number };
   snapshot: ReturnType<typeof couponSnapshot>; ruleVersion: string;
+  /** 报价时冻结的顾客限额键；下单原样沿用，保证「谁占的额度」不被换主体绕过。 */
+  customerKey: string;
 }
 
 /**
@@ -77,12 +82,24 @@ export class PromotionsService {
    * 访客限额键：实例密钥 HMAC(规范化邮箱或电话)。
    * 邮箱按小写、电话只留数字与开头 +，避免同一顾客因写法不同绕过“每人一次”。
    */
-  customerKey(contact: Contact): string {
+  private guestCustomerKey(contact: Contact): string {
     const material = contact.email !== null
       ? `email:${contact.email.trim().toLowerCase()}`
       : `phone:${(contact.phone ?? '').replace(/[^\d+]/g, '')}`;
     return createHmac('sha256', this.identity.config.encryptionKey)
       .update(`${this.identity.config.instanceId}:coupon:${material}`).digest('hex');
+  }
+
+  /**
+   * 顾客限额键：登录会员走不可逆 memberId 摘要（跨邮箱/改电话仍是同一人），
+   * 访客回退到联系方式 HMAC。两者形状一致（64 位十六进制），可共存于同一列。
+   * 由下单链路在报价时调用一次并冻结到报价行，之后不再重算。
+   */
+  customerKey(contact: Contact, memberId: string | null): string {
+    if (memberId !== null) {
+      return memberHmac(this.identity.config.encryptionKey, memberLimitMaterial(this.identity.config.instanceId, memberId));
+    }
+    return this.guestCustomerKey(contact);
   }
 
   private async usage(tx: Tx, couponId: string, customerKey: string | null = null) {
@@ -152,16 +169,26 @@ export class PromotionsService {
     return this.guarded(() => this.identity.withPermission(supplied, csrf, 'coupons.manage', async (tx, actor, _s, now) => {
       const currency = await this.baseCurrency(tx);
       const input = this.rule(() => normalizeCoupon(body, currency));
-      this.assertTiers(input);
+      await this.assertTiers(tx, input);
       const row = await tx.coupon.create({ data: { ...input, createdBy: actor.id, createdAt: now, updatedAt: now } });
       await this.identity.recordAudit(tx, ctx, actor.id, 'coupon.created', row.id, 'success', row.code);
       return this.view(row, await this.usage(tx, row.id));
     }));
   }
 
-  /** 会员专属券依赖 M10 会员目录；本实例还没有会员，宁可拒绝也不创建一张永远用不了的券。 */
-  private assertTiers(input: { memberTierIds: string[] }) {
-    if (input.memberTierIds.length) throw new AuthError(422, 'MEMBER_TIERS_UNAVAILABLE');
+  /**
+   * 会员专属券：等级必须真实存在且处于 active。退役等级不能分配给新券，
+   * 否则会建出一张永远无法被满足的资格条件。空数组表示公开券，不做校验。
+   */
+  private async assertTiers(tx: Tx, input: { memberTierIds: string[] }) {
+    if (!input.memberTierIds.length) return;
+    const rows = await tx.membershipTier.findMany({ where: { id: { in: input.memberTierIds } } });
+    const byId = new Map(rows.map(row => [row.id, row]));
+    for (const id of input.memberTierIds) {
+      const row = byId.get(id);
+      if (!row) throw new AuthError(422, 'MEMBER_TIER_UNKNOWN');
+      if (row.status !== 'active') throw new AuthError(422, 'MEMBER_TIER_RETIRED');
+    }
   }
 
   async update(supplied: string, csrf: string | null, id: string, expectedVersion: number,
@@ -173,7 +200,7 @@ export class PromotionsService {
       if (!row) throw new AuthError(404, 'NOT_FOUND');
       if (row.version !== expectedVersion) throw new AuthError(409, 'VERSION_CONFLICT');
       const input = this.rule(() => mergeCouponPatch(this.ruleOf(row), body));
-      this.assertTiers(input);
+      await this.assertTiers(tx, input);
       await tx.coupon.update({ where: { id }, data: { ...input, updatedAt: now, version: { increment: 1 } } });
       await this.identity.recordAudit(tx, ctx, actor.id, 'coupon.updated', id, 'success', input.code);
       const updated = await tx.coupon.findUniqueOrThrow({ where: { id } });
@@ -231,12 +258,13 @@ export class PromotionsService {
    * 报价响应只暴露 codeMasked 与折扣金额。
    */
   async priceQuote(tx: Tx, input: { code: string | null; currency: string; contact: Contact;
-    lines: readonly QuoteCouponLine[]; now: Date }): Promise<PricedCoupon | null> {
+    lines: readonly QuoteCouponLine[]; now: Date; memberId?: string | null; memberTierId?: string | null }): Promise<PricedCoupon | null> {
     if (input.code === null) return null;
     const row = await tx.coupon.findUnique({ where: { code: input.code } });
     if (!row) throw new AuthError(409, 'COUPON_NOT_FOUND');
     const rule = this.ruleOf(row);
-    if (rule.memberTierIds.length) throw new AuthError(409, 'COUPON_MEMBER_ONLY');
+    // 会员专属券：校验当前顾客等级是否命中；访客或无等级会员用 null，专属券会明确拒绝。
+    this.rule(() => assertMemberTierEligible(rule, input.memberTierId ?? null));
     this.rule(() => assertCouponUsable(rule, input.now, input.currency));
     const subtotal = input.lines.reduce((sum, line) => sum + line.amountMinor, 0);
     this.rule(() => assertMinSubtotal(rule, subtotal));
@@ -245,7 +273,7 @@ export class PromotionsService {
     const eligibleSubtotal = eligible.reduce((sum, line) => sum + line.amountMinor, 0);
     const discountMinor = this.rule(() => couponDiscount(rule, eligibleSubtotal));
     if (discountMinor < 1) throw new AuthError(409, 'COUPON_NOT_APPLICABLE');
-    const customerKey = this.customerKey(input.contact);
+    const customerKey = this.customerKey(input.contact, input.memberId ?? null);
     const totalUsage = await this.usage(tx, row.id);
     const customerUsage = await this.usage(tx, row.id, customerKey);
     this.rule(() => assertUsageLimits(row, totalUsage.usedCount, customerUsage.usedCount));
@@ -255,7 +283,19 @@ export class PromotionsService {
     return { coupon: row, couponId: row.id, couponCode: row.code, discountMinor, lineDiscounts,
       summary: { codeMasked: maskCouponCode(row.code), discountMinor },
       snapshot: couponSnapshot({ ...rule, id: row.id, version: row.version }, discountMinor),
-      ruleVersion: `coupon:${row.id}:v${row.version}` };
+      ruleVersion: `coupon:${row.id}:v${row.version}`, customerKey };
+  }
+
+  /**
+   * 下单时对会员专属券的资格复核。报价时命中等级、下单时会话失效或等级被改，
+   * 都会让 tierId 落空或与券要求不符，从而拒绝——不能沿用已经不属于该顾客的折扣。
+   */
+  async assertRedemptionEligible(tx: Tx, row: CouponRow, tierId: string | null) {
+    if (!row.memberTierIds.length) return;
+    const tiers = await tx.membershipTier.findMany({ where: { id: { in: row.memberTierIds } } });
+    const candidates = tiers.filter(tier => tier.status === 'active').map(tier => tier.id);
+    // 只把仍为 active 的等级当作有效资格；退役等级不再授予新折扣。
+    this.rule(() => assertMemberTierEligible({ memberTierIds: candidates }, tierId));
   }
 
   /**
@@ -287,8 +327,71 @@ export class PromotionsService {
   }
 
   /**
-   * 批量发放依赖会员目录（M10）。本实例还没有会员，创建与执行都明确拒绝，
-   * 而不是建一个空批次让人以为已经发出去了。
+   * 批量发放（M11 解锁，依赖 M10 会员目录）。建批只登记意图并计算冻结收件人数，
+   * 真正发放必须再走 issue 复核人数。名单与筛选都解析成具体的会员 id 列表。
    */
-  unavailableBatch() { throw new AuthError(422, 'MEMBER_AUDIENCE_UNAVAILABLE'); }
+  async createBatch(supplied: string, csrf: string | null, body: Record<string, unknown>, ctx: RequestContext) {
+    return this.guarded(() => this.identity.withPermission(supplied, csrf, 'coupons.issue', async (tx, actor, _s, now) => {
+      const input = this.rule(() => normalizeCouponBatch(body));
+      const coupon = await tx.coupon.findUnique({ where: { id: input.couponId } });
+      if (!coupon) throw new AuthError(404, 'NOT_FOUND');
+      const memberIds = await this.resolveRecipients(tx, input);
+      // 建批端契约不接收幂等键：批次本身即一次性管理对象，用自身 id 派生唯一键即可。
+      const batchId = randomUUID();
+      const row = await tx.couponBatch.create({ data: {
+        id: batchId, couponId: input.couponId, channel: input.channel,
+        recipientMemberIds: memberIds,
+        ...(input.recipientFilter ? { recipientFilter: input.recipientFilter as Prisma.InputJsonValue } : {}),
+        recipientCount: memberIds.length, status: 'pending', templateId: input.templateId,
+        idempotencyKey: `batch:${batchId}`, createdBy: actor.id, createdAt: now, updatedAt: now,
+      } });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'coupon.batch.created', row.id, 'success',
+        `${coupon.code}:${memberIds.length}`);
+      return this.batchView(row);
+    }));
+  }
+
+  /** 名单是显式 id，逐个校验存在；筛选按等级取 active 会员。返回去重后的具体 id 列表。 */
+  private async resolveRecipients(tx: Tx, input: ReturnType<typeof normalizeCouponBatch>): Promise<string[]> {
+    if (input.recipientMemberIds.length) {
+      const rows = await tx.memberProfile.findMany({ where: { id: { in: input.recipientMemberIds } } });
+      if (rows.length !== input.recipientMemberIds.length) throw new AuthError(422, 'BATCH_MEMBER_UNKNOWN');
+      return [...input.recipientMemberIds];
+    }
+    const tierIds = (input.recipientFilter as { memberTierIds: string[] }).memberTierIds;
+    const rows = await tx.memberProfile.findMany({ where: { status: 'active', tierId: { in: tierIds } } });
+    return rows.map(row => row.id);
+  }
+
+  /**
+   * 发放：用建批时冻结的人数复核，确认数不一致要求重建批次（不就地改名单）。
+   * 幂等键保证同一批次只发放一次；重复发放返回原结果，不做第二次写入或审计。
+   */
+  async issueBatch(supplied: string, csrf: string | null, id: string, idempotencyKey: string | undefined,
+    body: Record<string, unknown>, ctx: RequestContext) {
+    if (!UUID.test(id)) throw new AuthError(422, 'VALIDATION_ERROR');
+    const key = this.key(idempotencyKey);
+    const input = this.rule(() => normalizeBatchIssue(body));
+    return this.guarded(() => this.identity.withPermission(supplied, csrf, 'coupons.issue', async (tx, actor, _s, now) => {
+      await this.lock(tx, `coupon-batch:${id}`);
+      const row = await tx.couponBatch.findUnique({ where: { id } });
+      if (!row) throw new AuthError(404, 'NOT_FOUND');
+      if (row.status === 'issued') return this.batchView(row);
+      this.rule(() => assertBatchRecipientCount(row.recipientCount, input.confirmedRecipientCount));
+      await tx.couponBatch.update({ where: { id }, data: { status: 'issued', confirmedRecipientCount: input.confirmedRecipientCount,
+        issuedAt: now, updatedAt: now } });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'coupon.batch.issued', id, 'success',
+        `${row.recipientCount}:${row.channel}`);
+      return this.batchView(await tx.couponBatch.findUniqueOrThrow({ where: { id } }));
+    }));
+  }
+
+  private batchView(row: Prisma.CouponBatchGetPayload<{}>) {
+    return { id: row.id, couponId: row.couponId, channel: row.channel,
+      recipientCount: row.recipientCount, recipientMemberIds: row.recipientMemberIds,
+      status: row.status, confirmedRecipientCount: row.confirmedRecipientCount,
+      templateId: row.templateId, idempotencyKey: row.idempotencyKey,
+      createdBy: row.createdBy ?? null, createdAt: row.createdAt.toISOString(),
+      issuedAt: row.issuedAt?.toISOString() ?? null };
+  }
 }

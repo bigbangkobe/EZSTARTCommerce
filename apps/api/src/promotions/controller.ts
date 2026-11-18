@@ -9,7 +9,8 @@ import { PromotionsService } from './service.js';
  * 优惠券后台（M11）。
  *
  * 读要 coupons.read；建、改、停用要 coupons.manage + CSRF + Origin；
- * 批量发放要 coupons.issue，但因为实例还没有会员目录（M10），创建与执行都会明确拒绝。
+ * 批量发放要 coupons.issue + CSRF + Origin + 发放幂等键，创建后须复核人数再确认发放。
+ * 会员专属券的等级资格在报价时校验，顾客限额在会员场景走 memberId 摘要。
  */
 @Controller('admin')
 export class PromotionsController extends ManagementHttp {
@@ -70,8 +71,18 @@ export class PromotionsController extends ManagementHttp {
   }
 
   @Post('coupon-batches')
-  createBatch() { return this.promotionsService().unavailableBatch(); }
+  async createBatch(@Body() body: Record<string, unknown>, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    await this.write(request, 'CouponBatchRequest', body);
+    this.send(response, request, 201, await this.promotionsService().createBatch(cookie(request, 'ez_admin_session'),
+      header(request, 'x-csrf-token'), body, this.context(request)));
+  }
 
   @Post('coupon-batches/:id/issue')
-  issueBatch() { return this.promotionsService().unavailableBatch(); }
+  async issueBatch(@Param('id') id: string, @Body() body: Record<string, unknown>, @Req() request: ApiRequest,
+    @Res() response: ServerResponse) {
+    await this.write(request, 'CouponBatchIssueRequest', body);
+    const key = request.headers['idempotency-key'];
+    this.send(response, request, 202, await this.promotionsService().issueBatch(cookie(request, 'ez_admin_session'),
+      header(request, 'x-csrf-token'), id, typeof key === 'string' ? key : undefined, body, this.context(request)));
+  }
 }

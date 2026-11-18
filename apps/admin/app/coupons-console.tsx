@@ -12,6 +12,9 @@ type Coupon = { id: string; code: string; codeMasked: string; status: string; di
 type Redemption = { id: string; orderId: string; publicOrderNumber: string; status: string;
   discountMinor: number; currency: string; customerRef: string | null; reservedAt: string;
   redeemedAt: string | null; releasedAt: string | null; expiresAt: string | null; ruleVersion: number | null };
+type Tier = { id: string; code: string; nameByLocale: Record<string, string>; rank: number; status: string };
+type Batch = { id: string; couponId: string; channel: string; recipientCount: number; recipientMemberIds: string[];
+  status: 'pending' | 'issued'; confirmedRecipientCount: number | null; issuedAt: string | null };
 
 const STATUS_LABEL: Record<string, string> = { active: '启用', disabled: '停用' };
 const REDEMPTION_LABEL: Record<string, string> = { reserved: '已预占', redeemed: '已核销',
@@ -45,8 +48,11 @@ export function CouponsConsole() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [tiers, setTiers] = useState<Tier[]>([]);
+  const [batch, setBatch] = useState<Batch | null>(null);
   const canRead = permissions.includes('coupons.read');
   const canManage = permissions.includes('coupons.manage');
+  const canIssue = permissions.includes('coupons.issue');
   const selected = rows.find(row => row.id === selectedId) ?? null;
 
   async function request<T>(path: string, method = 'GET', body?: object, version?: number): Promise<T> {
@@ -65,10 +71,11 @@ export function CouponsConsole() {
         : code === 'VERSION_CONFLICT' ? '规则刚被其他人改过，请刷新后重试。'
           : code === 'IDEMPOTENCY_CONFLICT' ? '同一幂等键已用于不同请求。'
             : '当前状态不允许该操作，请刷新后确认。');
-      if (response.status === 422) throw new Error(code === 'MEMBER_TIERS_UNAVAILABLE'
-        ? '会员专属券需要会员目录（M10），当前实例还没有会员体系。'
-        : code === 'MEMBER_AUDIENCE_UNAVAILABLE' ? '批量发放需要会员目录（M10），当前实例还没有会员体系。'
-          : '填写内容不符合要求：固定金额上限 1,000,000（最小单位），百分比 1–100%，结束时间必须晚于开始时间。');
+      if (response.status === 422) throw new Error(code === 'MEMBER_TIER_UNKNOWN' ? '所选会员等级不存在，请刷新后重选。'
+        : code === 'MEMBER_TIER_RETIRED' ? '所选等级已退役，不能用于新券。'
+          : code === 'BATCH_MEMBER_UNKNOWN' ? '名单里有会员不存在，请核对会员 ID。'
+            : code === 'BATCH_RECIPIENT_COUNT_CHANGED' ? '收件人数与建批时不一致，请重新建批后再发放。'
+              : '填写内容不符合要求：固定金额上限 1,000,000（最小单位），百分比 1–100%，结束时间必须晚于开始时间。');
       throw new Error('操作未完成，请稍后重试。');
     }
     return ((await response.json()) as { data: T }).data;
@@ -95,6 +102,11 @@ export function CouponsConsole() {
   }
 
   useEffect(() => { reload().catch(reason => setError(reason instanceof Error ? reason.message : '加载失败。')); }, []);
+
+  // 会员等级只用于创建专属券时的勾选；读不到就留空，不阻断券管理。
+  useEffect(() => {
+    request<{ tiers: Tier[] }>('loyalty').then(value => setTiers(Array.isArray(value?.tiers) ? value.tiers : [])).catch(() => setTiers([]));
+  }, []);
 
   async function run(action: () => Promise<string>) {
     if (busy) return;
@@ -129,6 +141,7 @@ export function CouponsConsole() {
         ...(totalLimit ? { totalLimit: Math.round(Number(totalLimit)) } : {}),
         ...(perCustomer ? { perCustomerLimit: Math.round(Number(perCustomer)) } : {}),
         refundPolicy: String(values.get('refundPolicy') ?? 'none'),
+        memberTierIds: values.getAll('memberTiers').map(String),
       });
       form.reset();
       return `已创建优惠券 ${created.code}（${describeValue(created)}）。`;
@@ -149,6 +162,34 @@ export function CouponsConsole() {
   function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void run(async () => '已按当前条件筛选。');
+  }
+
+  function createBatch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    const ids = String(values.get('recipientMemberIds') ?? '').split(/[\s,，]+/).map(s => s.trim()).filter(Boolean);
+    if (!ids.length) { setError('请填写至少一位会员 ID。'); return; }
+    const couponId = String(values.get('couponId') ?? '') || selected?.id || '';
+    if (!couponId) { setError('请选择要发放的优惠券。'); return; }
+    void run(async () => {
+      const created = await request<Batch>('coupon-batches', 'POST', {
+        couponId, channel: String(values.get('channel') ?? 'account_only'), recipientMemberIds: ids,
+      });
+      setBatch(created);
+      return `已建批，冻结收件人数 ${created.recipientCount} 位；请核对后确认发放。`;
+    });
+  }
+
+  function issueBatch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!batch) return;
+    const count = Number(new FormData(event.currentTarget).get('confirmedRecipientCount'));
+    if (!Number.isInteger(count) || count < 0) { setError('请填写正确的确认人数。'); return; }
+    void run(async () => {
+      const issued = await request<Batch>(`coupon-batches/${batch.id}/issue`, 'POST', { confirmedRecipientCount: count });
+      setBatch(issued);
+      return `已确认发放 ${issued.confirmedRecipientCount} 位会员，批次状态：${issued.status}。`;
+    });
   }
 
   if (!canRead && permissions.length > 0) {
@@ -212,6 +253,12 @@ export function CouponsConsole() {
           <option value="none">不返还额度</option>
           <option value="restore">返还额度（生成返还记录，不改写原核销）</option>
         </select></label>
+        <fieldset><legend>会员等级（可多选，留空 = 全场通用）</legend>
+          {tiers.length === 0 ? <small>没有可读取的会员等级（需要 members.manage 权限），可先创建公开券。</small>
+            : tiers.filter(tier => tier.status === 'active').map(tier => <label key={tier.id}>
+              <input type="checkbox" name="memberTiers" value={tier.id} /> {tier.nameByLocale['zh-HK'] ?? tier.nameByLocale['zh-CN'] ?? tier.code}
+            </label>)}
+        </fieldset>
         <button disabled={busy}>创建</button>
       </form>
     </article> : <p><small>没有 coupons.manage 权限，只能查看优惠券。</small></p>}
@@ -237,6 +284,33 @@ export function CouponsConsole() {
           <label>停用原因<input name="reason" maxLength={200} required placeholder="活动提前结束 / 券码外泄" /></label>
           <button disabled={busy}>停用这张券</button>
         </form>
+      </article>}
+    </section>}
+
+    {canIssue && <section>
+      <h2>批量发放</h2>
+      <p><small>先建批冻结收件人数，再按人数复核确认发放。名单里的会员 ID 可从「会员与积分」页复制。</small></p>
+      <form onSubmit={createBatch}>
+        <label>优惠券<select name="couponId" defaultValue={selectedId}>
+          {rows.map(row => <option key={row.id} value={row.id}>{row.code}</option>)}
+        </select></label>
+        <label>发放渠道<select name="channel" defaultValue="account_only">
+          <option value="account_only">仅入账户</option>
+          <option value="email">邮件通知</option>
+          <option value="sms">短信通知</option>
+        </select></label>
+        <label>会员 ID 列表<small>多个用逗号或空白分隔</small>
+          <input name="recipientMemberIds" placeholder="粘贴会员 ID，逗号分隔" /></label>
+        <button disabled={busy}>建立发放批次</button>
+      </form>
+      {batch && <article>
+        <h3>批次 {batch.id.slice(0, 8)} · {batch.status === 'issued' ? '已发放' : '待确认'}</h3>
+        <p><small>冻结收件人数 {batch.recipientCount} · 渠道 {batch.channel}
+          {batch.issuedAt ? ` · 发放于 ${shortDate(batch.issuedAt)}` : ''}</small></p>
+        {batch.status === 'pending' ? <form onSubmit={issueBatch}>
+          <label>确认发放人数<input name="confirmedRecipientCount" type="number" min={0} defaultValue={batch.recipientCount} required /></label>
+          <button disabled={busy}>确认发放</button>
+        </form> : <p className="notice">该批次已发放，重复确认不会再次写入。</p>}
       </article>}
     </section>}
 

@@ -623,6 +623,32 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(errors("CouponBatchIssueRequest", dict(issue, confirmedRecipientCount=-1)))
         # 批量发放确认数不能由“顺便带上收件人列表”替代：收件人只能在建批时声明。
         self.assertTrue(errors("CouponBatchIssueRequest", dict(issue, recipientMemberIds=[UUID])))
+        # 建批响应冻结人数与状态；issued 必须带确认数与发放时间，pending 不能带。
+        batch = {"id": UUID, "couponId": UUID, "channel": "email", "recipientCount": 120,
+                 "recipientMemberIds": [UUID], "status": "pending", "idempotencyKey": "batch:1",
+                 "createdAt": "2026-11-18T00:00:00.000Z"}
+        self.assertEqual([], errors("CouponBatch", batch))
+        issued = dict(batch, status="issued", confirmedRecipientCount=120, issuedAt="2026-11-18T01:00:00.000Z")
+        self.assertEqual([], errors("CouponBatch", issued))
+        envelope = {"data": issued, "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("CouponBatchEnvelope", envelope))
+        self.assertTrue(errors("CouponBatch", dict(batch, status="unknown")))
+        self.assertTrue(errors("CouponBatch", dict(batch, recipientCount=-1)))
+
+    def test_member_only_coupons_and_member_quota_are_typed(self):
+        # 会员专属券的等级限制是 uuid 列表、不可重复；退役/未知等级由服务端拒绝。
+        write = {"code": "VIP-10", "discountType": "percent", "discountValue": 1000,
+                 "validFrom": "2026-11-01T00:00:00.000Z", "validUntil": "2026-12-01T00:00:00.000Z",
+                 "memberTierIds": [UUID]}
+        self.assertEqual([], errors("CouponWriteRequest", write))
+        self.assertTrue(errors("CouponWriteRequest", dict(write, memberTierIds=["not-a-uuid"])))
+        self.assertTrue(errors("CouponWriteRequest", dict(write, memberTierIds=[UUID, UUID])))
+        # 报价请求不接受客户端指定顾客限额键，避免伪造会员主体绕过限额。
+        quote = {"cartId": UUID, "locale": "zh-HK", "marketCode": "HK", "contact": {"email": "a@b.com"},
+                 "shippingAddress": {"countryCode": "HK", "addressLine1": "1 Test Road"}, "shippingMethodId": UUID,
+                 "policyAcceptances": []}
+        self.assertEqual([], errors("CheckoutQuoteRequest", quote))
+        self.assertTrue(errors("CheckoutQuoteRequest", dict(quote, couponCustomerKey="forged")))
 
 
 if __name__ == "__main__":

@@ -167,10 +167,13 @@ export class CheckoutService {
       const method = methods.find(item => item.id === body.shippingMethodId);
       if (!method) throw new AuthError(422, 'VALIDATION_ERROR');
       const now = new Date();
+      // 会员身份只影响「专属券资格与限额主体」：会话失效时降级为访客，不阻断普通报价。
+      const member = couponCode ? await this.optionalMember(tx, memberToken) : null;
       // 优惠码算不出来就明确失败：静默按原价下单比拒绝更糟。
       const priced = await this.promotions.priceQuote(tx, { code: couponCode, currency: cart.currency, contact,
         lines: lines.map(line => ({ key: line.variant.id, productId: line.productId, categoryIds: line.categoryIds,
-          amountMinor: line.lineSubtotalMinor, quantity: line.quantity })), now });
+          amountMinor: line.lineSubtotalMinor, quantity: line.quantity })), now,
+        memberId: member?.id ?? null, memberTierId: member?.tierId ?? null });
       const warnings: string[] = [];
       const discountMinor = priced?.discountMinor ?? 0;
       let points = { points: 0, valueMinor: 0, cappedByAmount: false };
@@ -212,7 +215,8 @@ export class CheckoutService {
         pointsMemberId, pointsRuleVersion,
         couponCode, ...(priced ? { couponId: priced.couponId,
           couponSnapshot: priced.snapshot as unknown as Prisma.InputJsonValue,
-          couponSummary: priced.summary as unknown as Prisma.InputJsonValue } : {}),
+          couponSummary: priced.summary as unknown as Prisma.InputJsonValue,
+          couponCustomerKey: priced.customerKey } : {}),
         ruleVersions: { price: 'catalog.v1', promotion: priced?.ruleVersion ?? 'none',
           shipping: `rate:${rate?.version ?? 1}`, tax: null },
         warnings, policyAcceptances: policyAcceptances as unknown as Prisma.InputJsonValue,
@@ -350,13 +354,19 @@ export class CheckoutService {
           await this.payments.openLedger(tx, created, method.definition, method.row);
           for (const line of quote.lines) await this.reserve(tx, created.id, line, expiresAt);
           if (quote.couponId && couponRow) {
+            // 专属券下单时复核资格：报价后会员会话失效或等级被改，不能沿用专属折扣。
+            const orderMember = await this.optionalMember(tx, memberToken);
+            await this.promotions.assertRedemptionEligible(tx, couponRow, orderMember?.tierId ?? null);
+            // 限额键用报价时冻结的值：换人登录/改联系方式都不能改变额度归属。
+            const frozenKey = quote.couponCustomerKey;
+            if (!frozenKey) throw new AuthError(409, 'COUPON_CHANGED');
             await this.promotions.reserve(tx, { orderId: created.id,
-              customerKey: this.promotions.customerKey(quote.contact as unknown as Contact), now, expiresAt,
+              customerKey: frozenKey, now, expiresAt,
               priced: { coupon: couponRow, couponId: couponRow.id, couponCode: couponRow.code,
                 discountMinor: quote.discountMinor, lineDiscounts: new Map(),
                 summary: { codeMasked: '', discountMinor: quote.discountMinor },
                 snapshot: quote.couponSnapshot as unknown as PricedCoupon['snapshot'],
-                ruleVersion: `coupon:${couponRow.id}:v${couponRow.version}` } });
+                ruleVersion: `coupon:${couponRow.id}:v${couponRow.version}`, customerKey: frozenKey } });
           }
           await tx.checkoutQuote.update({ where: { id: quote.id }, data: { status: 'consumed' } });
           await tx.guestCart.update({ where: { id: cart.id }, data: { status: 'converted' } });
@@ -383,6 +393,18 @@ export class CheckoutService {
       }
     }
     throw new AuthError(409, 'STATE_CONFLICT');
+  }
+
+  /**
+   * 可选会员身份：只用于「专属券资格与限额主体」。会话无效时降级为 null（访客口径），
+   * 不阻断普通报价；会员专属券随后会因等级为空被明确拒绝。
+   */
+  private async optionalMember(tx: Tx, token: string | null): Promise<{ id: string; tierId: string | null } | null> {
+    if (!token) return null;
+    try {
+      const { member } = await resolveMemberSession(tx, token);
+      return { id: member.id, tierId: member.tierId };
+    } catch (error) { if (error instanceof AuthError) return null; throw error; }
   }
 
   /**

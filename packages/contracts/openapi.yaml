@@ -2912,7 +2912,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CouponBatchRequest' }
       responses:
-        '201': { $ref: '#/components/responses/Created' }
+        '201': { $ref: '#/components/responses/CouponBatchSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -2931,7 +2931,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CouponBatchIssueRequest' }
       responses:
-        '202': { $ref: '#/components/responses/Accepted' }
+        '202': { $ref: '#/components/responses/CouponBatchSuccess' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3976,6 +3976,15 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/CouponEnvelope' }
+    CouponBatchSuccess:
+      description: Coupon issue batch with frozen recipient count and status
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CouponBatchEnvelope' }
     CouponListSuccess:
       description: Coupon rule page
       headers:
@@ -7058,6 +7067,13 @@ components:
       properties:
         data: { $ref: '#/components/schemas/AdminCoupon' }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
+    CouponBatchEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/CouponBatch' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     CouponListEnvelope:
       type: object
       additionalProperties: false
@@ -7126,7 +7142,7 @@ components:
         eligibleProductIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
         eligibleCategoryIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
         memberTierIds: { type: array, uniqueItems: true, items: { type: string, format: uuid },
-          description: Member-tier restriction. Rejected while no member directory exists (M10). }
+          description: Member-tier restriction. Tiers must exist and be active; only members holding an allowed tier may redeem. }
         refundPolicy: { type: string, enum: [none, restore], default: none,
           description: restore returns the coupon quota through a new return record once the order is fully refunded; it never rewrites the original usage row. }
         status: { type: string, enum: [active, disabled], default: active }
@@ -7163,6 +7179,23 @@ components:
       required: [confirmedRecipientCount]
       properties:
         confirmedRecipientCount: { type: integer, minimum: 0 }
+    CouponBatch:
+      type: object
+      additionalProperties: false
+      required: [id, couponId, channel, recipientCount, recipientMemberIds, status, idempotencyKey, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        couponId: { type: string, format: uuid }
+        channel: { type: string, enum: [account_only, email, sms] }
+        recipientCount: { type: integer, minimum: 0 }
+        recipientMemberIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
+        status: { type: string, enum: [pending, issued] }
+        confirmedRecipientCount: { type: [integer, 'null'], minimum: 0 }
+        templateId: { type: [string, 'null'], format: uuid }
+        idempotencyKey: { type: string, minLength: 1 }
+        createdBy: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+        issuedAt: { type: [string, 'null'], format: date-time }
     InventoryAdjustmentRequest:
       type: object
       additionalProperties: false

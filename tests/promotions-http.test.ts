@@ -8,6 +8,7 @@ import { IdentityService } from '../apps/api/src/identity/service.js';
 import { csrf } from '../apps/api/src/identity/crypto.js';
 import { connectDatabase } from '../packages/database/src/client.js';
 import { digest } from '../packages/domain/src/identity.js';
+import { memberNumber, sessionTokenDigest } from '../packages/domain/src/members.js';
 import { testPostgres } from './helpers/postgres.js';
 
 test('promotions: coupon rules, atomic quota, redemption lifecycle and refund return', { timeout: 900_000 },
@@ -94,6 +95,22 @@ test('promotions: coupon rules, atomic quota, redemption lifecycle and refund re
     minSubtotalMinor: 5_000, totalLimit: 100, perCustomerLimit: 1, eligibleProductIds: [], eligibleCategoryIds: [],
     memberTierIds: [], refundPolicy: 'restore', status: 'active', ...overrides });
 
+  // 造一个已登录会员并挂上指定等级；返回会话 token，供报价接口带 ez_member_session。
+  const memberWithTier = async (tierId: string | null, email: string) => {
+    const customer = await db.customer.create({ data: { displayName: 'Member', emailNormalized: email } });
+    const member = await db.memberProfile.create({ data: { customerId: customer.id,
+      memberNo: memberNumber('20261118', randomUUID().replaceAll('-', '').slice(0, 6).toUpperCase()),
+      tierId, consentRef: 'consent-v1', joinedAt: new Date(), createdAt: new Date(), updatedAt: new Date() } });
+    const token = randomBytes(32).toString('base64url');
+    await db.memberSession.create({ data: { memberId: member.id, tokenDigest: sessionTokenDigest(token),
+      expiresAt: new Date(Date.now() + 3_600_000), createdAt: new Date(), updatedAt: new Date() } });
+    return { token, memberId: member.id };
+  };
+  let tierRank = 0;
+  const tier = async (code: string, status = 'active') => (await db.membershipTier.create({ data: {
+    code, nameByLocale: { en: code }, rank: ++tierRank, status,
+    createdAt: new Date(), updatedAt: new Date() } })).id;
+
   try {
     await identity.initialize();
     app = await createApp(identity); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
@@ -159,7 +176,7 @@ test('promotions: coupon rules, atomic quota, redemption lifecycle and refund re
         .status, 422, '结束时间必须晚于开始时间');
       const memberOnly = await manager.call('POST', 'admin/coupons', couponWrite({ memberTierIds: [randomUUID()] }));
       assert.equal(memberOnly.status, 422);
-      assert.equal(memberOnly.body.error.code, 'MEMBER_TIERS_UNAVAILABLE', '没有会员目录就不建会员专属券');
+      assert.equal(memberOnly.body.error.code, 'MEMBER_TIER_UNKNOWN', '专属券的等级必须真实存在');
 
       const list = await reader.call('GET', 'admin/coupons?q=fixed', undefined, 'CouponListEnvelope');
       assert.equal(list.status, 200);
@@ -482,15 +499,97 @@ test('promotions: coupon rules, atomic quota, redemption lifecycle and refund re
       assert.equal((await reader.call('GET', `admin/coupons/${randomUUID()}/redemptions`)).status, 404);
     });
 
-    await t.test('batch issuing is refused while there is no member directory', async () => {
+    await t.test('member-only coupons require a matching tier; guests and mismatched tiers are refused', async () => {
+      await resetLimits();
+      const suffix = () => randomUUID().replaceAll('-', '').slice(0, 6).toUpperCase();
+      const allowed = await tier(`VIP${suffix()}`);
+      const other = await tier(`OTH${suffix()}`);
+      const manager = await sessionFor(['coupons.manage']);
+      const created = await manager.call('POST', 'admin/coupons', couponWrite({ memberTierIds: [allowed] }), 'SuccessEnvelope');
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const exclusiveCode = created.body.data.code;
+      // 不存在的等级 / 退役等级拒绝建券。
+      const unknown = await manager.call('POST', 'admin/coupons', couponWrite({ memberTierIds: [randomUUID()] }));
+      assert.equal(unknown.status, 422); assert.equal(unknown.body.error.code, 'MEMBER_TIER_UNKNOWN');
+      const retired = await tier(`RET${suffix()}`, 'retired');
+      const retiredCoupon = await manager.call('POST', 'admin/coupons', couponWrite({ memberTierIds: [retired] }));
+      assert.equal(retiredCoupon.status, 422); assert.equal(retiredCoupon.body.error.code, 'MEMBER_TIER_RETIRED');
+
+      const cart = await newCart();
+      await cartRequest(cart, 'POST', 'storefront/cart/items', { variantId: variantA, quantity: 1 }, 'SuccessEnvelope');
+      // 访客用专属券报价被明确拒绝。
+      const guest = await cartRequest(cart, 'POST', 'storefront/checkout/quote', quoteBody(cart.id, exclusiveCode), 'ErrorEnvelope');
+      assert.equal(guest.status, 409); assert.equal(guest.body.error.code, 'COUPON_MEMBER_ONLY');
+      // 等级不符的会员同样被拒。
+      const wrong = await memberWithTier(other, `wrong-${randomUUID().slice(0, 8)}@example.com`);
+      const wrongQuote = await cartRequest(cart, 'POST', 'storefront/checkout/quote', quoteBody(cart.id, exclusiveCode),
+        'ErrorEnvelope', { Cookie: `ez_guest_cart=${cart.token}; ez_cart_csrf=${cart.csrf}; ez_member_session=${wrong.token}` });
+      assert.equal(wrongQuote.status, 409); assert.equal(wrongQuote.body.error.code, 'COUPON_MEMBER_ONLY');
+      // 命中等级的会员可用。
+      const right = await memberWithTier(allowed, `right-${randomUUID().slice(0, 8)}@example.com`);
+      const rightQuote = await cartRequest(cart, 'POST', 'storefront/checkout/quote', quoteBody(cart.id, exclusiveCode),
+        'SuccessEnvelope', { Cookie: `ez_guest_cart=${cart.token}; ez_cart_csrf=${cart.csrf}; ez_member_session=${right.token}` });
+      assert.equal(rightQuote.status, 200, JSON.stringify(rightQuote.body));
+      assert.ok(rightQuote.body.data.discountMinor > 0);
+    });
+
+    await t.test('member quota follows the member id across different contact emails', async () => {
+      await resetLimits();
+      const manager = await sessionFor(['coupons.manage']);
+      // 每人限用 1 次；两次报价用同一会员、不同联系邮箱。
+      const once = await manager.call('POST', 'admin/coupons', couponWrite({ perCustomerLimit: 1, code: `Q-${randomUUID().slice(0, 8)}` }));
+      assert.equal(once.status, 201);
+      const code = once.body.data.code;
+      const member = await memberWithTier(null, `quota-${randomUUID().slice(0, 8)}@example.com`);
+      const cart = await newCart();
+      await cartRequest(cart, 'POST', 'storefront/cart/items', { variantId: variantA, quantity: 1 }, 'SuccessEnvelope');
+      const cookie = `ez_guest_cart=${cart.token}; ez_cart_csrf=${cart.csrf}; ez_member_session=${member.token}`;
+      // 先用 A 邮箱预占一单并下单，消耗限额。
+      const first = await cartRequest(cart, 'POST', 'storefront/checkout/quote', quoteBody(cart.id, code, 'a@example.com'), 'SuccessEnvelope', { Cookie: cookie });
+      assert.equal(first.status, 200);
+      const key = randomUUID();
+      const placed = await cartRequest(cart, 'POST', 'storefront/checkout/orders', {
+        quoteId: first.body.data.quoteId, confirmedQuoteVersion: first.body.data.version,
+        paymentMethodCode: 'cod' }, 'OrderCreatedEnvelope', { Cookie: cookie, 'Idempotency-Key': key });
+      assert.equal(placed.status, 201, JSON.stringify(placed.body));
+      // 换新购物袋、换联系邮箱，但仍是同一会员：限额键按 memberId，第二次应被拒。
+      const cart2 = await newCart();
+      await cartRequest(cart2, 'POST', 'storefront/cart/items', { variantId: variantA, quantity: 1 }, 'SuccessEnvelope');
+      const cookie2 = `ez_guest_cart=${cart2.token}; ez_cart_csrf=${cart2.csrf}; ez_member_session=${member.token}`;
+      const second = await cartRequest(cart2, 'POST', 'storefront/checkout/quote', quoteBody(cart2.id, code, 'b@example.com'),
+        'ErrorEnvelope', { Cookie: cookie2 });
+      assert.equal(second.status, 409); assert.equal(second.body.error.code, 'COUPON_CUSTOMER_LIMIT_REACHED');
+    });
+
+    await t.test('batch creation freezes recipient count and issuing is idempotent', async () => {
       await resetLimits();
       const issuer = await sessionFor(['coupons.issue']);
-      const batch = await issuer.call('POST', 'admin/coupon-batches', { couponId: fixedCouponId, channel: 'email' });
-      assert.equal(batch.status, 422);
-      assert.equal(batch.body.error.code, 'MEMBER_AUDIENCE_UNAVAILABLE');
-      const issue = await issuer.call('POST', `admin/coupon-batches/${randomUUID()}/issue`, { confirmedRecipientCount: 0 });
-      assert.equal(issue.status, 422);
-      assert.equal(issue.body.error.code, 'MEMBER_AUDIENCE_UNAVAILABLE');
+      const a = await memberWithTier(null, `batch-a-${randomUUID().slice(0, 6)}@example.com`);
+      const b = await memberWithTier(null, `batch-b-${randomUUID().slice(0, 6)}@example.com`);
+      const unknownId = randomUUID();
+      // 名单含不存在的会员 -> 422。
+      const bad = await issuer.call('POST', 'admin/coupon-batches',
+        { couponId: fixedCouponId, channel: 'account_only', recipientMemberIds: [a.memberId, unknownId] });
+      assert.equal(bad.status, 422); assert.equal(bad.body.error.code, 'BATCH_MEMBER_UNKNOWN');
+      // 正常建批：冻结人数 2。
+      const created = await issuer.call('POST', 'admin/coupon-batches',
+        { couponId: fixedCouponId, channel: 'account_only', recipientMemberIds: [a.memberId, b.memberId] }, 'SuccessEnvelope');
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const batch = created.body.data;
+      assert.equal(batch.status, 'pending'); assert.equal(batch.recipientCount, 2);
+      // 确认数与冻结人数不符 -> 409。
+      const mismatch = await issuer.call('POST', `admin/coupon-batches/${batch.id}/issue`, { confirmedRecipientCount: 1 });
+      assert.equal(mismatch.status, 409); assert.equal(mismatch.body.error.code, 'BATCH_RECIPIENT_COUNT_CHANGED');
+      // 正确人数发放 -> 202 issued；同键重放仍返回 issued，不重复审计。
+      const issueKey = randomUUID();
+      const issued = await issuer.call('POST', `admin/coupon-batches/${batch.id}/issue`, { confirmedRecipientCount: 2 },
+        'SuccessEnvelope', { key: issueKey });
+      assert.equal(issued.status, 202, JSON.stringify(issued.body));
+      assert.equal(issued.body.data.status, 'issued'); assert.equal(issued.body.data.confirmedRecipientCount, 2);
+      const again = await issuer.call('POST', `admin/coupon-batches/${batch.id}/issue`, { confirmedRecipientCount: 2 },
+        'SuccessEnvelope', { key: issueKey });
+      assert.equal(again.status, 202); assert.equal(again.body.data.status, 'issued');
+      assert.equal(await db.couponBatch.count({ where: { id: batch.id } }), 1);
     });
 
     // 兜底断言：子测试没有执行时这里会失败，而不是静默通过。

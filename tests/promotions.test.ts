@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  allocateDiscount, assertCouponUsable, assertMinSubtotal, assertRedemptionTransition, assertUsageLimits,
-  couponDiscount, couponLineEligible, couponSnapshot, couponState, eligibleLines, maskCouponCode,
-  mergeCouponPatch, normalizeCoupon, normalizeCouponCode, PromotionRuleError, MAX_PERCENT_BPS,
+  allocateDiscount, assertBatchRecipientCount, assertCouponUsable, assertMemberTierEligible, assertMinSubtotal,
+  assertRedemptionTransition, assertUsageLimits, couponDiscount, couponLineEligible, couponSnapshot, couponState,
+  eligibleLines, maskCouponCode, memberLimitMaterial, mergeCouponPatch, normalizeBatchIssue, normalizeCoupon,
+  normalizeCouponBatch, normalizeCouponCode, PromotionRuleError, MAX_PERCENT_BPS, MAX_BATCH_RECIPIENTS,
   type CouponRule,
 } from '../packages/domain/src/promotions.js';
 
@@ -187,4 +188,59 @@ test('coupon codes are trimmed, upper-cased and bounded', () => {
   const coupon: CouponRule = normalizeCoupon(write, 'HKD');
   assert.equal(code(() => assertMinSubtotal(coupon, 4_999)), 'COUPON_MIN_SUBTOTAL_NOT_MET');
   assert.doesNotThrow(() => assertMinSubtotal(coupon, 5_000));
+});
+
+const TIER_A = '1a2b3c4d-0000-4222-8333-444455556666';
+const TIER_B = '2a2b3c4d-0000-4222-8333-444455556666';
+const MEMBER = '3a2b3c4d-0000-4222-8333-444455556666';
+const BATCH_COUPON = '4a2b3c4d-0000-4222-8333-444455556666';
+
+test('member-only coupons require the member to currently hold an allowed tier', () => {
+  assert.equal(code(() => assertMemberTierEligible({ memberTierIds: [] }, null)), 'NO_ERROR');
+  assert.equal(code(() => assertMemberTierEligible({ memberTierIds: [] }, TIER_A)), 'NO_ERROR');
+  // 专属券：访客、无等级会员、等级不符会员都拒绝；命中等级才通过。
+  const exclusive = { memberTierIds: [TIER_A, TIER_B] };
+  assert.equal(code(() => assertMemberTierEligible(exclusive, null)), 'COUPON_MEMBER_ONLY');
+  assert.equal(code(() => assertMemberTierEligible(exclusive, '9a2b3c4d-0000-4222-8333-444455556666')), 'COUPON_MEMBER_ONLY');
+  assert.equal(code(() => assertMemberTierEligible(exclusive, TIER_A)), 'NO_ERROR');
+  assert.equal(code(() => assertMemberTierEligible(exclusive, TIER_B)), 'NO_ERROR');
+});
+
+test('member limit key is instance-bound and derives only from the member id', () => {
+  const a = memberLimitMaterial('instance-1', MEMBER);
+  const b = memberLimitMaterial('instance-1', MEMBER);
+  assert.equal(a, b); // 同一会员稳定
+  assert.equal(a, 'instance-1:coupon:member:' + MEMBER);
+  assert.notEqual(a, memberLimitMaterial('instance-2', MEMBER)); // 换实例不同
+  assert.notEqual(a, memberLimitMaterial('instance-1', TIER_A)); // 换会员不同
+  assert.equal(code(() => memberLimitMaterial('', MEMBER)), 'instanceId');
+  assert.equal(code(() => memberLimitMaterial('instance-1', 'not-a-uuid')), 'memberId');
+});
+
+test('batch creation takes exactly one recipient source and freezes the members', () => {
+  const base = { couponId: BATCH_COUPON, channel: 'account_only' };
+  assert.equal(code(() => normalizeCouponBatch({ ...base, recipientMemberIds: [MEMBER] })), 'NO_ERROR');
+  assert.equal(code(() => normalizeCouponBatch({ ...base, recipientFilter: { memberTierIds: [TIER_A] } })), 'NO_ERROR');
+  // 两来源都没有 / 都有，都拒绝。
+  assert.equal(code(() => normalizeCouponBatch(base)), 'recipientSource');
+  assert.equal(code(() => normalizeCouponBatch({ ...base, recipientMemberIds: [MEMBER],
+    recipientFilter: { memberTierIds: [TIER_A] } })), 'recipientSource');
+  // 重复成员直接拒绝（与券范围口径一致）；非法 UUID、非法渠道、筛选夹带未知键都拒绝。
+  assert.equal(code(() => normalizeCouponBatch({ ...base, recipientMemberIds: [MEMBER, MEMBER] })), 'recipientMemberIds');
+  assert.equal(code(() => normalizeCouponBatch({ ...base, recipientMemberIds: ['bad'] })), 'recipientMemberIds');
+  assert.equal(code(() => normalizeCouponBatch({ ...base, channel: 'wechat', recipientMemberIds: [MEMBER] })), 'channel');
+  assert.equal(code(() => normalizeCouponBatch({ ...base, recipientFilter: { memberTierIds: [TIER_A], status: 'active' } })), 'recipientFilter');
+  assert.equal(code(() => normalizeCouponBatch({ ...base, recipientFilter: { memberTierIds: [] } })), 'recipientFilter');
+  assert.equal(code(() => normalizeCouponBatch({ ...base, recipientMemberIds: Array(MAX_BATCH_RECIPIENTS + 1).fill(MEMBER) })), 'recipientMemberIds');
+});
+
+test('batch issue only accepts a confirmed count and rejects a smuggled recipient list', () => {
+  assert.deepEqual(normalizeBatchIssue({ confirmedRecipientCount: 0 }), { confirmedRecipientCount: 0 });
+  assert.equal(code(() => normalizeBatchIssue({})), 'confirmedRecipientCount');
+  assert.equal(code(() => normalizeBatchIssue({ confirmedRecipientCount: -1 })), 'confirmedRecipientCount');
+  assert.equal(code(() => normalizeBatchIssue({ confirmedRecipientCount: 1.5 })), 'confirmedRecipientCount');
+  assert.equal(code(() => normalizeBatchIssue({ confirmedRecipientCount: 1, recipientMemberIds: [MEMBER] })), 'VALIDATION_ERROR');
+  // 确认数必须与建批时冻结的人数一致。
+  assert.equal(code(() => assertBatchRecipientCount(120, 120)), 'NO_ERROR');
+  assert.equal(code(() => assertBatchRecipientCount(120, 119)), 'BATCH_RECIPIENT_COUNT_CHANGED');
 });

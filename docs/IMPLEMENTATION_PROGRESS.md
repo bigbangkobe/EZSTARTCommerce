@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-推进会员 OTP 与积分（M10）：优惠引擎（M11）已完成但核销的顾客限额目前依赖 HMAC(联系方式)，会员目录落地后会员侧限额改走已验证 Member ID，批量发放（`coupons.issue` 当前一律 422 `MEMBER_AUDIENCE_UNAVAILABLE`）随之解锁；随后是报表（M14）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成。剩余：报表（M14）、结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）、承运商状态回传（M09 剩余）、三语参考前台（M02 前台部分）与页面内容（M04）。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -504,3 +504,20 @@
 - C/A/B 三个提交（`67a3264`/`7935f15`/`ad69133`）已推送 origin/main，生产服务器快进合并到 `ad69133` 并一键部署：备份库 → 重建 api/admin/storefront 镜像 → migrate 容器依次应用第 21/22/23 条迁移 → 健康检查通过。
 - 生产冒烟：`mrinhk.com` 首页、`/cart`、`/login`、`/member`、`/checkout` 均 200；`admin.mrinhk.com/admin/privacy`、`/admin/members`、`/admin/settings`、`/admin/login` 均 200；`admin/mail/test`、`admin/privacy-requests` 匿名访问 401；`health/live` 200。生产库确认 `CustomerConsent`、`CustomerDataExportJob` 两张新表就位。
 - 部署回滚点已由脚本打上 `:prev` 镜像标签；数据库迁移只前进，回滚不还原数据结构。
+
+## 2026-11-18：M11 会员解锁（会员专属券、会员身份限额、批量发放）
+
+范围：M11 首期把三件事挂起等 M10 会员目录落地——顾客限额只能走 HMAC(联系方式)、会员专属券一律 422、批量发放一律 422。M10 现已完成，本批把这三处占位换成真实实现。
+
+- 第 24 条迁移 `202611170023_coupon_member_audience`：新增 `CouponBatch`（批次券、渠道、冻结收件人数、名单/筛选二选一、pending/issued 状态与确认数互锁、批次级幂等键）；`CheckoutQuote` 增 `couponCustomerKey`——报价时冻结「用哪个主体算限额」，否则报价按会员试算、下单按访客联系方式核销会把同一人算成两个。
+- 会员专属券：`assertTiers` 从「一律 422 MEMBER_TIERS_UNAVAILABLE」改为校验等级真实存在且 active（未知 422 `MEMBER_TIER_UNKNOWN`、退役 422 `MEMBER_TIER_RETIRED`）；报价时 `assertMemberTierEligible` 要求会员当前等级命中券的 `memberTierIds`（访客/等级不符 409 `COUPON_MEMBER_ONLY`）；下单再复核一次，防止报价后会话失效或等级被改仍沿用专属折扣。
+- 会员侧限额：`customerKey(contact, memberId)` 在登录会员场景走 `memberHmac(instanceId, memberLimitMaterial(instanceId, memberId))`（64 位十六进制，与访客联系方式摘要同形、共存一列），同一会员跨邮箱/改电话仍是同一限额主体。报价算一次冻结到 `couponCustomerKey`，下单原样沿用，换人登录或改联系方式都不能转移额度归属。
+- 批量发放：建批 `POST /admin/coupon-batches`（`coupons.issue`）把名单/筛选解析成具体会员 id 并冻结人数；发放 `POST /admin/coupon-batches/{id}/issue` 必须回传与冻结人数一致的 `confirmedRecipientCount`（不符 409 `BATCH_RECIPIENT_COUNT_CHANGED`），批次级锁 + issued 状态幂等，重复确认不二次写入与审计。名单含不存在会员 422 `BATCH_MEMBER_UNKNOWN`。
+- 契约：新增 `CouponBatch`/`CouponBatchEnvelope`/`CouponBatchSuccess`，两个批次端点从通用 Created/Accepted 改为具体响应；`memberTierIds` 描述从「无目录时拒绝」改为等级校验语义；新增契约测试校验批次状态互锁与「报价请求不能伪造 couponCustomerKey」。契约 39 项。
+- 后台 `/admin/coupons`：创建券可勾选会员等级（读 `admin/loyalty` 的 tiers，无 `members.manage` 时留空不阻断）；新增批量发放区（选券、渠道、会员 ID 列表 → 建批冻结人数 → 按人数复核确认发放）；错误码提示同步为新语义。
+
+修正的真实缺陷：建批时把 `recipientFilter: null` 显式写库，Prisma 落成 jsonb `null` 而非 SQL NULL，撞上「名单与筛选二选一」CHECK（500）——改为只在有筛选时写该列。测试侧修正：等级码受 `^[A-Z0-9][A-Z0-9-]{0,39}$` 约束（旧的随机 UUID 小写片段非法）、等级 rank 必须在 1–100 且唯一（原随机大整数非法）、旧的 `MEMBER_TIERS_UNAVAILABLE` 断言改为 `MEMBER_TIER_UNKNOWN`、会员限额测试购物车金额要满足券的最低消费。
+
+验证：真实 PostgreSQL 18.7 上优惠定向 **26/26**、全量 **278/278** 全绿；契约 39 项、生成物一致、Prisma schema 有效、前台/后台 typecheck、后台生产构建通过；浏览器端到端 **72/72**（新增会员等级勾选与批量发放确认 2 例 × 桌面/移动）。已部署 mrinhk（第 24 条迁移），生产冒烟见下。
+
+边界：批量发放目前冻结的是「发给谁、多少位」，渠道 account_only/email/sms 已记录但未接真实通知投递（worker 与 SMTP 仍未起，与邀请/OTP 邮件同等待投递）；筛选发放支持按会员等级，不支持更细的消费/地域分群；专属券只按「当前等级」判定，等级是发放时的动态状态而非下单快照（券折扣金额本身仍由报价快照冻结）；部分退款按比例扣回积分仍未接。

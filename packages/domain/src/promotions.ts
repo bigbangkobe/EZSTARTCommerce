@@ -270,3 +270,85 @@ export function describeCoupon(coupon: { code: string; discountType: string; dis
 export function assertPrintable(value: string, code = 'VALIDATION_ERROR') {
   if (CONTROL.test(value)) fail(code);
 }
+
+// ---- 会员专属券与会员侧限额（M11 解锁，依赖 M10 会员目录）-----------------------
+
+/**
+ * 会员专属券资格：券声明了 memberTierIds 时，只有会员当前等级命中其一才能使用。
+ * 等级为空数组表示不限会员（公开券），此时任何人都可用（仍需通过其他限额）。
+ * tierId 为空表示访客或会员无等级——专属券明确拒绝，不静默放行。
+ */
+export function assertMemberTierEligible(coupon: { memberTierIds: readonly string[] }, tierId: string | null) {
+  if (!coupon.memberTierIds.length) return;
+  if (tierId === null || !coupon.memberTierIds.includes(tierId)) fail('COUPON_MEMBER_ONLY');
+}
+
+/**
+ * 顾客限额键的会员口径。会员走「instanceId:member:<不可逆 memberId 摘要>」，
+ * 与访客的 HMAC(联系方式) 形状一致（都是 64 位十六进制），可共存于同一列。
+ * 摘要由调用方用实例密钥生成（domain 不持有密钥），这里只定义材料串形状，
+ * 保证同一会员跨邮箱/电话改动仍是同一限额主体。
+ */
+export function memberLimitMaterial(instanceId: string, memberId: string): string {
+  if (typeof instanceId !== 'string' || !instanceId.length) fail('instanceId');
+  if (!UUID.test(memberId)) fail('memberId');
+  return `${instanceId}:coupon:member:${memberId}`;
+}
+
+/** 批次发放的收件人数复核：确认数必须与建批时计算的人数完全一致，不一致要求重建批次。 */
+export function assertBatchRecipientCount(actual: number, confirmed: number) {
+  if (!Number.isSafeInteger(actual) || actual < 0) fail('recipientCount');
+  if (!Number.isSafeInteger(confirmed) || confirmed < 0) fail('confirmedRecipientCount');
+  if (confirmed !== actual) fail('BATCH_RECIPIENT_COUNT_CHANGED');
+}
+
+/**
+ * 建批请求归一化：couponId 必须是 UUID，渠道取自闭集；显式名单与筛选条件互斥且至少一个。
+ * 名单上限 10,000（一次发放的合理上限），重复成员直接拒绝（与券范围口径一致），筛选条件只允许带 memberTierIds 白名单键。
+ */
+export const BATCH_CHANNELS = ['account_only', 'email', 'sms'] as const;
+export const MAX_BATCH_RECIPIENTS = 10_000;
+
+export function normalizeCouponBatch(input: Record<string, unknown>) {
+  const couponId = input['couponId'];
+  if (typeof couponId !== 'string' || !UUID.test(couponId)) fail('couponId');
+  const channel = input['channel'];
+  if (typeof channel !== 'string' || !BATCH_CHANNELS.includes(channel as (typeof BATCH_CHANNELS)[number])) fail('channel');
+  const members = input['recipientMemberIds'];
+  const filter = input['recipientFilter'];
+  if (members !== undefined && members !== null && !Array.isArray(members)) fail('recipientMemberIds');
+  if (members !== undefined && Array.isArray(members) && (members.length > MAX_BATCH_RECIPIENTS)) fail('recipientMemberIds');
+  const seen = new Set<string>();
+  for (const item of (Array.isArray(members) ? members : [])) {
+    if (typeof item !== 'string' || !UUID.test(item)) fail('recipientMemberIds');
+    if (seen.has(item)) fail('recipientMemberIds');
+    seen.add(item);
+  }
+  const hasMembers = seen.size > 0;
+  const hasFilter = filter !== undefined && filter !== null;
+  if (hasMembers === hasFilter) fail('recipientSource'); // 必须二选一
+  let normalizedFilter: Record<string, unknown> | null = null;
+  if (hasFilter) {
+    if (typeof filter !== 'object' || Array.isArray(filter)) fail('recipientFilter');
+    const allowed = new Set(['memberTierIds']);
+    for (const key of Object.keys(filter as Record<string, unknown>)) if (!allowed.has(key)) fail('recipientFilter');
+    const tierIds = (filter as Record<string, unknown>)['memberTierIds'];
+    if (!Array.isArray(tierIds) || !tierIds.length || tierIds.length > MAX_TIER_ITEMS) fail('recipientFilter');
+    for (const id of tierIds) if (typeof id !== 'string' || !UUID.test(id)) fail('recipientFilter');
+    normalizedFilter = { memberTierIds: [...new Set(tierIds as string[])] };
+  }
+  const templateId = input['templateId'];
+  if (templateId !== undefined && templateId !== null
+    && (typeof templateId !== 'string' || !UUID.test(templateId))) fail('templateId');
+  return { couponId, channel: channel as (typeof BATCH_CHANNELS)[number],
+    recipientMemberIds: [...seen], recipientFilter: normalizedFilter,
+    templateId: (templateId as string | null | undefined) ?? null };
+}
+
+/** 发放请求只接受一个确认数，拒绝夹带名单——名单在建批时已冻结。 */
+export function normalizeBatchIssue(input: Record<string, unknown>) {
+  const count = input['confirmedRecipientCount'];
+  if (!Number.isSafeInteger(count) || (count as number) < 0) fail('confirmedRecipientCount');
+  for (const key of Object.keys(input)) if (key !== 'confirmedRecipientCount') fail('VALIDATION_ERROR');
+  return { confirmedRecipientCount: count as number };
+}
