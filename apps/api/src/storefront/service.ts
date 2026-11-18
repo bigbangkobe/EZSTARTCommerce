@@ -1,4 +1,5 @@
 import type { Prisma } from '../../../../packages/database/src/client.js';
+import { contentReleaseToken, visibleBlocks, type PageSnapshot } from '../../../../packages/domain/src/content.js';
 import { effectiveReviewStatus, normalizeMarketCode, SUPPORTED_LOCALES, StoreRuleError } from '../../../../packages/domain/src/store.js';
 import { AuthError, IdentityService } from '../identity/service.js';
 
@@ -82,9 +83,73 @@ export class StorefrontService {
       const features = Object.fromEntries(PUBLIC_FLAGS.map(flag => [flag, settings.featureFlags[flag] ?? false]));
       return { displayName: settings.displayName, locales: settings.locales, defaultLocale: settings.defaultLocale,
         locale, currency: settings.baseCurrency, timezone: settings.timezone,
-        market: market ? { marketCode: market.marketCode } : null, features };
+        market: market ? { marketCode: market.marketCode } : null, features,
+        // 内容发布标记：主题把它当区块埋点的 publishVersionId，任何内容发布都会换代。
+        contentRelease: await this.contentRelease(tx) };
     });
   }
+
+  /** 内容换代计数器（cr-N）。没有发布过内容时仍给 cr-0，让埋点字段始终是合法值。 */
+  private async contentRelease(tx: Tx): Promise<string> {
+    const row = await tx.contentRelease.findUnique({ where: { id: 1 }, select: { seq: true } });
+    return contentReleaseToken(row?.seq ?? 0);
+  }
+
+  private pageView(row: Prisma.ContentPageGetPayload<{ include: { translations: true; publishedVersion: true } }>,
+    locale: string, fallback: string) {
+    const snapshot = row.publishedVersion?.snapshot as unknown as PageSnapshot | undefined;
+    if (!snapshot || !row.publishedVersion) return null;
+    const translation = snapshot.translations.find(item => item.locale === locale)
+      ?? snapshot.translations.find(item => item.locale === fallback) ?? snapshot.translations[0];
+    if (!translation) return null;
+    return {
+      pageKey: row.pageKey, pageType: row.pageType,
+      locale: translation.locale, slug: translation.slug, title: translation.title,
+      seoTitle: translation.seoTitle, seoDescription: translation.seoDescription, indexable: translation.indexable,
+      // 隐藏区块不下发：接口不是预览通道，未完成内容不该出现在公开响应里。
+      // 公开响应也不带 visible 标记——能出现的就是可见的，多一个字段只会让人误以为可以切换。
+      blocks: visibleBlocks(snapshot.blocks ?? []).map(block => ({ id: block.id, type: block.type,
+        position: block.position, config: block.config })),
+      alternates: snapshot.translations.map(item => ({ locale: item.locale, slug: item.slug })),
+      version: row.publishedVersion.version,
+    };
+  }
+
+  /**
+   * 内容页读取：只看 publishedSlug（发布时才写入、撤下时清空）。
+   * 草稿 slug 永远不会命中，因此「保存草稿」不会泄漏未发布内容。
+   */
+  async getPage(slug: string, localeInput: string | null) {
+    return this.run(async tx => {
+      const settings = await this.settings(tx);
+      const locale = this.locale(settings, localeInput);
+      const rows = await tx.contentPageTranslation.findMany({ where: { publishedSlug: slug },
+        include: { page: { include: { translations: true, publishedVersion: true } } } });
+      const rank = (value: string) => value === locale ? 0 : value === settings.defaultLocale ? 1 : 2;
+      const ordered = rows.filter(row => row.page.publishedVersion).sort((left, right) =>
+        rank(left.locale) - rank(right.locale) || left.pageId.localeCompare(right.pageId));
+      for (const candidate of ordered) {
+        const view = this.pageView(candidate.page, locale, settings.defaultLocale);
+        if (view) return { ...view, contentRelease: await this.contentRelease(tx) };
+      }
+      throw new AuthError(404, 'NOT_FOUND');
+    });
+  }
+
+  /** 已发布内容页清单（导航与站点地图用）：只给地址与索引资格，不含正文。 */
+  async listPages(localeInput: string | null) {
+    return this.run(async tx => {
+      const settings = await this.settings(tx);
+      const locale = this.locale(settings, localeInput);
+      const rows = await tx.contentPage.findMany({ where: { status: 'published', publishedVersionId: { not: null } },
+        include: { translations: true, publishedVersion: true }, orderBy: [{ position: 'asc' }, { pageKey: 'asc' }] });
+      const items = rows.map(row => this.pageView(row, locale, settings.defaultLocale)).filter(view => view !== null)
+        .map(view => ({ pageKey: view.pageKey, pageType: view.pageType, locale: view.locale, slug: view.slug,
+          title: view.title, indexable: view.indexable, alternates: view.alternates }));
+      return { items, locale, contentRelease: await this.contentRelease(tx) };
+    });
+  }
+
 
   private availability(row: ProductRow) {
     const variants = [...row.variants].filter(variant => variant.status === 'active')

@@ -1,7 +1,8 @@
 import type { MetadataRoute } from 'next';
 import { site } from '../lib/site';
-import { LOCALES, altPaths, localePath, type Locale } from '../lib/i18n';
+import { LOCALES, altPaths, isLocale, localePath, type Locale } from '../lib/i18n';
 import { fetchProducts } from '../lib/products';
+import { fetchPages } from '../lib/content';
 
 /**
  * 站点地图：只收已发布、明确可索引的页面。
@@ -60,6 +61,36 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         priority: 0.7,
         alternates: { languages },
       });
+    }
+  }
+
+  // 内容页：只收 indexable 的已发布页面；每种语言的地址来自同一份发布快照，
+  // 因此这里用「已发布清单 × 各语言 slug」构造 alternate，不会把草稿地址写进站点地图。
+  const contentPages = new Map<string, Map<Locale, string>>();
+  for (const locale of LOCALES) {
+    for (const page of await fetchPages(locale)) {
+      if (!page.indexable) continue;
+      const map = contentPages.get(page.pageKey) ?? new Map<Locale, string>();
+      for (const alternate of page.alternates) {
+        if (isLocale(alternate.locale)) map.set(alternate.locale, alternate.slug);
+      }
+      contentPages.set(page.pageKey, map);
+    }
+  }
+  for (const slugs of contentPages.values()) {
+    const languages: Record<string, string> = {};
+    for (const locale of LOCALES) {
+      const slug = slugs.get(locale);
+      if (slug) languages[locale] = `${base}${localePath(locale, `/pages/${encodeURIComponent(slug)}`)}`;
+    }
+    const fallback = languages['zh-HK'] ?? Object.values(languages)[0];
+    if (!fallback) continue;
+    languages['x-default'] = fallback;
+    for (const locale of LOCALES) {
+      const slug = slugs.get(locale);
+      if (!slug) continue;
+      entries.push({ url: `${base}${localePath(locale, `/pages/${encodeURIComponent(slug)}`)}`,
+        lastModified: now, changeFrequency: 'monthly', priority: 0.5, alternates: { languages } });
     }
   }
 

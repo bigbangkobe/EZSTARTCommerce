@@ -44,4 +44,16 @@ export class StorefrontController extends ManagementHttp {
   async categories(@Query('locale') locale: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     this.send(response, request, 200, await this.front().listCategories(text(locale, 10)));
   }
+
+  @Get('pages')
+  async pages(@Query('locale') locale: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    this.send(response, request, 200, await this.front().listPages(text(locale, 10)));
+  }
+
+  @Get('pages/:slug')
+  async page(@Param('slug') slug: string, @Query('locale') locale: unknown,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    if (!/^[^\s/]{1,180}$/.test(slug)) throw new AuthError(422, 'VALIDATION_ERROR');
+    this.send(response, request, 200, await this.front().getPage(slug, text(locale, 10)));
+  }
 }

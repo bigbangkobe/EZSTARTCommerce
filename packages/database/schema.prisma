@@ -1474,3 +1474,71 @@ model PlacementAttribution {
   @@index([cartId, variantId])
   @@index([publishVersionId, addedAt])
 }
+
+/// 内容页（M04 第一批）。status 只表达运营状态，前台可读与否由 publishedVersionId 决定：
+/// 计划发布是 scheduled（尚未生效），撤下是 withdrawn（版本行保留，便于回滚与审计）。
+model ContentPage {
+  id                 String                @id @default(uuid()) @db.Uuid
+  pageKey            String                @unique
+  pageType           String                @default("standard")
+  /// 草稿区块（数组 JSON）。前台只读发布快照，从不读这里。
+  blocks             Json                  @default("[]")
+  status             String                @default("draft")
+  position           Int                   @default(0)
+  scheduledAt        DateTime?             @db.Timestamptz(3)
+  publishedVersionId String?               @unique @db.Uuid
+  publishedVersion   ContentPageVersion?   @relation("PageCurrentVersion", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  publishedAt        DateTime?             @db.Timestamptz(3)
+  version            Int                   @default(1)
+  createdBy          String?               @db.Uuid
+  updatedBy          String?               @db.Uuid
+  createdAt          DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @db.Timestamptz(3)
+  translations       ContentPageTranslation[]
+  versions           ContentPageVersion[]  @relation("PageVersions")
+  @@index([status, position])
+}
+
+/// 草稿翻译：每页每语言一行。(locale, slug) 唯一保证任何语言下只有一个页面占用该 URL。
+/// publishedSlug 只在发布时写入、撤下时清空——前台按它查已发布地址，绝不查草稿 slug。
+model ContentPageTranslation {
+  id             String      @id @default(uuid()) @db.Uuid
+  pageId         String      @db.Uuid
+  page           ContentPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  locale         String
+  title          String
+  slug           String
+  seoTitle       String?
+  seoDescription String?
+  indexable      Boolean     @default(false)
+  publishedSlug  String?
+  @@unique([pageId, locale])
+  @@unique([locale, slug])
+  @@index([locale, publishedSlug])
+}
+
+/// 发布版本：snapshot 是不可变 JSON（页面 + 三语翻译 + 区块），前台只读它。
+/// releaseSeq 来自全局序列，派生内容发布标记 cr-N，供区块埋点与报表使用。
+model ContentPageVersion {
+  id          String       @id @default(uuid()) @db.Uuid
+  pageId      String       @db.Uuid
+  page        ContentPage  @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
+  currentFor  ContentPage? @relation("PageCurrentVersion")
+  version     Int
+  releaseSeq  Int          @unique @default(dbgenerated("nextval('content_release_seq'::regclass)"))
+  status      String       @default("published")
+  snapshot    Json
+  note        String?
+  publishedAt DateTime     @db.Timestamptz(3)
+  publishedBy String?      @db.Uuid
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  @@unique([pageId, version])
+  @@index([status, publishedAt])
+}
+
+/// 单行计数器：任何发布/撤下都会 +1，前台用它判断内容是否换代（只增不减）。
+model ContentRelease {
+  id        Int      @id @default(1)
+  seq       Int      @default(0)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}

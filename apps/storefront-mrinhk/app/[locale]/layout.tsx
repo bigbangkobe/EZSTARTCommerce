@@ -4,6 +4,7 @@ import { site, whatsappLink } from '../../lib/site';
 import {
   LOCALES, HTML_LANG, OG_LOCALE, altPaths, copyFor, isLocale, localePath, resolveLocale, type Locale,
 } from '../../lib/i18n';
+import { fetchPages } from '../../lib/content';
 import CartLink from '../cart-link';
 import LocaleSwitcher from '../locale-switcher';
 import MemberLink from '../member-link';
@@ -57,6 +58,8 @@ export default async function LocaleLayout({ children, params }: {
   // 而不是 Next 内置的裸 404。这里只为渲染外壳选一个语言。
   const locale: Locale = resolveLocale(raw);
   const t = copyFor[locale];
+  // 已发布内容页由后台维护：页脚只列当前语言下真实存在的地址，撤下的页面自动消失。
+  const pages = await fetchPages(locale).catch(() => []);
 
   return (
     <html lang={HTML_LANG[locale]}>
@@ -93,6 +96,15 @@ export default async function LocaleLayout({ children, params }: {
             <span className="dot" />
             {site.brand} · {site.domain}
           </div>
+          {pages.length > 0 && (
+            <nav className="footer-nav" aria-label={t.nav.home}>
+              {pages.slice(0, 6).map(page => (
+                <Link key={page.pageKey} href={localePath(locale, `/pages/${page.slug}`)} hrefLang={locale}>
+                  {page.title}
+                </Link>
+              ))}
+            </nav>
+          )}
           <div>© 2026 {site.brandLatin}. {t.footer.rights}.</div>
         </footer>
         <a

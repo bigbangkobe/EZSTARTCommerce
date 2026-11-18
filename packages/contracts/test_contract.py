@@ -786,6 +786,78 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(errors("CarrierWebhookAck", dict(ack,
             data=dict(ack["data"], shipmentStatus="paid"))))
 
+    def test_content_pages_publish_atomically_and_public_reads_hide_drafts(self):
+        page = {"pageKey": "about", "pageType": "standard", "blocks": [
+            {"id": "intro", "type": "rich_text", "visible": True, "position": 0,
+             "config": {"heading": "關於", "paragraphs": ["內容"]}}],
+            "translations": [{"locale": "zh-HK", "title": "關於我們", "slug": "about-hk", "indexable": True,
+                              "seoTitle": None, "seoDescription": None}]}
+        self.assertEqual([], errors("PageWriteRequest", page))
+        # 三个字段都是发起草稿的必需信息：缺 blocks 或 translations 就不该建出空页面。
+        for missing in ("pageKey", "pageType", "translations", "blocks"):
+            broken = copy.deepcopy(page)
+            del broken[missing]
+            self.assertTrue(errors("PageWriteRequest", broken))
+        # 索引开关是必填的显式决定，不能靠默认值让页面被随手收录。
+        no_index = copy.deepcopy(page)
+        del no_index["translations"][0]["indexable"]
+        self.assertTrue(errors("PageWriteRequest", no_index))
+        # 自造语言变体（zh-Hant）不属于闭集。
+        hant = copy.deepcopy(page)
+        hant["translations"][0]["locale"] = "zh-Hant"
+        self.assertTrue(errors("PageWriteRequest", hant))
+
+        publish = SPEC["paths"]["/admin/pages/{id}/publish"]["post"]
+        self.assertEqual("content.publish", publish["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], publish["security"])
+        self.assertEqual([], errors("PagePublishRequest", {"expectedVersion": 2}))
+        self.assertEqual([], errors("PagePublishRequest",
+                                    {"expectedVersion": 2, "mode": "scheduled",
+                                     "scheduledAt": "2026-11-20T01:00:00Z"}))
+        self.assertTrue(errors("PagePublishRequest", {"expectedVersion": 2, "mode": "later"}))
+        self.assertTrue(errors("PagePublishRequest", {"mode": "immediate"}))
+        rollback = SPEC["paths"]["/admin/pages/{id}/rollback"]["post"]
+        self.assertEqual("content.publish", rollback["x-permission"])
+        self.assertEqual([], errors("PageRollbackRequest", {"sourceVersion": 2, "reason": "restore", "expectedVersion": 5}))
+        self.assertTrue(errors("PageRollbackRequest", {"sourceVersion": 2, "expectedVersion": 5}))
+        # 预览是单独的能力，不能靠 content.read 拿到草稿外链。
+        preview = SPEC["paths"]["/admin/pages/{id}/preview-token"]["post"]
+        self.assertEqual("content.preview", preview["x-permission"])
+
+    def test_public_content_payload_is_release_only_and_theme_closed(self):
+        listing = SPEC["paths"]["/storefront/pages"]["get"]
+        # 公开清单是匿名读取：站点地图与页脚导航都要在未登录时可用。
+        self.assertNotIn("security", listing)
+        self.assertEqual("listStorefrontPages", listing["operationId"])
+        public = SPEC["paths"]["/storefront/pages/{slug}"]["get"]
+        self.assertNotIn("security", public)
+
+        block = {"id": "intro", "type": "rich_text", "position": 0, "config": {"paragraphs": ["內容"]}}
+        page = {"pageKey": "about", "pageType": "standard", "locale": "zh-HK", "slug": "about-hk",
+                "title": "關於我們", "seoTitle": None, "seoDescription": None, "indexable": True,
+                "blocks": [block], "alternates": [{"locale": "zh-HK", "slug": "about-hk"}],
+                "version": 3, "contentRelease": "cr-12"}
+        envelope = {"data": page, "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("PublicPageEnvelope", envelope))
+        # 公开响应只认已注册的区块类型；未注册类型不会出现在快照里。
+        for bad_type in ("custom_html", "product_grid", ""):
+            self.assertTrue(errors("PublicPageEnvelope", dict(envelope,
+                data=dict(page, blocks=[dict(block, type=bad_type)]))))
+        # 公开响应不带草稿状态：visible/status 这类后台字段必须留在后台。
+        self.assertTrue(errors("PublicPageEnvelope", dict(envelope,
+            data=dict(page, blocks=[dict(block, visible=True)]))))
+        self.assertTrue(errors("PublicPageEnvelope", dict(envelope, data=dict(page, status="draft"))))
+        # 发布标记是内容版本号 cr-N；旧的固定主题标记不再合法。
+        for bad_release in ("mrinhk-2026-11", "rel-1", "", None):
+            self.assertTrue(errors("PublicPageEnvelope", dict(envelope, data=dict(page, contentRelease=bad_release))))
+        summary = {"pageKey": "about", "pageType": "standard", "locale": "zh-HK", "slug": "about-hk",
+                   "title": "關於我們", "indexable": True, "alternates": [{"locale": "zh-HK", "slug": "about-hk"}]}
+        listing_payload = {"data": {"items": [summary], "locale": "zh-HK", "contentRelease": "cr-12"},
+                           "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("PublicPageListEnvelope", listing_payload))
+        self.assertTrue(errors("PublicPageListEnvelope", dict(listing_payload,
+            data=dict(listing_payload["data"], contentRelease="theme-v1"))))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { site, whatsappLink } from '../../lib/site';
 import { altPaths, copyFor, isLocale, localePath, type Locale } from '../../lib/i18n';
 import { fetchProducts, formatPrice } from '../../lib/products';
+import { fetchContentRelease } from '../../lib/content';
 import AnalyticsTracker from '../analytics-tracker';
 import SectionTracker from '../section-tracker';
 
@@ -36,14 +37,14 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   if (!isLocale(raw)) notFound();
   const locale: Locale = raw;
   const t = copyFor[locale];
-  const result = await fetchProducts(locale);
+  const [result, contentRelease] = await Promise.all([fetchProducts(locale), fetchContentRelease(locale)]);
   const featured = result.ok ? result.products.slice(0, 6) : [];
   const productsHref = localePath(locale, '/products');
 
   return (
     <>
       <AnalyticsTracker pageKey="home" locale={locale} />
-      <SectionTracker pageKey="home" publishVersionId={site.contentRelease} locale={locale} />
+      <SectionTracker pageKey="home" publishVersionId={contentRelease} locale={locale} />
       {/* HERO */}
       <section className="hero" data-ez-section="home.hero" data-ez-section-id="home:hero">
         <div className="hero-copy">

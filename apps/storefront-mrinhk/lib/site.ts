@@ -13,7 +13,7 @@ export const site = {
   /** 结账市场（报价必传 marketCode），与后台 store-config 的市场码一致 */
   marketCode: 'HK',
   /** 内容发布版本标记：区块埋点随事件上报，用于按版本对比陈列效果（改版时更新） */
-  contentRelease: 'mrinhk-2026-11',
+  // 已改由内容 CMS 提供（cr-N，见 lib/content.ts）：写死常量会让报表把两代内容并成一组。
   /** 政策同意：上线前应替换为真实政策的最新版本号；文案按语言在 i18n 里 */
   policies: [{ policyKey: 'terms-of-service', version: 'demo-v1' }],
 } as const;

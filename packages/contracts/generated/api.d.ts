@@ -985,6 +985,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storefront/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List published content pages (addresses only, no draft content) */
+        get: operations["listStorefrontPages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storefront/pages/{slug}": {
         parameters: {
             query?: never;
@@ -3026,6 +3043,61 @@ export interface components {
                 items: components["schemas"]["PublicProduct"][];
                 nextCursor: string | null;
                 hasMore: boolean;
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PublicPageAlternate: {
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            slug: string;
+        };
+        PublicPageSummary: {
+            pageKey: string;
+            /** @enum {string} */
+            pageType: "standard" | "article" | "policy" | "faq" | "announcement";
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            slug: string;
+            title: string;
+            indexable: boolean;
+            alternates: components["schemas"]["PublicPageAlternate"][];
+        };
+        PublicPageBlock: {
+            id: string;
+            /** @enum {string} */
+            type: "rich_text" | "faq_list" | "contact_card" | "notice";
+            position: number;
+            /** @description Validated per block type by the API before release. */
+            config: {
+                [key: string]: unknown;
+            };
+        };
+        PublicPage: {
+            pageKey: string;
+            /** @enum {string} */
+            pageType: "standard" | "article" | "policy" | "faq" | "announcement";
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            slug: string;
+            title: string;
+            seoTitle: string | null;
+            seoDescription: string | null;
+            indexable: boolean;
+            blocks: components["schemas"]["PublicPageBlock"][];
+            alternates: components["schemas"]["PublicPageAlternate"][];
+            version: number;
+            contentRelease: string;
+        };
+        PublicPageEnvelope: {
+            data: components["schemas"]["PublicPage"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PublicPageListEnvelope: {
+            data: {
+                items: components["schemas"]["PublicPageSummary"][];
+                /** @enum {string} */
+                locale: "zh-CN" | "zh-HK" | "en";
+                contentRelease: string;
             };
             meta: components["schemas"]["ResponseMeta"];
         };
@@ -5728,6 +5800,24 @@ export interface components {
                 "application/json": components["schemas"]["PublicProductListEnvelope"];
             };
         };
+        /** @description Published content page read from the immutable release snapshot */
+        PublicPageSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicPageEnvelope"];
+            };
+        };
+        /** @description Published content page addresses */
+        PublicPageListSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicPageListEnvelope"];
+            };
+        };
         /** @description Product publication result */
         ProductPublishSuccess: {
             headers: {
@@ -7516,6 +7606,22 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    listStorefrontPages: {
+        parameters: {
+            query: {
+                locale: components["parameters"]["Locale"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicPageListSuccess"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     getStorefrontPage: {
         parameters: {
             query: {
@@ -7530,7 +7636,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["Success"];
+            200: components["responses"]["PublicPageSuccess"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];

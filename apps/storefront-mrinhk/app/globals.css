@@ -352,3 +352,25 @@ body {
   .member-auth { padding: 34px 24px; }
   .member-table th:nth-child(2), .member-table td:nth-child(2) { display: none; }
 }
+
+/* ---------- content pages (M04) ---------- */
+.content-page { max-width: 760px; margin: 0 auto; padding: 72px 24px 96px; }
+.content-page h1 { font-family: var(--serif); font-size: clamp(1.7rem, 4vw, 2.4rem); line-height: 1.35; letter-spacing: 0.04em; margin: 24px 0 28px; }
+.content-block { margin: 0 0 34px; }
+.content-block h2 { font-family: var(--serif); font-size: 1.22rem; letter-spacing: 0.1em; margin-bottom: 14px; }
+.content-block p { color: var(--muted); line-height: 1.95; margin-bottom: 12px; }
+.content-footnote { font-size: 0.82rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+.faq-item { border-bottom: 1px solid var(--line); padding: 12px 0; }
+.faq-item summary { cursor: pointer; font-weight: 600; color: var(--ink); }
+.faq-item p { margin-top: 10px; }
+.contact-card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 28px; }
+.contact-card a.btn { display: inline-flex; margin-top: 12px; }
+.content-notice { border-left: 3px solid var(--red); background: rgba(188, 0, 45, 0.04); padding: 14px 18px; margin: 0 0 28px; font-size: 0.9rem; }
+.content-notice.warning { border-color: #B3721A; background: rgba(179, 114, 26, 0.06); }
+.content-notice.critical { border-color: #8A1F1F; background: rgba(138, 31, 31, 0.07); }
+.content-meta { margin-top: 34px; }
+.content-meta a { color: var(--red); text-decoration: none; }
+.content-meta a:hover { text-decoration: underline; }
+.footer-nav { display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center; margin-bottom: 10px; }
+.footer-nav a { color: var(--muted); font-size: 0.82rem; text-decoration: none; }
+.footer-nav a:hover { color: var(--red); }

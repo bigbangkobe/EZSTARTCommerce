@@ -1409,6 +1409,17 @@ paths:
         '200': { $ref: '#/components/responses/Success' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/pages:
+    get:
+      tags: [Storefront]
+      operationId: listStorefrontPages
+      summary: List published content pages (addresses only, no draft content)
+      parameters:
+        - { $ref: '#/components/parameters/Locale' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicPageListSuccess' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/pages/{slug}:
     get:
       tags: [Storefront]
@@ -1419,7 +1430,7 @@ paths:
         - { $ref: '#/components/parameters/Locale' }
         - { $ref: '#/components/parameters/MarketCode' }
       responses:
-        '200': { $ref: '#/components/responses/Success' }
+        '200': { $ref: '#/components/responses/PublicPageSuccess' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -4258,6 +4269,16 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/PublicProductListEnvelope' }
+    PublicPageSuccess:
+      description: Published content page read from the immutable release snapshot
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicPageEnvelope' }
+    PublicPageListSuccess:
+      description: Published content page addresses
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicPageListEnvelope' }
     ProductPublishSuccess:
       description: Product publication result
       content:
@@ -5547,6 +5568,72 @@ components:
             items: { type: array, items: { $ref: '#/components/schemas/PublicProduct' } }
             nextCursor: { type: [string, 'null'] }
             hasMore: { type: boolean }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicPageAlternate:
+      type: object
+      additionalProperties: false
+      required: [locale, slug]
+      properties:
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        slug: { type: string, minLength: 1, maxLength: 180 }
+    PublicPageSummary:
+      type: object
+      additionalProperties: false
+      required: [pageKey, pageType, locale, slug, title, indexable, alternates]
+      properties:
+        pageKey: { type: string, minLength: 1, maxLength: 100 }
+        pageType: { type: string, enum: [standard, article, policy, faq, announcement] }
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        slug: { type: string, minLength: 1, maxLength: 180 }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        indexable: { type: boolean }
+        alternates: { type: array, items: { $ref: '#/components/schemas/PublicPageAlternate' } }
+    PublicPageBlock:
+      type: object
+      additionalProperties: false
+      required: [id, type, position, config]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 100 }
+        type: { type: string, enum: [rich_text, faq_list, contact_card, notice] }
+        position: { type: integer, minimum: 0 }
+        config: { type: object, additionalProperties: true, description: Validated per block type by the API before release. }
+    PublicPage:
+      type: object
+      additionalProperties: false
+      required: [pageKey, pageType, locale, slug, title, seoTitle, seoDescription, indexable, blocks, alternates, version, contentRelease]
+      properties:
+        pageKey: { type: string, minLength: 1, maxLength: 100 }
+        pageType: { type: string, enum: [standard, article, policy, faq, announcement] }
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        slug: { type: string, minLength: 1, maxLength: 180 }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        seoTitle: { type: [string, 'null'], maxLength: 70 }
+        seoDescription: { type: [string, 'null'], maxLength: 320 }
+        indexable: { type: boolean }
+        blocks: { type: array, items: { $ref: '#/components/schemas/PublicPageBlock' } }
+        alternates: { type: array, items: { $ref: '#/components/schemas/PublicPageAlternate' } }
+        version: { type: integer, minimum: 1 }
+        contentRelease: { type: string, pattern: '^cr-[0-9]+$' }
+    PublicPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PublicPage' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicPageListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, locale, contentRelease]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PublicPageSummary' } }
+            locale: { type: string, enum: [zh-CN, zh-HK, en] }
+            contentRelease: { type: string, pattern: '^cr-[0-9]+$' }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
     ProductPublishEnvelope:
       type: object

@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { site, whatsappLink } from '../../../lib/site';
 import { altPaths, copyFor, isLocale, localePath, type Locale } from '../../../lib/i18n';
+import { fetchContentRelease } from '../../../lib/content';
 import { fetchProducts, formatPrice } from '../../../lib/products';
 import AnalyticsTracker from '../../analytics-tracker';
 import SectionTracker from '../../section-tracker';
@@ -23,13 +24,13 @@ export default async function ProductsPage({ params }: { params: Promise<{ local
   if (!isLocale(raw)) notFound();
   const locale: Locale = raw;
   const t = copyFor[locale];
-  const result = await fetchProducts(locale);
+  const [result, contentRelease] = await Promise.all([fetchProducts(locale), fetchContentRelease(locale)]);
   const products = result.ok ? result.products : [];
 
   return (
     <section className="section" data-ez-section="products.list" data-ez-section-id="products:list">
       <AnalyticsTracker pageKey="products" locale={locale} />
-      <SectionTracker pageKey="products" publishVersionId={site.contentRelease} locale={locale} />
+      <SectionTracker pageKey="products" publishVersionId={contentRelease} locale={locale} />
       <div className="red-line" />
       <div className="section-head">
         <span className="num">壱</span>

@@ -6,3 +6,9 @@
 .pill{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:999px;font-size:12px;line-height:18px;background:#e8eef4;color:#244d6d}
 .pill.warn{background:#fdeaea;color:#8a1f1f}
 button.link{width:auto;min-width:0;padding:0;background:none;border:0;color:#1c5c8a;text-decoration:underline;font:inherit;cursor:pointer}
+.content-preview{border:1px solid #dce3e9;border-radius:10px;padding:18px;margin-top:12px;background:#fff}
+.content-preview article{border:0;padding:0;margin:0 0 12px}
+.content-preview h3{margin:0 0 8px;font-size:17px}
+.content-preview p{margin:0 0 8px}
+.content-preview .notice.warning{background:#fdf5e6;color:#7a5312}
+.content-preview .notice.critical{background:#fdeaea;color:#8a1f1f}

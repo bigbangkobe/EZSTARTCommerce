@@ -1,0 +1,213 @@
+import type { Prisma } from '../../../../packages/database/src/client.js';
+import {
+  contentReleaseToken, normalizeBlocks, normalizePageTranslations, normalizePublishPlan, assertPageKey, assertPageType,
+} from '../../../../packages/domain/src/content.js';
+import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
+import {
+  contentLocales, contentRule, publishPageVersion, rollbackPageVersion, schedulePage, withdrawPageVersion,
+} from './publish.js';
+
+type Tx = Prisma.TransactionClient;
+const includePage = { translations: true, versions: { orderBy: { version: 'desc' }, take: 20 } } as const;
+type PageRow = Prisma.ContentPageGetPayload<{ include: typeof includePage }>;
+
+export interface PageBody {
+  pageKey?: string; pageType?: string;
+  translations?: { locale: string; title: string; slug: string; seoTitle?: string | null;
+    seoDescription?: string | null; indexable: boolean }[];
+  blocks?: { id: string; type: string; visible: boolean; position: number; config: Record<string, unknown> }[];
+}
+
+export interface PublishBody { expectedVersion: number; mode?: 'immediate' | 'scheduled'; scheduledAt?: string | null }
+export interface RollbackBody { sourceVersion: number; reason: string; expectedVersion: number }
+
+/**
+ * 内容页服务（M04 第一批）。
+ *
+ * 会话/权限/审计统一走 IdentityService；这里只负责内容规则与持久化。
+ * 草稿与线上是两套数据：草稿在 ContentPage/Translation，线上是 ContentPageVersion.snapshot，
+ * 前台只读后者——因此「保存草稿」永远不会让未审核的内容出现在公开地址上。
+ */
+export class ContentService {
+  constructor(private readonly identity: IdentityService) {}
+
+  private async guarded<T>(fn: () => Promise<T>): Promise<T> {
+    try { return await fn(); } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === 'P2002') throw new AuthError(409, 'SLUG_TAKEN');
+      if (code === 'P2025') throw new AuthError(404, 'NOT_FOUND');
+      throw error;
+    }
+  }
+
+  private view(row: PageRow, releaseSeq: number | null) {
+    return {
+      id: row.id, pageKey: row.pageKey, pageType: row.pageType, status: row.status, position: row.position,
+      scheduledAt: row.scheduledAt?.toISOString() ?? null, publishedAt: row.publishedAt?.toISOString() ?? null,
+      version: row.version,
+      translations: [...row.translations].sort((left, right) => left.locale.localeCompare(right.locale))
+        .map(translation => ({ locale: translation.locale, title: translation.title, slug: translation.slug,
+          seoTitle: translation.seoTitle, seoDescription: translation.seoDescription, indexable: translation.indexable,
+          publishedSlug: translation.publishedSlug })),
+      blocks: contentRule(() => normalizeBlocks(row.blocks)),
+      // 只回版本摘要：snapshot 是整页内容，后台列表不需要它，回整个 JSON 只会让响应翻倍。
+      publishedVersion: row.publishedVersionId
+        ? (() => {
+          const current = row.versions.find(version => version.id === row.publishedVersionId);
+          return current ? { version: current.version, status: current.status,
+            publishedAt: current.publishedAt.toISOString(), note: current.note, releaseSeq: current.releaseSeq } : null;
+        })()
+        : null,
+      versions: row.versions.map(version => ({ version: version.version, status: version.status,
+        publishedAt: version.publishedAt.toISOString(), note: version.note, releaseSeq: version.releaseSeq })),
+      contentRelease: releaseSeq === null ? null : contentReleaseToken(releaseSeq),
+      createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
+  private async releaseSeq(tx: Tx): Promise<number> {
+    const row = await tx.contentRelease.findUnique({ where: { id: 1 } });
+    return row?.seq ?? 0;
+  }
+
+  private async load(tx: Tx, id: string): Promise<PageRow> {
+    const row = await tx.contentPage.findUnique({ where: { id }, include: includePage });
+    if (!row) throw new AuthError(404, 'NOT_FOUND');
+    return row;
+  }
+
+  async listPages(supplied: string, limit: number, cursor: string | null) {
+    return this.identity.withPermission(supplied, null, 'content.read', async tx => {
+      if (cursor && !await tx.contentPage.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
+      const rows = await tx.contentPage.findMany({ include: includePage, orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+        take: limit + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
+      const release = await this.releaseSeq(tx);
+      const items = rows.slice(0, limit).map(row => this.view(row, release));
+      const hasMore = rows.length > limit;
+      return { items, hasMore, nextCursor: hasMore ? items.at(-1)!.id : null };
+    });
+  }
+
+  async getPage(supplied: string, id: string) {
+    return this.identity.withPermission(supplied, null, 'content.read', async tx => this.view(await this.load(tx, id), await this.releaseSeq(tx)));
+  }
+
+  async createPage(supplied: string, csrfValue: string, body: PageBody, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfValue, 'content.write', async (tx, actor) => {
+      const locales = await contentLocales(tx);
+      const pageKey = contentRule(() => assertPageKey(body.pageKey));
+      const pageType = contentRule(() => assertPageType(body.pageType));
+      const translations = contentRule(() => normalizePageTranslations(body.translations ?? [], locales));
+      const blocks = contentRule(() => normalizeBlocks(body.blocks ?? []));
+      const row = await this.guarded(() => tx.contentPage.create({ data: { pageKey, pageType,
+        blocks: blocks as unknown as Prisma.InputJsonValue, status: 'draft', version: 1, createdBy: actor.id, updatedBy: actor.id,
+        translations: { create: translations.map(translation => ({ ...translation })) } }, include: includePage }));
+      await this.identity.recordAudit(tx, ctx, actor.id, 'content.page.created', row.id);
+      return this.view(row, await this.releaseSeq(tx));
+    });
+  }
+
+  async updatePage(supplied: string, csrfValue: string, id: string, version: number, body: PageBody, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfValue, 'content.write', async (tx, actor, _session, now) => {
+      const locales = await contentLocales(tx);
+      // 编辑与发布串行：否则「编辑后马上发布」会读到一半新一半旧的草稿。
+      await tx.$queryRaw`SELECT "id" FROM "ContentPage" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      const row = await this.load(tx, id);
+      if (row.version !== version) throw new AuthError(409, 'VERSION_CONFLICT');
+      const data: Prisma.ContentPageUpdateInput = { version: row.version + 1, updatedBy: actor.id, updatedAt: now };
+      if (body.pageKey !== undefined) data.pageKey = contentRule(() => assertPageKey(body.pageKey));
+      if (body.pageType !== undefined) data.pageType = contentRule(() => assertPageType(body.pageType));
+      if (body.blocks !== undefined) {
+        const blocks = contentRule(() => normalizeBlocks(body.blocks));
+        data.blocks = blocks as unknown as Prisma.InputJsonValue;
+      }
+      // 定时页面被编辑后必须重新定时：否则会用「编辑后的内容」在旧时刻静默上线。
+      if (row.status === 'scheduled') { data.scheduledAt = null; data.status = 'draft'; }
+      if (body.translations !== undefined) {
+        const translations = contentRule(() => normalizePageTranslations(body.translations, locales));
+        const keep = new Set(translations.map(translation => translation.locale));
+        for (const existing of row.translations) {
+          if (!keep.has(existing.locale)) await tx.contentPageTranslation.delete({ where: { id: existing.id } });
+        }
+        for (const translation of translations) {
+          await this.guarded(() => tx.contentPageTranslation.upsert({
+            where: { pageId_locale: { pageId: id, locale: translation.locale } },
+            create: { pageId: id, ...translation },
+            // publishedSlug 只在发布时改：改草稿 slug 不应该让线上地址立刻消失。
+            update: { title: translation.title, slug: translation.slug, seoTitle: translation.seoTitle,
+              seoDescription: translation.seoDescription, indexable: translation.indexable },
+          }));
+        }
+      }
+      const updated = await this.guarded(() => tx.contentPage.update({ where: { id }, data, include: includePage }));
+      await this.identity.recordAudit(tx, ctx, actor.id, 'content.page.updated', id);
+      return this.view(updated, await this.releaseSeq(tx));
+    });
+  }
+
+  /**
+   * 发布：立即或定时。定时只登记计划（202），到点由 worker 执行；
+   * 立即发布在事务内切线上指针，失败则整体回滚，线上版本不受影响。
+   */
+  async publishPage(supplied: string, csrfValue: string, id: string, body: PublishBody, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfValue, 'content.publish', async (tx, actor, _session, now) => {
+      const plan = contentRule(() => normalizePublishPlan({ mode: body.mode, scheduledAt: body.scheduledAt }, now));
+      if (plan.mode === 'scheduled' && plan.scheduledAt) {
+        await schedulePage(tx, { pageId: id, expectedVersion: body.expectedVersion, scheduledAt: plan.scheduledAt, actorId: actor.id });
+        await this.identity.recordAudit(tx, ctx, actor.id, 'content.page.scheduled', id, 'success', plan.scheduledAt.toISOString());
+        return { scheduled: true, releaseToken: null, page: this.view(await this.load(tx, id), await this.releaseSeq(tx)) };
+      }
+      const result = await publishPageVersion(tx, { pageId: id, expectedVersion: body.expectedVersion,
+        actorId: actor.id, note: null, now });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'content.page.published', id, 'success', `v${result.version}`);
+      return { scheduled: false, releaseToken: result.releaseToken,
+        page: this.view(await this.load(tx, id), await this.releaseSeq(tx)) };
+    });
+  }
+
+  async unpublishPage(supplied: string, csrfValue: string, id: string, body: { reason: string }, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfValue, 'content.publish', async (tx, actor, _session, now) => {
+      const result = await withdrawPageVersion(tx, { pageId: id, actorId: actor.id, now });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'content.page.withdrawn', id, 'success', body.reason);
+      return { releaseToken: result.releaseToken, page: this.view(await this.load(tx, id), result.releaseSeq) };
+    });
+  }
+
+  async rollbackPage(supplied: string, csrfValue: string, id: string, body: RollbackBody, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfValue, 'content.publish', async (tx, actor, _session, now) => {
+      const result = await rollbackPageVersion(tx, { pageId: id, sourceVersion: body.sourceVersion,
+        expectedVersion: body.expectedVersion, actorId: actor.id, reason: body.reason, now });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'content.page.rolled_back', id, 'success',
+        `from v${body.sourceVersion}: ${body.reason}`);
+      return { releaseToken: result.releaseToken, page: this.view(await this.load(tx, id), result.releaseSeq) };
+    });
+  }
+
+  /** worker 用：到点发布。返回 true 表示本轮确实发布了内容。 */
+  async publishDue(now: Date, limit = 5) {
+    const due = await this.identity.db.contentPage.findMany({ where: { status: 'scheduled', scheduledAt: { lte: now } },
+      orderBy: { scheduledAt: 'asc' }, take: limit });
+    let published = 0;
+    for (const page of due) {
+      const ctx: RequestContext = { requestId: `content-scheduler:${page.id}`, ip: 'worker' };
+      try {
+        await this.identity.db.$transaction(async tx => {
+          const result = await publishPageVersion(tx, { pageId: page.id, expectedVersion: page.version, actorId: null,
+            note: 'scheduled', now });
+          // 定时发布没有登录会话，但审计必须留下证据：谁都没按按钮，也要能解释内容何时上线。
+          await this.identity.recordAudit(tx, ctx, null, 'content.page.published', page.id, 'success',
+            `scheduled v${result.version}`);
+        }, { timeout: 15_000 });
+        published += 1;
+      } catch (error) {
+        // 计划失败时线上版本保持不变：把计划标记为失败并留审计，等人工处理。
+        const reason = error instanceof AuthError ? error.code : 'PUBLISH_FAILED';
+        await this.identity.db.$transaction(async tx => {
+          await tx.contentPage.update({ where: { id: page.id }, data: { status: 'draft', scheduledAt: null } });
+          await this.identity.recordAudit(tx, ctx, null, 'content.page.schedule_failed', page.id, 'failure', reason);
+        });
+      }
+    }
+    return published;
+  }
+}
