@@ -105,6 +105,14 @@
 - SEOFields：页面/商品/语言的 title、description、social_image、indexing_policy、canonical_ref；canonical/alternate URL 按实例域名、启用语言和已发布路由生成。
 - SeoRedirect：store_id、locale、from_path、to_path、status_code（首期 301）、created_by、created_at、status；路径冲突或形成循环时拒绝发布。预览/草稿不得加入 sitemap，已发布且允许索引的路径才可输出。
 
+### ContentPage / ContentPageVersion（M04 第一批已实现，202611180029）
+
+- ContentPage：page_key（唯一，小写短横线）、page_type（standard/article/policy/faq/announcement）、blocks（草稿区块 JSON）、status（draft/scheduled/published/withdrawn）、position、scheduled_at、published_version_id、published_at、version（乐观锁）。
+- ContentPageTranslation：page_id + locale（唯一）、title、slug（同语言内唯一）、seo_title、seo_description、indexable、published_slug（发布时写入、撤下清空，部分唯一索引）。
+- ContentPageVersion：page_id + version（唯一）、release_seq（全局序列，派生内容发布标记 cr-N）、status（published/superseded/withdrawn）、snapshot（页面 + 三语翻译 + 区块的不可变 JSON）、published_at/published_by、note。
+- ContentRelease：单行计数器，每次发布/撤下 +1；前台公开配置返回 cr-N，主题把它当区块埋点的 publish_version_id。
+- 关键边界：前台只读 snapshot（草稿 slug 不进公开地址）；发布要求补齐店铺已启用语言；回滚用旧快照建新版本并同时恢复草稿；定时发布只登记计划，由 worker 到点执行，失败保留线上版本并写审计。
+
 ### AfterSalesCase / Refund / Return
 
 - AfterSalesCase：case_number、order_id、type、status、reason_code、customer_message、owner_id、source、created_at、closed_at。

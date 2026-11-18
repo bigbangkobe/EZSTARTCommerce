@@ -26,3 +26,27 @@ M00/M01、M02、M03。前台消费已发布的内容与商品陈列契约；主�
 
 ## 项目实施建议
 第 D 阶段，基础页面优先；历史基础 CMS 估算为 5–8 人日，陈列配置需重新估算。
+
+## 第一批实现（2026-11-18）
+
+本批只做「内容页」这一条最常用的链路，把 M04 里最先被需要、也最容易出错的部分落地：后台三语草稿 → 发布版本快照 → 前台按发布版本渲染。
+
+已实现：
+
+- **页面与翻译**：`ContentPage`（page_key/page_type/status/version）+ `ContentPageTranslation`（locale/title/slug/SEO/indexable）。page_key 与 slug 都是小写 ASCII 短横线串，同语言 slug 唯一（草稿唯一 + 发布地址部分唯一两套约束）。
+- **草稿与发布分离**：草稿存在 `ContentPage.blocks` 与翻译表；发布时固化成 `ContentPageVersion.snapshot` 不可变 JSON，前台只读快照。因此「保存草稿」永远不会改变公开地址，也不会生成可索引的临时内容。
+- **跨语言原子性**：发布要求店铺**已启用语言**全部齐全（不静默回退到另一种语言），三语在同一事务里一起切换；缺语言返回 `CONTENT_LOCALE_INCOMPLETE`，后台给出补齐提示。
+- **发布 / 撤下 / 回滚**：撤下清空 `published_slug`（地址立即失效）并把版本标 `withdrawn`；回滚用历史快照建**新版本**并同时把草稿恢复成该内容，避免下一次发布把新草稿盖回旧线上内容。
+- **定时发布**：`mode=scheduled` 只登记计划（202），worker 每 15 秒检查到期任务；发布失败保留线上版本，计划回退为草稿并写 `content.page.schedule_failed` 审计。编辑已定时的页面会自动取消计划（避免用编辑后的内容在旧时刻静默上线）。
+- **区块注册表**：参考主题注册 `rich_text` / `faq_list` / `contact_card` / `notice` 四种类型，配置按类型逐字段白名单校验，拒绝 HTML/脚本字符、未知字段、重复 id；未注册类型直接 422，不提供任意代码编辑。
+- **内容发布标记**：`ContentRelease` 单行计数器，任何发布/撤下 +1，前台 `/storefront/config` 返回 `cr-N`；主题把它作为区块埋点的 `publishVersionId`，区块报表因此能按真实内容版本分组（替换了原来的固定主题标记）。
+- **前台**：`/[locale]/pages/[slug]` 渲染已发布内容页，canonical 指向实际渲染语言、alternates 来自同一份快照，`indexable=false` 输出 noindex；页脚列出已发布页面；站点地图只收 indexable 的已发布页（含三语 alternate）。
+- **后台**：`/admin/content` 列表、新建草稿、编辑（If-Match 版本）、发布/定时/撤下/回滚、草稿预览（桌面/手机），错误码映射为可执行的修复提示。
+
+本批未做（下一批）：
+
+- 首页/分类/专题的陈列区块配置（`/admin/merchandising/{pageKey}`，含动态排序、手工优先级与商品资格复验）。
+- 预览外链（`/admin/pages/{id}/preview-token`）：短期 token 与前台预览路由还没接，当前预览只在后台内渲染草稿。
+- slug 变更的 301 重定向管理（`SeoRedirect`）：本批改 slug 并发布后旧地址直接 404。
+- 文章/公告列表页、`/storefront/collections/{slug}` 专题页、社交分享图字段。
+- 政策文本仍由业主提供并审核，系统不生成法律承诺；`site.policies` 版本号仍需替换为真实版本。

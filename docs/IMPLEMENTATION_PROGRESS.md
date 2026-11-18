@@ -29,7 +29,7 @@
 
 ## 下一项实现
 
-会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表首批（服务端权威数据聚合与受控导出）、第二批「访问漏斗」（第一方匿名事件采集 + 漏斗报表）与第三批「区块陈列效果」（标准区块埋点 + 服务端加购/订单归因 + 区块报表）均已完成；M02 三语参考前台（语言路由 + 三语文案 + canonical/hreflang/sitemap/robots/404）已完成。剩余：结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）与内容/陈列 CMS（M04，落地后区块报表的 `publishVersionId` 可换成真实发布版本 ID，前台页面内容也应由 CMS 驱动而不是写在字典里）。承运商签名状态回传（M09 剩余）已完成。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
+会员 OTP 与积分（M10）已完成并上线；M11 会员解锁（会员专属券、会员身份限额、批量发放）亦已完成；M14 经营报表首批（服务端权威数据聚合与受控导出）、第二批「访问漏斗」（第一方匿名事件采集 + 漏斗报表）与第三批「区块陈列效果」（标准区块埋点 + 服务端加购/订单归因 + 区块报表）均已完成；M02 三语参考前台（语言路由 + 三语文案 + canonical/hreflang/sitemap/robots/404）已完成。M04 内容 CMS 第一批（三语内容页草稿 / 发布版本快照 / 定时发布 / 前台内容页与站点地图）已完成，区块报表的 `publishVersionId` 已换成真实内容发布标记 `cr-N`。剩余：结算文件对账（M08 剩余，依赖客户提供沙箱/生产凭证与文件格式）与 M04 第二批（首页/分类/专题陈列区块配置、预览外链、slug 变更 301 重定向管理、文章与公告列表）。承运商签名状态回传（M09 剩余）已完成。批量发放的真实通知投递、真实 SMTP 及 HTTPS 链路（含邀请与密码重设邮件）仍须在实例参数齐备后独立验收。
 
 ## 客户生产参数
 
@@ -605,3 +605,21 @@
 边界：文案仍在代码字典里，M04 内容 CMS 落地后应由后台内容替换（首页区块正文、政策文本尤其如此）；`site.policies` 的条款版本号仍是 `demo-v1`，上线前须换成客户审核过的真实政策版本；页面没有语言协商（不做 `Accept-Language` 自动跳转），进站固定 `/zh-HK`，由语言切换交给访客决定；商品/分类 slug 若在不同语言下不同，跨语言跳转仍按各自语言列表返回的 slug 生成，不会互相猜；本批未改客户专属前端（按 M02 规格另建）。
 
 部署：提交 78e3de7 已推送 origin/main 并部署 mrinhk（本次无迁移，仍为 28 条）。deploy.sh 备份→快进拉取→重建 api/admin/storefront 镜像→API 健康→Caddy 链路 200。生产冒烟：`/` 307 到 `/zh-HK`、旧 `/products` 308 到 `/zh-HK/products`、`/zh-HK` `/zh-CN` `/en` 均 200、英文页 `html lang="en"` 且 canonical 为 `https://mrinhk.com/en`、robots 含 `/api/` 与 `/*/checkout` 等 disallow、sitemap 12 条（3 页 × 3 语言 + 商品 × 3 语言）、`admin.mrinhk.com/admin/login` 200。注意：商品与站点地图是 ISR 页面，镜像内构建时连不上 API，部署后需一个 1 分钟周期才换成真实商品；冒烟时对三种语言的首页与商品页各预热一次即恢复（首次预热仍可能返回上一版缓存，属预期）。
+
+## 2026-11-18：M04 第一批 内容页 CMS（三语草稿 + 发布版本快照 + 定时发布 + 前台内容页）
+
+范围：让商家不改代码就能维护「关于/政策/FAQ/公告」这类内容页，并把 M14 区块报表里那个写死在主题里的内容发布标记换成真实的发布版本。做的是「内容页」这条链路：后台三语草稿 → 发布快照 → 前台按发布版本渲染与收录。仍不含首页/分类陈列区块配置（M04 第二批）、预览外链、slug 变更 301 管理。
+
+- 契约：新增 `/storefront/pages`（已发布页面地址清单，匿名）与 `PublicPageEnvelope`/`PublicPageListEnvelope`/`PublicPageSummary`/`PublicPageBlock` 四个 schema；`PublicPage` 显式要求 `contentRelease`（`^cr-[0-9]+$`）、`version`、`alternates`，公开区块类型收敛到主题注册的四项，并禁止出现 `visible`/`status` 这类后台字段。契约测试 +2 项，共 48 项。
+- 领域规则 `packages/domain/src/content.ts`：page_key/slug 形态（小写 ASCII 短横线，拒空白/大写/路径字符）；区块注册表与逐字段配置校验（拒 HTML/脚本字符、未知字段、重复 id、超长字段）；发布要求「店铺已启用语言全齐 + 至少一个可见区块」；定时计划必须晚于服务端时间且不超过一年；快照按 (position,id) 稳定排序；`contentReleaseToken` 与 `nextVersion` 保证发布标记与版本号只增不减。
+- 第 29 条迁移 `202611180029_content_cms`：`ContentPage`（page_key 唯一、blocks 草稿 JSON、status/scheduledAt/publishedVersionId/version、`status='scheduled'` 与 `scheduledAt` 的成对 CHECK）、`ContentPageTranslation`（page+locale 唯一、locale+slug 唯一、`publishedSlug` 部分唯一索引）、`ContentPageVersion`（page+version 唯一、`releaseSeq` 取自全局序列 `content_release_seq`、snapshot JSONB、published/superseded/withdrawn）、`ContentRelease`（单行计数器）。
+- 服务端 `apps/api/src/content/`：`POST/PATCH /admin/pages`（If-Match 乐观锁、slug 冲突 409）、`POST /admin/pages/{id}/publish`（立即 200 / 定时 202）、`/unpublish`、`/rollback`（201）；发布在行锁内比版本、写快照、切指针、清定时、递增 `ContentRelease`，全程一个事务，失败不留半套状态。编辑已定时页面会取消计划并回到草稿（否则会用编辑后的内容在旧时刻静默上线）。定时发布由 `apps/worker` 每 15 秒轮询执行，成功与失败都写审计（`content.page.published` / `content.page.schedule_failed`），失败保留线上版本。
+- 前台读取：`/storefront/pages/{slug}` 只按 `published_slug` 命中（草稿 slug 永远不命中），只返回可见区块且不带 `visible` 标记；`/storefront/config` 新增 `contentRelease`。参考主题新增 `/[locale]/pages/[slug]`（区块渲染、canonical 指向实际渲染语言、alternates 来自同一快照、`indexable=false` 输出 noindex）、页脚已发布页面导航、站点地图纳入 indexable 内容页；首页与商品列表的 `publishVersionId` 改为读 `cr-N`（`lib/site.ts` 里的写死标记已删除）。
+- 后台 `/admin/content`：页面列表（状态/版本/发布标记/版本历史）、新建草稿、编辑、发布、定时发布、撤下、回滚、草稿预览（桌面/手机）；错误码映射为可执行提示（缺语言/无可见区块/未注册区块类型/slug 占用/版本冲突）。
+
+验证：契约 48 项、生成物一致、Prisma schema 有效、前后台与参考主题 typecheck、后台生产构建通过；后端全量 310 项（新增纯规则 5 项、HTTP 集成 1 项）全绿——本机沙箱对单次运行的批量删除有 10,000 文件上限，`node --test dist/tests/*.test.js` 连跑时会在后续用例的数据库目录清理阶段被拦截，因此按文件逐个运行并在护栏额度用尽后分批执行，失败项全部是 teardown 护栏而非断言失败；真实 PostgreSQL HTTP 集成 1 项（覆盖草稿不出现在任何语言的公开地址与清单、未注册区块 422、缺语言拒发布、旧版本发布 409、三语同时上线、发布标记前进、改 slug 后旧地址失效、撤下、回滚建新版本并恢复草稿、定时发布取消/重新定时/worker 到点执行与审计、`content.publish` 权限边界与 CSRF）；浏览器端到端 3 项 × 桌面/移动共 6 项（草稿建立与预览、发布写入版本号、缺语言错误提示、未发布地址走本地化 404）。
+
+边界：预览只在后台内渲染草稿，没有短期 token 外链（`/admin/pages/{id}/preview-token` 仍未实现）；改 slug 并发布后旧地址直接 404，没有 301 重定向管理；只做内容页，不含首页/分类/专题陈列区块与动态排序（`/admin/merchandising` 仍未实现）；没有文章列表、公告有效期、社交分享图；政策文本须由业主提供并审核，系统不生成法律承诺；定时发布按绝对时刻执行（展示用店铺时区），不是「按店铺时区的本地整点」；内容页没有分页/批量操作，页面数量按门店级内容量估算。
+
+部署：提交 ed9a016 已推送 origin/main 并部署 mrinhk。deploy.sh 备份数据库→快进拉取→重建 api/admin/storefront 镜像→第 29 条迁移 `202611180029_content_cms` 应用成功（共 29 条）→API 健康→Caddy/公网 health/live 200。生产冒烟：`health/ready` 200、`/api/v1/storefront/pages?locale=zh-HK` 200 且返回 `contentRelease=cr-0`（尚无已发布内容页）、`/api/v1/storefront/config` 含 `contentRelease`、`https://admin.mrinhk.com/admin/content` 200、`/zh-HK/pages/does-not-exist` 404、`/zh-HK` `/en` `/zh-HK/products` `/sitemap.xml` `/robots.txt` 均 200（sitemap 仍 12 条，内容页发布后按三语追加）。注意：内容页要店主在后台建立并发布后才会出现在前台与站点地图；店铺分析开关仍为关闭（`analyticsEnabled=false`），区块埋点与 `cr-N` 发布标记要等店主开启分析并按告知同意采集后才会进报表。
+
