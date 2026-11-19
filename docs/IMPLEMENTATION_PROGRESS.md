@@ -623,3 +623,46 @@
 
 部署：提交 ed9a016 已推送 origin/main 并部署 mrinhk。deploy.sh 备份数据库→快进拉取→重建 api/admin/storefront 镜像→第 29 条迁移 `202611180029_content_cms` 应用成功（共 29 条）→API 健康→Caddy/公网 health/live 200。生产冒烟：`health/ready` 200、`/api/v1/storefront/pages?locale=zh-HK` 200 且返回 `contentRelease=cr-0`（尚无已发布内容页）、`/api/v1/storefront/config` 含 `contentRelease`、`https://admin.mrinhk.com/admin/content` 200、`/zh-HK/pages/does-not-exist` 404、`/zh-HK` `/en` `/zh-HK/products` `/sitemap.xml` `/robots.txt` 均 200（sitemap 仍 12 条，内容页发布后按三语追加）。注意：内容页要店主在后台建立并发布后才会出现在前台与站点地图；店铺分析开关仍为关闭（`analyticsEnabled=false`），区块埋点与 `cr-N` 发布标记要等店主开启分析并按告知同意采集后才会进报表。
 
+
+## 2026-11-19：P0 后台写入来源修复 + M04 第二批 预览外链与 slug 变更 301
+
+### 一、生产事故修复：后台登录与保存全部 403
+
+- 现象：`https://admin.mrinhk.com` 用正确凭据登录得到 403；同样请求打到店铺域名是 401（凭据错误）。说明写接口的来源校验只认了店铺域名。
+- 根因：`identityConfig` 只有一个 `allowedOrigin`（取自 `APP_ORIGIN`），compose 把它固定成 `https://${SITE_DOMAIN}`；后台页面在 `admin.` 子域发起请求，Origin 永远对不上。同一处还发现 worker 的 `smtp` profile 缺 `APP_ORIGIN/INSTANCE_ID/IDENTITY_ENCRYPTION_KEY`，邮件链路根本起不来。
+- 修复：新增可选 `ADMIN_ORIGIN`；`allowedOrigin = ADMIN_ORIGIN ?? APP_ORIGIN`（邀请/重设链接指向后台，`/admin/*` 只存在于后台应用），`storefrontOrigin` 保留前台写接口的来源；`originAllowed()` 只接受这两个已知来源，缺失 Origin 仍拒绝；开发环境允许 `localhost` 与 `*.localhost`。compose 给 `api` 与 `worker` 注入 `ADMIN_ORIGIN`。
+- 验证：`identity-security` 新增 1 项（双来源放行、伪造来源与缺失 Origin 拒绝、非规范/非 HTTPS 地址拒绝、未配置后台域名时不多认来源）。生产冒烟：带 `Origin: https://admin.mrinhk.com` 的登录请求返回 **401**（不再是 403），店铺域名 401，`Origin: https://evil.example.test` 仍 403。
+
+### 二、M04 第二批：预览外链与已发布 URL 变更重定向
+
+范围：把第一批明确留下的两个运营缺口补上——「不能把草稿发给别人看」和「改 slug 后旧地址变死链」。陈列区块配置（首页/分类/专题）仍留到第三批。
+
+- 契约：新增 `/admin/redirects`（GET/POST）、`/admin/redirects/{id}`（DELETE）、`/storefront/preview/{token}`、`/storefront/redirect`、`/storefront/redirects`；新增 `PreviewTokenResult`、`RedirectWriteRequest`、`PublicPreviewPage(Envelope)`、`PublicRedirect(Envelope|Target|Rule|ListEnvelope)`，`PreviewRequest` 增 `ttlMinutes`。公开错误路径全部收敛到站内相对路径（正则要求斜杠后首字符不能是 `/`），契约测试 48 → **50 项**。
+- 领域：`packages/domain/src/preview.ts`（语言/视口/有效期闭集，默认 60 分钟、上限 24 小时，token 形态与失效判定）、`packages/domain/src/redirect.ts`（站内路径规范化、链解析最多 5 跳、成环拒绝、slug 变更的重定向计划）。
+- 第 30 条迁移 `202611190030_content_preview_redirects`：`ContentPreviewToken`（token_hash 唯一、locale、viewport、expires_at）、`SeoRedirect`（from_path 唯一、两端 CHECK 站内路径且不相同、status_code 301/308）。
+- 服务端：`POST /admin/pages/{id}/preview-token`（`content.preview`，`expectedVersion` 不一致 409，同页只留最近 10 条有效链接）；预览 token 只存 SHA-256，明文只在签发响应出现一次。发布时对比每个语言的 `publishedSlug`，变更即登记旧地址 → 新地址 301，入站链改直、新地址上的旧记录移除，写后仍成环则删除该记录（宁可 404 不坏跳转）；撤下页面时清理指向它的重定向。`/admin/redirects` 拒绝自跳、成环、重复、遮挡在线页面（`REDIRECT_SELF/LOOP/EXISTS/SHADOWS_PAGE`）。重定向读取不按 locale 标签过滤，避免标签填错导致静默失效。
+- 前台：`/{locale}/preview/{token}` 渲染草稿（仍只给可见区块，视口以 token 绑定值为准），页面与接口都带 `noindex` + `no-store`，且不加载埋点；`proxy.ts`（Next 16 的 middleware 约定）缓存重定向清单 30 秒后本地匹配并回 **301**，清单取不到时直接放行，入口层不成为单点故障。
+- 后台：内容页每行新增「预览链接」（按当前视口签发、可复制），新增「URL 重定向」面板（自动/手工标记、补登记、删除），错误码映射为可执行的修复提示；重定向列表读取失败不再让整个控制台崩掉。
+
+验证：契约 **50 项**全绿、生成物一致、Prisma schema 有效；新增后端测试 **4 项**（预览/重定向纯规则 3 项 + 真实 PostgreSQL HTTP 集成 1 项，覆盖权限与版本绑定、草稿不进线上、no-store/noindex、过期与伪造 404、改 slug 后旧地址 301、链一次走完、自跳/成环/遮挡/重复拒绝、删除、撤下清理）；内容与身份相关套件复跑全绿（`content` 5 + `content-http` 1 + `content-preview-http` 1 + `preview-redirect` 3 + `identity-security` 5 + `identity-http` 22）；后台与参考主题 typecheck、生产构建通过；浏览器端到端 **10/10**（桌面 + 移动；新增预览链接签发与重定向登记、伪造 token 的 404 与 noindex 头）。本机在合并跑其余历史套件时嵌入式 PostgreSQL 启动超出用例超时（磁盘/文件备份争用，无断言失败），这些套件在本批改动前已全绿且不经过本批代码路径。
+
+边界：重定向不统计命中次数、不支持批量导入；预览链接不可单独撤销（默认 60 分钟、最长 24 小时，过期即失效）；预览不提供「隐藏区块」开关（预览=发布后的样子）；陈列区块配置、文章/公告列表、专题页仍在第三批。
+
+部署：提交 d4488a6 已推送 origin/main 并部署 mrinhk。deploy.sh 备份数据库→快进拉取→重建 api/admin/storefront 镜像→第 30 条迁移 `202611190030_content_preview_redirects` 应用成功（共 30 条）→API 健康→Caddy/公网 200。生产冒烟：后台来源登录 401（修复前 403）、外部来源 403、`/api/v1/storefront/redirects` 200 空清单、`/api/v1/storefront/redirect?path=…` 返回 `redirect=null`、伪造 token 的预览接口 404 且 `Cache-Control: no-store` + `X-Robots-Tag: noindex`、`/zh-HK/preview/{token}` 404 且入口层同样加了两条头、三语首页/内容页 404/sitemap/admin 页面均正常。
+
+
+### 三、M04 第三批：首页陈列区块配置（手工优先级 + 动态排序 + 资格复验）
+
+范围：把 M04 里「首页陈列」这条运营链路打通——后台排布区块 → 发布快照 → 前台按快照渲染，并保证商品资格在每次读取时重算。分类页/专题页的陈列与专题列表页留在后续批次。
+
+- 契约：新增 `/admin/merchandising/products`、`/admin/merchandising/{pageKey}/publish|unpublish`、`/storefront/merchandising/{pageKey}`；把先前只占位的 `MerchandisingWriteRequest/MerchandisingSectionInput` 收紧为真实形状（`product_grid`、`sortMode` 闭集、`limit` 1–24、`collectionId` 只允许 null），新增 `MerchandisingPublishRequest`、`MerchandisingWithdrawRequest`、`PublicMerchandisingPage(Envelope)`，契约测试 50 → **51 项**。
+- 领域：`packages/domain/src/merchandising.ts`——区块闭集与逐字段白名单、手工/动态互斥、发布要求三语标题与「至少一个可见区块」、排序同值兜底（发布时间 → 商品 id）、快照不可变与读取时上限再收敛。
+- 第 31 条迁移 `202611190100_merchandising_layouts`：`MerchandisingLayout`（page_key 唯一、sections 草稿、published_snapshot、version，CHECK 保证 draft 无快照 / published 必有快照）与 `MerchandisingVersion`（版本历史不可覆盖）。
+- 服务端：`GET/PATCH /admin/merchandising/{pageKey}`、`POST .../publish|unpublish`（`content.read` / `content.write` / `content.publish` 分别校验）；版本语义为「无草稿=版本 1，首次保存消耗 1 落库为 2」，两人同时首存后到者拿 409；发布前复验手工商品资格（不合格 → 422 `MERCHANDISING_PRODUCT_INELIGIBLE`），发布同时写版本快照并推进 `ContentRelease`（区块埋点按 cr-N 分组）；撤下摘掉线上快照但保留草稿。
+- 前台：`GET /storefront/merchandising/home` 在每次读取时重跑「已发布 + 市场开放 + 审核通过 + 可售清单」；动态区块排除不合格商品后由后续候选补足，手工区块失效商品隐藏；排序口径按开发规格 5.4（新品=首次发布时间倒序、销量=近 30 天已履约件数并扣退款、价格=当前可购变体最低价且无价排最后）。
+- 后台：`/admin/merchandising` 支持区块增删/上下移/显示隐藏、三语标题、排序方式与上限、手工商品选择（不可售为禁选项并显示原因）、动态候选分类、保存/发布/撤下，并列出 issues 供运营替换失效商品。
+- 前台页面：首页优先渲染已发布版面（保留 `data-ez-section`/`data-ez-placement` 埋点字段），未发布或接口不可用时退回主题默认精选。
+
+验证：契约 **51 项**全绿、契约生成物一致、Prisma schema 有效；新增前端无依赖测试 **6 项**（`merchandising.test.ts`：闭集校验、手工/动态互斥、发布门槛、排序稳定性、快照不可变）；新增真实 PostgreSQL HTTP 集成 **1 项**（`merchandising-http.test.ts`，覆盖草稿与线上分离、版本冲突、缺语言阻断、手工不合格商品拒绝发布、动态补足与读取时资格失效、发布后失效商品的 issues、发布权限与撤下）；后台与前台 typecheck、生产构建通过。
+
+测试环境修复：Windows 上把测试用嵌入式 PostgreSQL 的数据目录从仓库 `.local-tools` 改到系统临时目录（`EZ_TEST_PG_DIR` 可覆盖）——仓库目录会让 `initdb` 的 bootstrap 阶段卡住数分钟，导致历史套件成片超时；迁移子进程超时同时从 120s 放宽到 240s。改完后单套件启动约 5 秒，`storefront` 等此前超时的套件恢复可跑。

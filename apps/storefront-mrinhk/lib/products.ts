@@ -130,7 +130,7 @@ export async function fetchProduct(slug: string, locale?: string): Promise<Produ
   return first.item ? toProduct(first.item) : null;
 }
 
-function toProduct(item: ApiProduct): Product {
+export function toProduct(item: ApiProduct): Product {
   const price = startingPrice(item.variants ?? []);
   return {
     id: item.id,

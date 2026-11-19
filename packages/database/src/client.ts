@@ -11,4 +11,4 @@ export function connectDatabase(connectionString: string) {
 }
 
 export { PrismaClient };
-export type { Prisma } from './generated/client.js';
+export { Prisma } from './generated/client.js';

@@ -46,6 +46,18 @@ export class StorefrontController extends ManagementHttp {
     this.send(response, request, 200, await this.front().listCategories(text(locale, 10)));
   }
 
+  /**
+   * 首页陈列：未发布时 404，前台据此退回主题默认布局（配置没做好不能把首页打空）。
+   * 缓存 30 秒与重定向清单同档：陈列变更最多半分钟生效，但商品资格失效靠重新读取收敛。
+   */
+  @Get('merchandising/:pageKey')
+  async merchandising(@Param('pageKey') pageKey: string, @Query('locale') locale: unknown,
+    @Query('marketCode') marketCode: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    if (!/^[a-z][a-z0-9-]{1,31}$/.test(pageKey)) throw new AuthError(404, 'NOT_FOUND');
+    response.setHeader('Cache-Control', 'public, max-age=30');
+    this.send(response, request, 200, await this.front().merchandising(pageKey, text(locale, 10), text(marketCode, 8)));
+  }
+
   @Get('pages')
   async pages(@Query('locale') locale: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     this.send(response, request, 200, await this.front().listPages(text(locale, 10)));

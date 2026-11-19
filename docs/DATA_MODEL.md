@@ -119,6 +119,13 @@
 - SeoRedirect：locale、from_path（唯一）、to_path、status_code（301/308）、page_id（可空，页面删除后置空但保留跳转）、created_by。CHECK 约束保证两端都是站内相对路径且不相同。
 - 关键边界：预览只读草稿、不写 ContentRelease、不加载埋点；slug 变更时自动登记旧地址 → 新地址并把入站链改直；撤下页面时清理指向它的重定向；前台入口层缓存清单 30 秒后本地匹配，命中即 301。
 
+### MerchandisingLayout / MerchandisingVersion（M04 第三批已实现，202611190100）
+
+- MerchandisingLayout：page_key（唯一，本批只开放 home）、kind（home/category/collection）、sections（草稿区块 JSON）、status（draft/published）、version（乐观锁）、published_snapshot（线上不可变快照）、published_at/published_by、created_by/updated_by。
+- MerchandisingVersion：layout_id + version（唯一）、snapshot（发布快照）、note、published_at/published_by；历史不可覆盖，回滚只能再发一版。
+- 区块字段：section_id、type（服务端闭集，本批只有 product_grid）、visible、position（由数组顺序重排）、title_by_locale、sort_mode（manual/newest/fulfilled_sales_30d/price_asc/price_desc）、limit（1–24）、product_ids（手工顺序）、category_ids（动态候选范围）。
+- 关键边界：CHECK 约束保证「draft 无快照、published 必有快照」；保存草稿不动线上；发布要求三语标题齐全且手工商品全部可售；读取时重跑商品资格，手工区块失效商品隐藏并在后台标 issues，动态区块由后续候选补足；发布同时推进 ContentRelease（区块埋点按新版本分组）。
+
 ### AfterSalesCase / Refund / Return
 
 - AfterSalesCase：case_number、order_id、type、status、reason_code、customer_message、owner_id、source、created_at、closed_at。

@@ -1570,6 +1570,41 @@ model SeoRedirect {
   @@index([pageId])
 }
 
+/// 陈列版面：首页/分类/专题共用一张表，pageKey 决定它服务哪个地址。
+/// 草稿在 blocks，线上只读 publishedSnapshot——保存草稿永远不影响线上陈列。
+model MerchandisingLayout {
+  id                String                 @id @default(uuid()) @db.Uuid
+  /// 本批只开放 home；分类/专题沿用同一结构，等对应前台路由上线再放开。
+  pageKey           String                 @unique
+  kind              String                 @default("home")
+  status            String                 @default("draft")
+  sections          Json                   @default("[]")
+  version           Int                    @default(1)
+  publishedSnapshot Json?
+  publishedAt       DateTime?              @db.Timestamptz(3)
+  publishedBy       String?                @db.Uuid
+  createdBy         String?                @db.Uuid
+  updatedBy         String?                @db.Uuid
+  createdAt         DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime               @updatedAt @db.Timestamptz(3)
+  versions          MerchandisingVersion[]
+  @@index([status])
+}
+
+/// 发布历史：snapshot 不可变，按 version 递增；线上只认 layout.publishedSnapshot。
+model MerchandisingVersion {
+  id          String              @id @default(uuid()) @db.Uuid
+  layoutId    String              @db.Uuid
+  layout      MerchandisingLayout @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  version     Int
+  snapshot    Json
+  note        String?
+  publishedAt DateTime            @db.Timestamptz(3)
+  publishedBy String?             @db.Uuid
+  @@unique([layoutId, version])
+  @@index([layoutId, publishedAt])
+}
+
 /// 单行计数器：任何发布/撤下都会 +1，前台用它判断内容是否换代（只增不减）。
 model ContentRelease {
   id        Int      @id @default(1)

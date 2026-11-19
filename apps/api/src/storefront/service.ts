@@ -3,6 +3,10 @@ import { contentReleaseToken, normalizeBlocks, visibleBlocks, type PageSnapshot 
 import { isPreviewLive, PREVIEW_TOKEN_PATTERN } from '../../../../packages/domain/src/preview.js';
 import { effectiveReviewStatus, normalizeMarketCode, SUPPORTED_LOCALES, StoreRuleError } from '../../../../packages/domain/src/store.js';
 import { digestPreviewToken, lookupRedirect } from '../content/preview.js';
+import {
+  assertMerchandisingPageKey, sectionTitle, type MerchandisingPageKey, type MerchandisingSection,
+} from '../../../../packages/domain/src/merchandising.js';
+import { fulfilledSales30d, selectProducts, sellableByIds, sellablePool } from '../merchandising/resolve.js';
 import { AuthError, IdentityService } from '../identity/service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -273,6 +277,43 @@ export class StorefrontService {
         if (row) return this.publicView(row, locale, settings.defaultLocale);
       }
       throw new AuthError(404, 'NOT_FOUND');
+    });
+  }
+
+  /**
+   * 首页陈列（M04 第三批）：读发布快照，商品在读取时重新过一遍可售资格。
+   * 手工区块里已失效的商品直接不出现（后台 issues 会提示运营替换）；
+   * 动态区块排除不合格商品后由后续候选补足，因此展示数量仍能维持到 limit。
+   */
+  async merchandising(pageKeyInput: string, localeInput: string | null, marketInput: string | null) {
+    let pageKey: MerchandisingPageKey;
+    try { pageKey = assertMerchandisingPageKey(pageKeyInput); }
+    catch { throw new AuthError(404, 'NOT_FOUND'); }
+    return this.run(async tx => {
+      const settings = await this.settings(tx);
+      const locale = this.locale(settings, localeInput);
+      const market = this.market(settings, marketInput);
+      // 没有可售市场时前台是关的：陈列也不该把商品端出来。
+      if (!market) throw new AuthError(404, 'NOT_FOUND');
+      const layout = await tx.merchandisingLayout.findUnique({ where: { pageKey } });
+      if (!layout || layout.status !== 'published' || !layout.publishedSnapshot) throw new AuthError(404, 'NOT_FOUND');
+      const snapshot = layout.publishedSnapshot as unknown as { sections?: MerchandisingSection[]; version?: number };
+      const scope = { marketCode: market.marketCode, eligibleProductIds: market.eligibleProductIds, now: new Date() };
+      const sections = [];
+      for (const section of (snapshot.sections ?? []).filter(item => item.visible)) {
+        // 手工区块按配置的 id 取（顺序即优先级）；动态区块按规则在候选池里排序。
+        const rows = section.sortMode === 'manual'
+          ? await sellableByIds(tx, scope, section.productIds)
+          : await sellablePool(tx, scope, section.categoryIds);
+        const eligibleIds = new Set(rows.map(row => row.id));
+        const units = section.sortMode === 'fulfilled_sales_30d'
+          ? await fulfilledSales30d(tx, rows.map(row => row.id), scope.now) : new Map<string, number>();
+        const selection = selectProducts(section, rows, units, eligibleIds);
+        sections.push({ sectionId: section.sectionId, type: section.type,
+          title: sectionTitle(section, locale, settings.defaultLocale), sortMode: section.sortMode,
+          products: selection.rows.map(row => this.publicView(row, locale, settings.defaultLocale)) });
+      }
+      return { pageKey, version: snapshot.version ?? layout.version, locale, marketCode: market.marketCode, sections };
     });
   }
 

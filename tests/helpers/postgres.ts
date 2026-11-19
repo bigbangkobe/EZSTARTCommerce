@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { connectDatabase } from '../../packages/database/src/client.js';
@@ -33,7 +34,7 @@ const withDeadline = async <T>(work: Promise<T>, label: string): Promise<T> =>
 const migrate = (url: string, secret: string) => {
   const migrated = spawnSync(process.execPath, [resolve('node_modules/prisma/build/index.js'), 'migrate', 'deploy',
     '--config', resolve('packages/database/prisma.config.ts')],
-    { env: { ...process.env, DATABASE_URL: url }, encoding: 'utf8', windowsHide: true, timeout: 120_000 });
+    { env: { ...process.env, DATABASE_URL: url }, encoding: 'utf8', windowsHide: true, timeout: 240_000 });
   if (migrated.status !== 0) throw new Error(`Disposable database migration failed: ${redact(migrated.stderr, [secret])}`);
 };
 
@@ -72,11 +73,16 @@ async function externalCluster(): Promise<TestCluster> {
 
 export async function testPostgres(): Promise<TestCluster> {
   if (process.env.TEST_DATABASE_URL) return externalCluster();
-  const workspace = resolve('.local-tools');
+  // 数据目录放在系统临时目录：仓库目录（尤其 Windows + 实时防护/同步盘）会让 initdb 的
+  // bootstrap 阶段卡上数分钟，而临时目录通常已经被排除在扫描之外。
+  // 需要固定在别处时用 EZ_TEST_PG_DIR 覆盖；无论哪种，名字必须是 pg-test-<uuid>。
+  const workspace = process.env['EZ_TEST_PG_DIR'] ? resolve(process.env['EZ_TEST_PG_DIR']) : resolve(tmpdir(), 'ezstart-pg');
   await mkdir(workspace, { recursive: true });
   const directory = resolve(workspace, `pg-test-${randomUUID()}`);
   const inside = relative(workspace, directory);
-  if (!inside || inside.startsWith('..') || isAbsolute(inside)) throw new Error('Unsafe test database directory');
+  if (!inside || inside.startsWith('..') || isAbsolute(inside) || !/^pg-test-[0-9a-f-]{36}$/.test(inside)) {
+    throw new Error('Unsafe test database directory');
+  }
   await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   const server = createServer();
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));

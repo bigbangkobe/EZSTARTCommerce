@@ -816,6 +816,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/merchandising/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List products with merchandising eligibility reasons */
+        get: operations["listMerchandisingProducts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/merchandising/{pageKey}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish the merchandising draft as the live snapshot */
+        post: operations["publishMerchandisingLayout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/merchandising/{pageKey}/unpublish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw the live merchandising snapshot and keep the draft */
+        post: operations["unpublishMerchandisingLayout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/import-jobs": {
         parameters: {
             query?: never;
@@ -1048,6 +1099,23 @@ export interface paths {
         };
         /** Get a published content page */
         get: operations["getStorefrontPage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storefront/merchandising/{pageKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the published merchandising layout with live product eligibility */
+        get: operations["getStorefrontMerchandising"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3134,6 +3202,10 @@ export interface components {
             };
             meta: components["schemas"]["ResponseMeta"];
         };
+        PublicMerchandisingEnvelope: {
+            data: components["schemas"]["PublicMerchandisingPage"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         PublicPageAlternate: {
             /** @enum {string} */
             locale: "zh-CN" | "zh-HK" | "en";
@@ -3413,6 +3485,24 @@ export interface components {
             readonly onHand?: number;
             readonly reserved?: number;
             readonly available?: number;
+        };
+        PublicMerchandisingSection: {
+            sectionId: string;
+            /** @enum {string} */
+            type: "product_grid";
+            title: string;
+            /** @enum {string} */
+            sortMode: "manual" | "newest" | "fulfilled_sales_30d" | "price_asc" | "price_desc";
+            products: components["schemas"]["PublicProduct"][];
+        };
+        PublicMerchandisingPage: {
+            /** @enum {string} */
+            pageKey: "home";
+            version: number;
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            marketCode: string;
+            sections: components["schemas"]["PublicMerchandisingSection"][];
         };
         PublicProduct: {
             /** Format: uuid */
@@ -3925,13 +4015,15 @@ export interface components {
             reason: string;
             expectedVersion: number;
         };
+        /** @description Draft replacement for one page layout. expectedVersion 1 means the layout does not exist yet. */
         MerchandisingWriteRequest: {
             expectedVersion: number;
             sections: components["schemas"]["MerchandisingSectionInput"][];
         };
         MerchandisingSectionInput: {
             sectionId: string;
-            type: string;
+            /** @enum {string} */
+            type: "product_grid";
             visible: boolean;
             position: number;
             titleByLocale?: {
@@ -3942,8 +4034,16 @@ export interface components {
             limit: number;
             productIds?: string[];
             categoryIds?: string[];
-            /** Format: uuid */
-            collectionId?: string | null;
+            /** @description Collection pages are not released yet; a non-null value is rejected with MERCHANDISING_COLLECTION_UNSUPPORTED. */
+            collectionId?: null;
+        };
+        MerchandisingPublishRequest: {
+            expectedVersion: number;
+            note?: string | null;
+        };
+        MerchandisingWithdrawRequest: {
+            expectedVersion: number;
+            reason: string;
         };
         ImportCreateRequest: {
             fileObjectKey: string;
@@ -5964,6 +6064,15 @@ export interface components {
                 "application/json": components["schemas"]["PublicProductListEnvelope"];
             };
         };
+        /** @description Published merchandising layout with live eligibility applied */
+        PublicMerchandisingSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicMerchandisingEnvelope"];
+            };
+        };
         /** @description Published content page read from the immutable release snapshot */
         PublicPageSuccess: {
             headers: {
@@ -7627,6 +7736,72 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    listMerchandisingProducts: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    publishMerchandisingLayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pageKey: components["parameters"]["PageKey"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerchandisingPublishRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    unpublishMerchandisingLayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pageKey: components["parameters"]["PageKey"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerchandisingWithdrawRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     createImportJob: {
         parameters: {
             query?: never;
@@ -7891,6 +8066,26 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["PublicPageSuccess"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getStorefrontMerchandising: {
+        parameters: {
+            query: {
+                locale: components["parameters"]["Locale"];
+                marketCode: components["parameters"]["MarketCode"];
+            };
+            header?: never;
+            path: {
+                pageKey: components["parameters"]["PageKey"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicMerchandisingSuccess"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];

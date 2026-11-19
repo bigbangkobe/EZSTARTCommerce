@@ -1,0 +1,123 @@
+import type { Prisma } from '../../../../packages/database/src/client.js';
+import {
+  rankCandidates, visibleLimit, type MerchandisingCandidate, type MerchandisingSection,
+} from '../../../../packages/domain/src/merchandising.js';
+
+type Tx = Prisma.TransactionClient;
+
+export const includeProduct = { translations: true, variants: { include: { inventory: true } }, media: true } as const;
+export type ProductRow = Prisma.ProductGetPayload<{ include: typeof includeProduct }>;
+
+/**
+ * 可售口径与前台目录完全一致：已发布 + 当前市场开放 + 市场审核通过 + 在可售清单内。
+ * 陈列读取时必须重新跑一遍，不能信发布时的判断——商品可能已经下架、归档或改市场。
+ */
+export interface SellableScope {
+  marketCode: string;
+  eligibleProductIds: readonly string[];
+  now: Date;
+}
+
+export function sellableWhere(scope: SellableScope): Prisma.ProductWhereInput {
+  return {
+    status: 'active',
+    marketCodes: { has: scope.marketCode },
+    AND: [
+      { OR: [{ publishedAt: null }, { publishedAt: { lte: scope.now } }] },
+      ...(scope.eligibleProductIds.length ? [{ id: { in: [...scope.eligibleProductIds] } }] : []),
+    ],
+  };
+}
+
+/** 候选池上限：动态区块只需要「足够补满展示位」的候选，不把整站商品读进内存。 */
+const POOL_LIMIT = 120;
+
+export async function sellablePool(tx: Tx, scope: SellableScope, categoryIds: readonly string[]): Promise<ProductRow[]> {
+  return tx.product.findMany({
+    where: { ...sellableWhere(scope),
+      ...(categoryIds.length ? { categories: { some: { categoryId: { in: [...categoryIds] } } } } : {}) },
+    include: includeProduct,
+    // 池子按创建时间截断不会漏掉新品：newest 排序的候选一定在最近的 120 件里。
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: POOL_LIMIT,
+  });
+}
+
+/** 手工区块按 id 取商品：只取仍可售的那些，其余记为缺位交给后台修复。 */
+export async function sellableByIds(tx: Tx, scope: SellableScope, ids: readonly string[]): Promise<ProductRow[]> {
+  if (!ids.length) return [];
+  return tx.product.findMany({ where: { ...sellableWhere(scope), id: { in: [...ids] } }, include: includeProduct });
+}
+
+/**
+ * 近 30 天已履约销量：只计已发货/已完成订单的件数，取消与未付款不算，
+ * 成功退款按退回件数冲减（规格 5.4）。刷单买不到排名。
+ */
+export async function fulfilledSales30d(tx: Tx, ids: readonly string[], now: Date): Promise<Map<string, number>> {
+  if (!ids.length) return new Map();
+  const since = new Date(now.getTime() - 30 * 86_400_000);
+  const rows = await tx.$queryRaw<{ product_id: string; units: bigint | number }[]>`
+    WITH sold AS (
+      SELECT v."productId" AS product_id, SUM(oi."quantity") AS units
+      FROM "OrderItem" oi
+      JOIN "ProductVariant" v ON v."id" = oi."variantId"
+      JOIN "ShopOrder" o ON o."id" = oi."orderId"
+      WHERE o."paymentStatus" = 'paid'
+        AND o."fulfillmentStatus" IN ('fulfilled', 'delivered')
+        AND o."placedAt" >= ${since}
+        AND v."productId" = ANY(${[...ids]}::uuid[])
+      GROUP BY v."productId"
+    ), returned AS (
+      SELECT v."productId" AS product_id,
+             SUM(COALESCE(asi."approvedQuantity", asi."requestedQuantity")) AS units
+      FROM "AfterSalesItem" asi
+      JOIN "AfterSalesCase" c ON c."id" = asi."caseId"
+      JOIN "OrderItem" oi ON oi."id" = asi."orderItemId"
+      JOIN "ProductVariant" v ON v."id" = oi."variantId"
+      WHERE c."status" = 'refunded' AND v."productId" = ANY(${[...ids]}::uuid[])
+      GROUP BY v."productId"
+    )
+    SELECT sold.product_id, GREATEST(sold.units - COALESCE(returned.units, 0), 0) AS units
+    FROM sold LEFT JOIN returned ON returned.product_id = sold.product_id`;
+  return new Map(rows.map(row => [row.product_id, Number(row.units)]));
+}
+
+/** 商品最低可售变体价（分）；没有可售变体时为 null，排序时排到最后。 */
+export function priceMinorOf(row: ProductRow): number | null {
+  const prices = row.variants.filter(variant => variant.status === 'active').map(variant => variant.priceMinor);
+  return prices.length ? Math.min(...prices) : null;
+}
+
+export function candidateOf(row: ProductRow, units: number): MerchandisingCandidate {
+  return { productId: row.id, publishedAt: row.publishedAt, priceMinor: priceMinorOf(row), unitsSold: units };
+}
+
+export interface ResolvedSelection {
+  rows: ProductRow[];
+  /** 手工区块里配置了但当前不合格的商品：后台要看到并替换，前台直接不显示。 */
+  missing: string[];
+}
+
+/**
+ * 按区块配置挑商品：
+ * - manual：按配置顺序取，跳过不合格的（不补位——手工区块的意义就是运营挑的那几件）；
+ * - 动态：候选池里不合格商品根本进不来，排序后取前 limit 件，因此会自动补足。
+ */
+export function selectProducts(section: MerchandisingSection, pool: readonly ProductRow[],
+  units: ReadonlyMap<string, number>, eligibleIds: ReadonlySet<string>): ResolvedSelection {
+  const limit = visibleLimit(section);
+  if (section.sortMode === 'manual') {
+    const byId = new Map(pool.map(row => [row.id, row]));
+    const rows: ProductRow[] = [];
+    const missing: string[] = [];
+    for (const id of section.productIds) {
+      const row = byId.get(id);
+      if (!row || !eligibleIds.has(id)) { missing.push(id); continue; }
+      if (rows.length < limit) rows.push(row);
+    }
+    return { rows, missing };
+  }
+  const ranked = rankCandidates(pool.map(row => candidateOf(row, units.get(row.id) ?? 0)), section.sortMode);
+  const byId = new Map(pool.map(row => [row.id, row]));
+  return { rows: ranked.slice(0, limit).map(candidate => byId.get(candidate.productId)!).filter(Boolean), missing: [] };
+}

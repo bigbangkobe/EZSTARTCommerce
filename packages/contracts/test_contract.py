@@ -938,5 +938,52 @@ class ContractTests(unittest.TestCase):
                                {"data": {"redirect": {"toPath": "/zh-HK/pages/about", "statusCode": 302}},
                                 "meta": {"requestId": "req-test"}}))
 
+    def test_merchandising_sections_are_closed_and_manual_order_cannot_smuggle_live_rules(self):
+        publish = SPEC["paths"]["/admin/merchandising/{pageKey}/publish"]["post"]
+        self.assertEqual("content.publish", publish["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], publish["security"])
+        draft = SPEC["paths"]["/admin/merchandising/{pageKey}"]["get"]
+        self.assertEqual("content.read", draft["x-permission"])
+        write = SPEC["paths"]["/admin/merchandising/{pageKey}"]["put"]
+        self.assertEqual("content.write", write["x-permission"])
+
+        section = {"sectionId": "featured", "type": "product_grid", "visible": True, "position": 0,
+                   "titleByLocale": {"zh-HK": "本月精選", "en": "Featured"}, "sortMode": "manual", "limit": 6,
+                   "productIds": [UUID], "categoryIds": []}
+        body = {"expectedVersion": 1, "sections": [section]}
+        self.assertEqual([], errors("MerchandisingWriteRequest", body))
+        self.assertEqual([], errors("MerchandisingWriteRequest",
+                                    {"expectedVersion": 2, "sections": [dict(section, sortMode="fulfilled_sales_30d",
+                                                                             productIds=[])]}))
+        # 版面只接受已注册的区块类型与已实现的排序口径；专题引用在本批明确不支持。
+        self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
+                                                             "sections": [dict(section, type="custom_html")]}))
+        self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
+                                                             "sections": [dict(section, sortMode="random")]}))
+        self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
+                                                             "sections": [dict(section, collectionId=UUID)]}))
+        self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
+                                                             "sections": [dict(section, limit=25)]}))
+        self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
+                                                             "sections": [dict(section, script="alert(1)")]}))
+        self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 0, "sections": []}))
+
+        public = SPEC["paths"]["/storefront/merchandising/{pageKey}"]["get"]
+        self.assertNotIn("security", public)
+        self.assertEqual("getStorefrontMerchandising", public["operationId"])
+        page = {"pageKey": "home", "version": 3, "locale": "zh-HK", "marketCode": "HK",
+                "sections": [{"sectionId": "featured", "type": "product_grid", "title": "本月精選",
+                              "sortMode": "manual",
+                              "products": [{"id": UUID, "slug": "cigar-1", "name": "雪茄一號",
+                                            "variants": [], "media": [], "inStock": False}]}]}
+        envelope = {"data": page, "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("PublicMerchandisingEnvelope", envelope))
+        # 公开响应不允许带草稿字段（visible/position/productIds），也不允许未知 pageKey。
+        self.assertTrue(errors("PublicMerchandisingEnvelope",
+                               {"data": dict(page, sections=[dict(page["sections"][0], visible=True)]),
+                                "meta": {"requestId": "req-test"}}))
+        self.assertTrue(errors("PublicMerchandisingEnvelope",
+                               {"data": dict(page, pageKey="collection:summer"), "meta": {"requestId": "req-test"}}))
+
 if __name__ == "__main__":
     unittest.main()

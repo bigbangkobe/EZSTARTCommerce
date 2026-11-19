@@ -1271,6 +1271,67 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
+  /admin/merchandising/products:
+    get:
+      tags: [Content]
+      operationId: listMerchandisingProducts
+      summary: List products with merchandising eligibility reasons
+      security: [{ AdminSession: [] }]
+      x-permission: content.read
+      parameters:
+        - { $ref: '#/components/parameters/Limit' }
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, maxLength: 200 }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/merchandising/{pageKey}/publish:
+    post:
+      tags: [Content]
+      operationId: publishMerchandisingLayout
+      summary: Publish the merchandising draft as the live snapshot
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.publish
+      parameters: [{ $ref: '#/components/parameters/PageKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MerchandisingPublishRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/merchandising/{pageKey}/unpublish:
+    post:
+      tags: [Content]
+      operationId: unpublishMerchandisingLayout
+      summary: Withdraw the live merchandising snapshot and keep the draft
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.publish
+      parameters: [{ $ref: '#/components/parameters/PageKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MerchandisingWithdrawRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+
   /admin/import-jobs:
     post:
       tags: [Imports]
@@ -1476,6 +1537,20 @@ paths:
         - { $ref: '#/components/parameters/MarketCode' }
       responses:
         '200': { $ref: '#/components/responses/PublicPageSuccess' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/merchandising/{pageKey}:
+    get:
+      tags: [Storefront]
+      operationId: getStorefrontMerchandising
+      summary: Read the published merchandising layout with live product eligibility
+      parameters:
+        - { $ref: '#/components/parameters/PageKey' }
+        - { $ref: '#/components/parameters/Locale' }
+        - { $ref: '#/components/parameters/MarketCode' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicMerchandisingSuccess' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
@@ -4350,6 +4425,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/PublicProductListEnvelope' }
+    PublicMerchandisingSuccess:
+      description: Published merchandising layout with live eligibility applied
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicMerchandisingEnvelope' }
     PublicPageSuccess:
       description: Published content page read from the immutable release snapshot
       content:
@@ -5665,6 +5745,13 @@ components:
             nextCursor: { type: [string, 'null'] }
             hasMore: { type: boolean }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicMerchandisingEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PublicMerchandisingPage' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     PublicPageAlternate:
       type: object
       additionalProperties: false
@@ -6029,6 +6116,26 @@ components:
         onHand: { type: integer, minimum: 0, readOnly: true }
         reserved: { type: integer, minimum: 0, readOnly: true }
         available: { type: integer, minimum: 0, readOnly: true }
+    PublicMerchandisingSection:
+      type: object
+      additionalProperties: false
+      required: [sectionId, type, title, sortMode, products]
+      properties:
+        sectionId: { type: string, maxLength: 64 }
+        type: { type: string, enum: [product_grid] }
+        title: { type: string, maxLength: 80 }
+        sortMode: { type: string, enum: [manual, newest, fulfilled_sales_30d, price_asc, price_desc] }
+        products: { type: array, maxItems: 24, items: { $ref: '#/components/schemas/PublicProduct' } }
+    PublicMerchandisingPage:
+      type: object
+      additionalProperties: false
+      required: [pageKey, version, locale, marketCode, sections]
+      properties:
+        pageKey: { type: string, enum: [home] }
+        version: { type: integer, minimum: 1 }
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        marketCode: { type: string, pattern: '^[A-Z]{2}$' }
+        sections: { type: array, items: { $ref: '#/components/schemas/PublicMerchandisingSection' } }
     PublicProduct:
       type: object
       additionalProperties: false
@@ -6574,25 +6681,45 @@ components:
     MerchandisingWriteRequest:
       type: object
       additionalProperties: false
+      description: Draft replacement for one page layout. expectedVersion 1 means the layout does not exist yet.
       required: [expectedVersion, sections]
       properties:
         expectedVersion: { type: integer, minimum: 1 }
-        sections: { type: array, items: { $ref: '#/components/schemas/MerchandisingSectionInput' } }
+        sections:
+          type: array
+          maxItems: 12
+          items: { $ref: '#/components/schemas/MerchandisingSectionInput' }
     MerchandisingSectionInput:
       type: object
       additionalProperties: false
       required: [sectionId, type, visible, position, sortMode, limit]
       properties:
-        sectionId: { type: string, minLength: 1, maxLength: 100 }
-        type: { type: string, maxLength: 80 }
+        sectionId: { type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9][a-z0-9-]*$' }
+        type: { type: string, enum: [product_grid] }
         visible: { type: boolean }
-        position: { type: integer, minimum: 0 }
-        titleByLocale: { type: object, additionalProperties: { type: string, maxLength: 200 } }
+        position: { type: integer, minimum: 0, maximum: 11 }
+        titleByLocale: { type: object, additionalProperties: { type: string, minLength: 1, maxLength: 80 } }
         sortMode: { type: string, enum: [manual, newest, fulfilled_sales_30d, price_asc, price_desc] }
-        limit: { type: integer, minimum: 1, maximum: 100 }
-        productIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
-        categoryIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
-        collectionId: { type: [string, 'null'], format: uuid }
+        limit: { type: integer, minimum: 1, maximum: 24 }
+        productIds: { type: array, maxItems: 24, uniqueItems: true, items: { type: string, format: uuid } }
+        categoryIds: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, format: uuid } }
+        collectionId:
+          type: 'null'
+          description: Collection pages are not released yet; a non-null value is rejected with MERCHANDISING_COLLECTION_UNSUPPORTED.
+    MerchandisingPublishRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        note: { type: [string, 'null'], maxLength: 500 }
+    MerchandisingWithdrawRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
     ImportCreateRequest:
       type: object
       additionalProperties: false

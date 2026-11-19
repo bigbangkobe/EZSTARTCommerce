@@ -5,8 +5,37 @@ import { site, whatsappLink } from '../../lib/site';
 import { altPaths, copyFor, isLocale, localePath, type Locale } from '../../lib/i18n';
 import { fetchProducts, formatPrice } from '../../lib/products';
 import { fetchContentRelease } from '../../lib/content';
+import { fetchMerchandising } from '../../lib/merchandising';
 import AnalyticsTracker from '../analytics-tracker';
 import SectionTracker from '../section-tracker';
+
+/** 卡片渲染统一走这里：默认精选与后台陈列区块共用一套样式与埋点字段。 */
+function ProductCards({ products, locale }: { products: { id: string; slug: string; name: string; category?: string;
+  price: number; currency: string; variants: { id: string }[] }[]; locale: Locale }) {
+  const t = copyFor[locale];
+  return (
+    <div className="cards">
+      {products.map((product) => (
+        <div className="card product-card" key={product.id}
+          data-ez-placement={product.id} data-ez-variant={product.variants[0]?.id ?? undefined}>
+          <div className="product-thumb">{product.category ?? t.products.thumbFallback}</div>
+          <div className="product-body">
+            <h3>
+              <Link href={localePath(locale, `/products/${encodeURIComponent(product.slug)}`)}>{product.name}</Link>
+            </h3>
+            <div className="product-price">
+              {formatPrice(product.price, product.currency)}
+              <small> {t.common.from}</small>
+            </div>
+            <a className="btn btn-ghost product-cta" href={whatsappLink} target="_blank" rel="noopener noreferrer">
+              {t.products.inquiry}
+            </a>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function SectionHead({ num, title, jp }: { num: string; title: string; jp: string }) {
   return (
@@ -37,7 +66,8 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   if (!isLocale(raw)) notFound();
   const locale: Locale = raw;
   const t = copyFor[locale];
-  const [result, contentRelease] = await Promise.all([fetchProducts(locale), fetchContentRelease(locale)]);
+  const [result, contentRelease, merch] = await Promise.all([
+    fetchProducts(locale), fetchContentRelease(locale), fetchMerchandising(locale)]);
   const featured = result.ok ? result.products.slice(0, 6) : [];
   const productsHref = localePath(locale, '/products');
 
@@ -86,43 +116,35 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         </div>
       </section>
 
-      {/* FEATURED PRODUCTS */}
-      <section className="section" id="products" data-ez-section="home.products" data-ez-section-id="home:products">
-        <SectionHead num="弐" title={t.products.heading} jp={t.products.jp} />
-        {!result.ok && featured.length === 0 ? (
-          <div className="empty-state">{t.products.error}</div>
-        ) : featured.length === 0 ? (
-          <div className="empty-state">
-            {t.products.empty}
-            <div className="cta-row" style={{ justifyContent: 'center', marginTop: 20 }}>
-              <a className="btn btn-primary" href={whatsappLink} target="_blank" rel="noopener noreferrer">
-                {t.hero.ctaPrimary}
-              </a>
-            </div>
+      {/* MERCHANDISING：后台发布过版面就按版面渲染，否则退回主题默认精选 */}
+      {merch.ok && merch.sections.length > 0 ? merch.sections.map((section, index) => (
+        <section className="section" key={section.sectionId} id={`merch-${section.sectionId}`}
+          data-ez-section={`home.${section.sectionId}`} data-ez-section-id={`home:${section.sectionId}`}>
+          <div className="red-line" />
+          <div className="section-head">
+            <span className="num">{String(index + 1).padStart(2, '0')}</span>
+            <h2>{section.title}</h2>
+            <span className="jp">{t.products.jp}</span>
           </div>
-        ) : (
-          <div className="cards">
-            {featured.map((product) => (
-              <div className="card product-card" key={product.id}
-                data-ez-placement={product.id} data-ez-variant={product.variants[0]?.id ?? undefined}>
-                <div className="product-thumb">{product.category ?? t.products.thumbFallback}</div>
-                <div className="product-body">
-                  <h3>
-                    <Link href={localePath(locale, `/products/${encodeURIComponent(product.slug)}`)}>{product.name}</Link>
-                  </h3>
-                  <div className="product-price">
-                    {formatPrice(product.price, product.currency)}
-                    <small> {t.common.from}</small>
-                  </div>
-                  <a className="btn btn-ghost product-cta" href={whatsappLink} target="_blank" rel="noopener noreferrer">
-                    {t.products.inquiry}
-                  </a>
-                </div>
+          <ProductCards products={section.products} locale={locale} />
+        </section>
+      )) : (
+        <section className="section" id="products" data-ez-section="home.products" data-ez-section-id="home:products">
+          <SectionHead num="弐" title={t.products.heading} jp={t.products.jp} />
+          {!result.ok && featured.length === 0 ? (
+            <div className="empty-state">{t.products.error}</div>
+          ) : featured.length === 0 ? (
+            <div className="empty-state">
+              {t.products.empty}
+              <div className="cta-row" style={{ justifyContent: 'center', marginTop: 20 }}>
+                <a className="btn btn-primary" href={whatsappLink} target="_blank" rel="noopener noreferrer">
+                  {t.hero.ctaPrimary}
+                </a>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+            </div>
+          ) : <ProductCards products={featured} locale={locale} />}
+        </section>
+      )}
     </>
   );
 }
