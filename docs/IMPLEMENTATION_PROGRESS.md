@@ -693,3 +693,16 @@
 验证：契约 **52 项**全绿、生成物一致、Prisma schema 有效；领域 **6 项**；新增真实 PostgreSQL HTTP 集成 **1 项**（`category-merchandising-http.test.ts`，覆盖页面清单、key 三类失败、跨分类手工位拒绝、候选池收窄、英文 slug、停用分类 404、发布后商品移出分类的隐藏与补足、撤下后退回平铺商品、发布权限、首页不受影响）；后台与前台 typecheck、生产构建通过；端到端 **8 项**（4 用例 × 桌面/移动）。
 
 回归：merchandising-http 1、content 5、content-http 1、content-preview-http 1、storefront 1、identity-security 5 全绿。identity-http 20/22：并发恢复码用例在本机稳定 `ECONNRESET`（Windows + 嵌入式 PostgreSQL，双实例竞态），已用 `git stash` 在**改动前**复现同样失败，确认是环境问题而非本批引入；其余 20 项通过。
+
+部署：提交 `760b417`（第四批功能）+ `c19c010`（分类编辑入口）已推送 `origin/main` 并部署 mrinhk；第 32 条迁移 `202611190120_category_merchandising` 应用成功（迁移总数 32），`merchandising_page_key_shape`、`merchandising_kind_matches_key`、`merchandising_kind_known` 三个约束已在生产库确认。
+
+生产冒烟：
+
+- `/api/v1/storefront/categories?locale=zh-HK` → **200**（返回启用中的分类；当前店铺唯一分类尚未填 slug）；
+- `/api/v1/storefront/categories/cigars` → **404**（未知 slug 不泄露分类是否存在；填了 slug 并启用后才会出现）；
+- `/api/v1/admin/merchandising/pages` 无会话 → **401**（页面清单同样要登录）；
+- `https://mrinhk.com/zh-HK/categories`、`/en/categories` → **200**，HTML 含 `categories.index` 区块标记；
+- `https://admin.mrinhk.com/admin/merchandising`、`/admin/catalog` → **200**；
+- `sitemap.xml` → **200**，已包含三语分类索引地址与 hreflang。
+
+**上线时发现并当场修掉的问题**：生产分类只有名称、`slug` 为空，而分类页地址完全依赖 slug；后台原本只能新建分类、不能编辑，等于分类页在真实店铺里无法进入。已在 `/admin/catalog` 补分类编辑表单（三语名称 + slug、启用、排序、`If-Match` 版本锁），并在列表标出「无 slug（前台不可见）」。店主给分类填上 slug 后，前台分类页、导航与站点地图最多半分钟内生效。
