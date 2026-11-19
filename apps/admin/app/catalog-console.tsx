@@ -22,6 +22,7 @@ export function CatalogConsole() {
   const [products, setProducts] = useState<Product[]>([]); const [cursor, setCursor] = useState<string | null>(null);
   const [categories, setCategories] = useState<Label[]>([]); const [brands, setBrands] = useState<Brand[]>([]);
   const [editing, setEditing] = useState<Product | null>(null); const [query, setQuery] = useState('');
+  const [editingCategory, setEditingCategory] = useState<Label | null>(null);
   const [variantRows, setVariantRows] = useState(1);
   const [ready, setReady] = useState(false); const [busy, setBusy] = useState(false);
   const [error, setError] = useState(''); const [notice, setNotice] = useState('');
@@ -105,6 +106,28 @@ export function CatalogConsole() {
       setNotice('商品已下架，前台立即不可购买。'); });
   }
 
+  /**
+   * 分类编辑：slug 是前台分类页地址（/categories/<slug>）的唯一来源。
+   * 没有 slug 的分类前台不列出——所以这里把三种语言的名称与 slug 放在同一张表里，
+   * 运营保存时能直接看出「哪一门语言还没有地址」。
+   */
+  function saveCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!editingCategory) return;
+    const form = event.currentTarget; const values = new FormData(form);
+    const translations = LOCALES.map(([locale]) => {
+      const name = String(values.get(`cat-name:${locale}`) ?? '').trim();
+      const slug = String(values.get(`cat-slug:${locale}`) ?? '').trim();
+      return name ? { locale, name, ...(slug ? { slug } : {}) } : null;
+    }).filter(item => item !== null);
+    const position = Number(values.get('cat-position') ?? editingCategory.position);
+    void run(async () => {
+      await request(`categories/${editingCategory.id}`, 'PATCH', { parentId: editingCategory.parentId,
+        position: Number.isFinite(position) && position >= 0 ? position : editingCategory.position,
+        enabled: values.get('cat-enabled') === 'yes', translations }, editingCategory.version);
+      setEditingCategory(null); setNotice('分类已更新；前台分类页与站点地图最多半分钟内生效。');
+    });
+  }
+
   function createLabel(kind: 'categories' | 'brands') {
     return (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault(); const form = event.currentTarget; const values = new FormData(form);
@@ -138,7 +161,7 @@ export function CatalogConsole() {
 
   return <main className="console"><div className="brand">EZSTART<span>Commerce</span></div>
     <header><div><p className="eyebrow">商品管理</p><h1>商品目录</h1></div><div className="actions">
-      <a href="/admin/media">媒体库</a><a href="/admin/content">内容页</a><a href="/admin/merchandising">首页陈列</a><a href="/admin/orders">订单</a><a href="/admin/shipping">配送与结账</a><a href="/admin/payments">付款</a><a href="/admin/inventory">库存</a><a href="/admin/aftersales">售后</a><a href="/admin/coupons">优惠券</a><a href="/admin/members">会员与积分</a><a href="/admin/access">员工与角色</a><a href="/admin/settings">店铺设置</a>
+      <a href="/admin/media">媒体库</a><a href="/admin/content">内容页</a><a href="/admin/merchandising">页面陈列</a><a href="/admin/orders">订单</a><a href="/admin/shipping">配送与结账</a><a href="/admin/payments">付款</a><a href="/admin/inventory">库存</a><a href="/admin/aftersales">售后</a><a href="/admin/coupons">优惠券</a><a href="/admin/members">会员与积分</a><a href="/admin/access">员工与角色</a><a href="/admin/settings">店铺设置</a>
       <button disabled={busy} onClick={() => void run(async () => { setEditing(null); })}>刷新目录</button></div></header>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {!ready && !error && <p>正在检查会话与权限…</p>}
@@ -170,8 +193,34 @@ export function CatalogConsole() {
           <p><small>规格在保存时按 SKU 增量更新；有库存的规格不能删除。当前版本 {editing.version}。</small></p>
           <button disabled={busy}>保存商品</button><button type="button" className="secondary" onClick={() => setEditing(null)}>取消编辑</button></form></section>}
       <section aria-labelledby="taxonomy-title"><h2 id="taxonomy-title">分类与品牌</h2>
-        {categories.map(category => <article key={category.id}><h3>{nameOf(category.translations, 'zh-CN')}</h3><small>{category.translations.map(item => `${item.locale}: ${item.slug ?? '无 slug'}`).join(' · ')}</small></article>)}
+        {categories.map(category => <article key={category.id}><h3>{nameOf(category.translations, 'zh-CN')}</h3>
+          <small>{category.translations.map(item => `${item.locale}: ${item.slug ?? '无 slug（前台不可见）'}`).join(' · ')}</small>
+          {canWrite && <div className="actions"><button type="button" disabled={busy}
+            onClick={() => setEditingCategory(category)}>编辑分类</button></div>}
+        </article>)}
         {brands.map(brand => <article key={brand.id}><h3>{nameOf(brand.translations, 'zh-CN')}</h3><small>品牌</small></article>)}
+        {editingCategory && canWrite && <section aria-labelledby="edit-category-title">
+          <h2 id="edit-category-title">编辑分类「{nameOf(editingCategory.translations, 'zh-CN')}」</h2>
+          <form key={`${editingCategory.id}:${editingCategory.version}`} onSubmit={saveCategory}>
+            <div className="permission-grid">
+              {LOCALES.map(([locale, label]) => {
+                const translation = editingCategory.translations.find(item => item.locale === locale);
+                return <fieldset key={locale}><legend>{label}</legend>
+                  <label>名称<input name={`cat-name:${locale}`} defaultValue={translation?.name ?? ''} maxLength={160} /></label>
+                  <label>slug<input name={`cat-slug:${locale}`} defaultValue={translation?.slug ?? ''} maxLength={180}
+                    placeholder="如 cigars" /></label>
+                </fieldset>;
+              })}
+              <label>启用<select name="cat-enabled" defaultValue={editingCategory.enabled ? 'yes' : 'no'}>
+                <option value="yes">启用</option><option value="no">停用（前台不再展示）</option></select></label>
+              <label>排序<input name="cat-position" type="number" min={0} defaultValue={editingCategory.position} /></label>
+            </div>
+            <p><small>slug 决定前台地址 <code>/categories/&lt;slug&gt;</code>：留空的分类不会出现在前台分类页与站点地图。
+              清空某种语言的名称会删除该语言翻译。当前版本 {editingCategory.version}。</small></p>
+            <button disabled={busy}>保存分类</button>
+            <button type="button" className="secondary" onClick={() => setEditingCategory(null)}>取消</button>
+          </form>
+        </section>}
         {canWrite && <form onSubmit={createLabel('categories')}><label>新分类名称<input name="labelName" required maxLength={160} /></label>
           <label>分类 slug<input name="labelSlug" required maxLength={180} /></label><button disabled={busy}>建立分类</button></form>}
         {canWrite && <form onSubmit={createLabel('brands')}><label>新品牌名称<input name="labelName" required maxLength={160} /></label>

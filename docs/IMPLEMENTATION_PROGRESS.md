@@ -688,6 +688,7 @@
 - 前台：`GET /storefront/categories/{slug}` 返回分类、各语言地址、已发布版面区块（含 `contentRelease`）与平铺商品；候选池通过 `sellableWhere` 的 `categoryIds` 统一收窄，动态区块即使不选分类也不会跨分类取货，手工位同样受此约束。
 - 前台页面：`/[locale]/categories`（索引）与 `/[locale]/categories/{slug}`（详情）；canonical/hreflang 用分类各语言 slug；分类不存在 404、接口不可用时显示「暂时无法加载」并 `noindex`；导航与站点地图收录分类；埋点 `pageKey=category:<slug>`。
 - 后台：`/admin/merchandising` 的页面下拉改为「首页 + 每个启用中的分类」（带未配置标记），分类版面下商品选择器只列本分类商品，新增 `MERCHANDISING_PRODUCT_OUT_OF_SCOPE` 文案。
+- 后台（本轮补齐）：`/admin/catalog` 增加分类编辑表单（三语名称 + slug、启用、排序，`If-Match` 带版本）。上线冒烟时发现生产分类只有名称、slug 为空，而分类页地址来自 slug——没有这个入口，分类页在真实店铺里根本进不去。列表同时标出「无 slug（前台不可见）」。
 
 验证：契约 **52 项**全绿、生成物一致、Prisma schema 有效；领域 **6 项**；新增真实 PostgreSQL HTTP 集成 **1 项**（`category-merchandising-http.test.ts`，覆盖页面清单、key 三类失败、跨分类手工位拒绝、候选池收窄、英文 slug、停用分类 404、发布后商品移出分类的隐藏与补足、撤下后退回平铺商品、发布权限、首页不受影响）；后台与前台 typecheck、生产构建通过；端到端 **8 项**（4 用例 × 桌面/移动）。
 

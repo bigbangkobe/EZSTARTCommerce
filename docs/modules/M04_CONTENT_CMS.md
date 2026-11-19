@@ -107,6 +107,7 @@ M00/M01、M02、M03。前台消费已发布的内容与商品陈列契约；主�
 - **前台分类页**：新增 `GET /storefront/categories/{slug}`，一次返回分类信息、各语言地址、已发布版面区块（含 `contentRelease`）与平铺商品。有可渲染区块就按版面渲染；没发布版面、或发布后所有区块都被隐藏时，退回该分类的平铺商品（最多 60 件）——分类页首先得能逛，版面只是排版方式。
 - **分类页路由**：`/[locale]/categories`（索引，只列启用中的分类）与 `/[locale]/categories/{slug}`（详情）。canonical/hreflang 用分类各语言 slug 生成；分类不存在 404、接口不可用时显示「暂时无法加载」且 `noindex`（不让空壳页被收录，也不让已收录页因一次接口抖动消失）。导航、站点地图同步收录分类。
 - **埋点**：分类页 `pageKey=category:<slug>`，区块容器带 `data-ez-section`/`data-ez-section-id`，曝光/点击与首页同一套口径。
+- **分类 slug 维护（本轮补齐）**：分类页地址来自 `CategoryTranslation.slug`，但后台原来只能建分类、不能编辑。本次在 `/admin/catalog` 的「分类与品牌」里补上分类编辑表单（三语名称 + slug、启用、排序，`If-Match` 带版本）。没有 slug 的分类不会出现在前台分类页、导航与站点地图，列表里直接标「无 slug（前台不可见）」，避免运营以为已经上线。
 
 本批未做（后续批次）：
 
