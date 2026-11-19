@@ -859,5 +859,84 @@ class ContractTests(unittest.TestCase):
             data=dict(listing_payload["data"], contentRelease="theme-v1"))))
 
 
+    def test_preview_links_are_version_scoped_and_never_indexable(self):
+        token = "A" * 43
+        preview = SPEC["paths"]["/admin/pages/{id}/preview-token"]["post"]
+        self.assertEqual("content.preview", preview["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], preview["security"])
+        # 三个字段都必需：语言、视口、以及「后台正在看的草稿版本」。
+        self.assertEqual([], errors("PreviewRequest", {"locale": "zh-HK", "viewport": "mobile", "expectedVersion": 3}))
+        for missing in ("locale", "viewport", "expectedVersion"):
+            broken = {"locale": "zh-HK", "viewport": "mobile", "expectedVersion": 3}
+            del broken[missing]
+            self.assertTrue(errors("PreviewRequest", broken))
+        self.assertEqual([], errors("PreviewRequest", {"locale": "en", "viewport": "desktop",
+                                                       "expectedVersion": 1, "ttlMinutes": 1440}))
+        # 有效期有上下界：太短来不及复核，太长等于长期可访问的绕过入口。
+        for ttl in (4, 1441, 0, -5):
+            self.assertTrue(errors("PreviewRequest", {"locale": "en", "viewport": "desktop",
+                                                      "expectedVersion": 1, "ttlMinutes": ttl}))
+        # 预览结果里的地址只能是站内相对路径，且语言/视口写死在链接里。
+        result = {"token": token, "path": f"/zh-HK/preview/{token}?viewport=mobile",
+                  "locale": "zh-HK", "viewport": "mobile", "expiresAt": "2026-11-19T04:00:00Z", "pageVersion": 4}
+        self.assertEqual([], errors("PreviewTokenResult", result))
+        for bad in ("https://evil.example.test/preview/x", f"/preview/{token}?viewport=mobile",
+                    f"/zh-Hant/preview/{token}?viewport=mobile", "/zh-HK/preview/short",
+                    f"/zh-HK/preview/{token}?viewport=tablet"):
+            self.assertTrue(errors("PreviewTokenResult", dict(result, path=bad)))
+        self.assertTrue(errors("PreviewTokenResult", dict(result, token="short")))
+
+        page = {"pageKey": "about", "pageType": "standard", "locale": "zh-HK", "slug": "about-hk",
+                "title": "關於我們", "seoTitle": None, "seoDescription": None, "indexable": False,
+                "blocks": [{"id": "intro", "type": "rich_text", "position": 0, "config": {"paragraphs": ["草稿內容"]}}],
+                "alternates": [{"locale": "zh-HK", "slug": "about-hk"}], "version": 4,
+                "preview": True, "viewport": "mobile", "expiresAt": "2026-11-19T04:00:00Z"}
+        envelope = {"data": page, "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("PublicPreviewPageEnvelope", envelope))
+        # 预览永远不可索引，也不能伪造 preview=false 拿到「像线上页面」的响应。
+        self.assertTrue(errors("PublicPreviewPageEnvelope", dict(envelope, data=dict(page, indexable=True))))
+        self.assertTrue(errors("PublicPreviewPageEnvelope", dict(envelope, data=dict(page, preview=False))))
+        # 预览响应不带发布标记：草稿不属于任何线上版本。
+        self.assertTrue(errors("PublicPreviewPageEnvelope", dict(envelope, data=dict(page, contentRelease="cr-9"))))
+        # 预览是匿名只读入口：靠 token 鉴权，不要求后台会话。
+        public = SPEC["paths"]["/storefront/preview/{token}"]["get"]
+        self.assertNotIn("security", public)
+        self.assertEqual("getStorefrontPreview", public["operationId"])
+
+    def test_redirects_stay_on_site_and_reject_open_redirects(self):
+        write = SPEC["paths"]["/admin/redirects"]["post"]
+        self.assertEqual("content.publish", write["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], write["security"])
+        listing = SPEC["paths"]["/admin/redirects"]["get"]
+        self.assertEqual("content.read", listing["x-permission"])
+        delete = SPEC["paths"]["/admin/redirects/{id}"]["delete"]
+        self.assertEqual("content.publish", delete["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], delete["security"])
+
+        body = {"locale": "zh-HK", "fromPath": "/zh-HK/pages/old-about", "toPath": "/zh-HK/pages/about"}
+        self.assertEqual([], errors("RedirectWriteRequest", body))
+        self.assertEqual([], errors("RedirectWriteRequest", dict(body, statusCode=308)))
+        # 开放重定向防线：绝对地址、协议相对地址、查询串、片段、反斜杠一律不接受。
+        for bad in ("https://evil.example.test/x", "//evil.example.test", "/a?next=https://evil.example.test",
+                    "/a#frag", "/a\\b", "zh-HK/pages/about", ""):
+            self.assertTrue(errors("RedirectWriteRequest", dict(body, toPath=bad)), bad)
+        self.assertTrue(errors("RedirectWriteRequest", dict(body, statusCode=302)))
+        self.assertTrue(errors("RedirectWriteRequest", dict(body, locale="zh-Hant")))
+
+        public = SPEC["paths"]["/storefront/redirect"]["get"]
+        self.assertNotIn("security", public)
+        self.assertEqual("lookupStorefrontRedirect", public["operationId"])
+        empty = {"data": {"redirect": None}, "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("PublicRedirectEnvelope", empty))
+        hit = {"data": {"redirect": {"toPath": "/zh-HK/pages/about", "statusCode": 301}}, "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("PublicRedirectEnvelope", hit))
+        # 公开响应也只允许站内路径与 301/308，不允许把解析结果变成任意跳转。
+        self.assertTrue(errors("PublicRedirectEnvelope",
+                               {"data": {"redirect": {"toPath": "https://evil.example.test", "statusCode": 301}},
+                                "meta": {"requestId": "req-test"}}))
+        self.assertTrue(errors("PublicRedirectEnvelope",
+                               {"data": {"redirect": {"toPath": "/zh-HK/pages/about", "statusCode": 302}},
+                                "meta": {"requestId": "req-test"}}))
+
 if __name__ == "__main__":
     unittest.main()

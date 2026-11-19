@@ -113,6 +113,12 @@
 - ContentRelease：单行计数器，每次发布/撤下 +1；前台公开配置返回 cr-N，主题把它当区块埋点的 publish_version_id。
 - 关键边界：前台只读 snapshot（草稿 slug 不进公开地址）；发布要求补齐店铺已启用语言；回滚用旧快照建新版本并同时恢复草稿；定时发布只登记计划，由 worker 到点执行，失败保留线上版本并写审计。
 
+### ContentPreviewToken / SeoRedirect（M04 第二批已实现，202611190030）
+
+- ContentPreviewToken：page_id、token_hash（SHA-256，唯一，明文 token 只在签发响应里出现一次）、locale、viewport（mobile/desktop）、expires_at、created_by。绑定签发时的草稿版本（版本不一致拒绝签发），默认 60 分钟、上限 24 小时；同页只保留最近 10 条有效链接。
+- SeoRedirect：locale、from_path（唯一）、to_path、status_code（301/308）、page_id（可空，页面删除后置空但保留跳转）、created_by。CHECK 约束保证两端都是站内相对路径且不相同。
+- 关键边界：预览只读草稿、不写 ContentRelease、不加载埋点；slug 变更时自动登记旧地址 → 新地址并把入站链改直；撤下页面时清理指向它的重定向；前台入口层缓存清单 30 秒后本地匹配，命中即 301。
+
 ### AfterSalesCase / Refund / Return
 
 - AfterSalesCase：case_number、order_id、type、status、reason_code、customer_message、owner_id、source、created_at、closed_at。

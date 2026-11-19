@@ -1,6 +1,7 @@
 import type { ServerResponse } from 'node:http';
 import { IdentityContracts } from './contracts.js';
 import { header, uuid, type ApiRequest } from './controller.js';
+import { originAllowed } from './config.js';
 import { AuthError, IdentityService } from './service.js';
 
 export class ManagementHttp {
@@ -8,10 +9,17 @@ export class ManagementHttp {
   constructor(private readonly identity: IdentityService | null) {}
   protected service() { if (!this.identity) throw new AuthError(503, 'SERVICE_NOT_READY'); return this.identity; }
   protected context(request: ApiRequest) { return { requestId: request.requestId, ip: request.socket.remoteAddress ?? 'unknown' }; }
-  protected async write(request: ApiRequest, schema: string, body: unknown) {
+  /** 无请求体的写操作（如 DELETE）：只做来源与限流，不校验 body。 */
+  protected async guardWrite(request: ApiRequest) {
     const service = this.service();
-    if (header(request, 'origin') !== service.config.allowedOrigin) throw new AuthError(403, 'FORBIDDEN');
-    await service.limitIp(this.context(request)); this.contracts.assert(schema, body); return service;
+    if (!originAllowed(service.config, header(request, 'origin'))) throw new AuthError(403, 'FORBIDDEN');
+    await service.limitIp(this.context(request));
+    return service;
+  }
+  protected async write(request: ApiRequest, schema: string, body: unknown) {
+    const service = await this.guardWrite(request);
+    this.contracts.assert(schema, body);
+    return service;
   }
   protected send(response: ServerResponse, request: ApiRequest, status: number, data: unknown, etagVersion?: number) {
     response.statusCode = status;

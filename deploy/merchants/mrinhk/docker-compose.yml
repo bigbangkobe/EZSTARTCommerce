@@ -56,6 +56,8 @@ services:
       HOST: "0.0.0.0"
       INSTANCE_ID: ${INSTANCE_ID:?请在 .env 设置 INSTANCE_ID}
       APP_ORIGIN: https://${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      # 后台独立域名：写入来源校验与邀请/重设链接都用它，缺了后台登录会被 403
+      ADMIN_ORIGIN: https://admin.${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
       IDENTITY_ENCRYPTION_KEY: ${IDENTITY_ENCRYPTION_KEY:?请在 .env 设置 IDENTITY_ENCRYPTION_KEY}
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
       # 承运商签名回传密钥 JSON；留空时所有承运商回调返回 404（安全默认）
@@ -80,6 +82,10 @@ services:
     environment:
       <<: *node-env
       NODE_ENV: production
+      APP_ORIGIN: https://${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      ADMIN_ORIGIN: https://admin.${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      INSTANCE_ID: ${INSTANCE_ID:?请在 .env 设置 INSTANCE_ID}
+      IDENTITY_ENCRYPTION_KEY: ${IDENTITY_ENCRYPTION_KEY:?请在 .env 设置 IDENTITY_ENCRYPTION_KEY}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}

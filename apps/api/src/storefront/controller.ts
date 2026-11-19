@@ -1,5 +1,6 @@
 import { Controller, Get, Inject, Param, Query, Req, Res } from '@nestjs/common';
 import type { ServerResponse } from 'node:http';
+import { PREVIEW_ROBOTS_HEADER, PREVIEW_TOKEN_PATTERN } from '../../../../packages/domain/src/preview.js';
 import type { ApiRequest } from '../identity/controller.js';
 import { ManagementHttp } from '../identity/management-http.js';
 import { AuthError, IdentityService } from '../identity/service.js';
@@ -55,5 +56,32 @@ export class StorefrontController extends ManagementHttp {
     @Req() request: ApiRequest, @Res() response: ServerResponse) {
     if (!/^[^\s/]{1,180}$/.test(slug)) throw new AuthError(422, 'VALIDATION_ERROR');
     this.send(response, request, 200, await this.front().getPage(slug, text(locale, 10)));
+  }
+
+  /**
+   * 预览外链：草稿内容只在带有效 token 时下发，且明确禁止缓存与收录。
+   * 这里不写埋点、不改发布标记：预览是只读检查，不能污染线上统计。
+   */
+  @Get('preview/:token')
+  async preview(@Param('token') token: string, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    if (!PREVIEW_TOKEN_PATTERN.test(token)) throw new AuthError(404, 'NOT_FOUND');
+    response.setHeader('Cache-Control', 'no-store, max-age=0');
+    response.setHeader('X-Robots-Tag', PREVIEW_ROBOTS_HEADER);
+    this.send(response, request, 200, await this.front().getPreview(token));
+  }
+
+  /** 重定向清单：前台入口层缓存 30 秒后在本地匹配，命中即 301，不再回源。 */
+  @Get('redirects')
+  async redirects(@Req() request: ApiRequest, @Res() response: ServerResponse) {
+    response.setHeader('Cache-Control', 'public, max-age=30');
+    this.send(response, request, 200, await this.front().listRedirects());
+  }
+
+  /** 旧地址查询：只回最终目标，前台据此发 301；没有记录时 redirect=null。 */
+  @Get('redirect')
+  async redirect(@Query('path') path: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    const value = text(path, 300);
+    if (!value) throw new AuthError(422, 'VALIDATION_ERROR');
+    this.send(response, request, 200, await this.front().redirect(value));
   }
 }

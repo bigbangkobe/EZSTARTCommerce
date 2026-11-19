@@ -8,6 +8,9 @@ type Version = { version: number; status: string; publishedAt: string; note: str
 type PageDoc = { id: string; pageKey: string; pageType: string; status: string; position: number; scheduledAt: string | null;
   publishedAt: string | null; version: number; translations: Translation[]; blocks: Block[]; versions: Version[];
   contentRelease: string | null };
+type RedirectDoc = { id: string; locale: string; fromPath: string; toPath: string; statusCode: number;
+  pageKey: string | null; auto: boolean; createdAt: string };
+type PreviewLink = { pageKey: string; path: string; expiresAt: string };
 type Session = { permissionCodes: string[]; csrfToken: string };
 type Page<T> = { items: T[]; nextCursor: string | null; hasMore: boolean };
 
@@ -40,6 +43,10 @@ const ERROR_TEXT: Record<string, string> = {
   SLUG_TAKEN: '这个 slug 已被其他页面占用（同语言内地址唯一），请换一个。',
   VERSION_CONFLICT: '页面已在别处修改，请刷新后重新编辑。',
   STATE_CONFLICT: '页面状态已变化（例如已撤下），请刷新后再试。',
+  REDIRECT_SELF: '旧地址与目标地址相同，这条重定向没有意义。',
+  REDIRECT_LOOP: '这条重定向会让访问在两地址间来回跳（形成循环），请改成最终地址。',
+  REDIRECT_SHADOWS_PAGE: '该地址正在线上使用，不能被重定向挡住；要调整内容请直接编辑页面。',
+  REDIRECT_EXISTS: '该旧地址已经登记过重定向，请先删除原记录。',
 };
 
 export function ContentConsole() {
@@ -49,6 +56,8 @@ export function ContentConsole() {
   const [editing, setEditing] = useState<PageDoc | null>(null);
   const [blocksText, setBlocksText] = useState('[]'); const [preview, setPreview] = useState<Block[] | null>(null);
   const [viewport, setViewport] = useState<'desktop' | 'mobile'>('desktop');
+  const [redirects, setRedirects] = useState<RedirectDoc[]>([]);
+  const [previewLink, setPreviewLink] = useState<PreviewLink | null>(null);
   const [ready, setReady] = useState(false); const [busy, setBusy] = useState(false);
   const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const canWrite = permissions.includes('content.write'); const canPublish = permissions.includes('content.publish');
@@ -60,6 +69,7 @@ export function ContentConsole() {
       ...(version !== undefined ? { 'If-Match': `"${version}"` } : {}),
     }, ...(body ? { body: JSON.stringify(body) } : {}) });
     if (response.status === 401) { location.assign('/admin/login'); throw new Error('会话已失效，请重新登录。'); }
+    if (response.status === 204) return undefined as T;
     if (!response.ok) {
       const body = await response.json().catch(() => null) as { error?: { code?: string } } | null;
       const code = body?.error?.code ?? '';
@@ -79,6 +89,9 @@ export function ContentConsole() {
     if (current.permissionCodes.includes('content.read')) {
       const page = await request<Page<PageDoc>>('pages?limit=25');
       setPages(page.items); setCursor(page.nextCursor);
+      // 接口比界面旧（或权限只到内容）时不该让整个控制台崩掉：取不到就当没有重定向。
+      const list = await request<Page<RedirectDoc> | null>('redirects?limit=50').catch(() => null);
+      setRedirects(list?.items ?? []);
     }
     setReady(true);
   }
@@ -157,6 +170,34 @@ export function ContentConsole() {
     });
   }
 
+  /** 预览外链：绑定当前草稿版本与选定视口，链接短期有效（默认 60 分钟）。 */
+  function issuePreview(page: PageDoc) {
+    const locale = page.translations.some(item => item.locale === 'zh-HK') ? 'zh-HK'
+      : (page.translations[0]?.locale ?? 'zh-HK');
+    void run(async () => {
+      const link = await request<{ path: string; expiresAt: string }>(`pages/${page.id}/preview-token`, 'POST',
+        { locale, viewport, expectedVersion: page.version });
+      setPreviewLink({ pageKey: page.pageKey, path: link.path, expiresAt: link.expiresAt });
+      setNotice('预览链接已生成：链接短期有效，过期后需要重新生成。');
+    }, false);
+  }
+
+  function createRedirect(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const form = event.currentTarget; const values = new FormData(form);
+    void run(async () => {
+      await request('redirects', 'POST', {
+        locale: String(values.get('locale') ?? 'zh-HK'),
+        fromPath: String(values.get('fromPath') ?? '').trim(),
+        toPath: String(values.get('toPath') ?? '').trim(),
+      });
+      form.reset(); setNotice('重定向已登记：旧地址会 301 到新地址。');
+    });
+  }
+
+  function removeRedirect(doc: RedirectDoc) {
+    void run(async () => { await request(`redirects/${doc.id}`, 'DELETE'); setNotice('重定向已删除，旧地址将按 404 处理。'); });
+  }
+
   function showPreview() {
     try { setPreview(JSON.parse(blocksText) as Block[]); setError(''); }
     catch { setError('区块 JSON 无法解析，请先修正格式再预览。'); }
@@ -203,6 +244,7 @@ export function ContentConsole() {
           {page.versions.length > 0 && <small>版本历史：{page.versions.slice(0, 5).map(item => `v${item.version}(${item.status})`).join('、')}</small>}
           <div className="actions">
             {canWrite && <button disabled={busy} onClick={() => startEdit(page)}>编辑 {page.pageKey}</button>}
+            {permissions.includes('content.preview') && <button className="secondary" disabled={busy} onClick={() => issuePreview(page)}>预览链接</button>}
             {canPublish && <button disabled={busy} onClick={() => publish(page)}>发布 {page.pageKey}</button>}
             {canPublish && <button className="secondary" disabled={busy} onClick={() => schedule(page)}>定时发布</button>}
             {canPublish && page.status === 'published' && <button className="secondary" disabled={busy} onClick={() => unpublish(page)}>撤下</button>}
@@ -221,6 +263,27 @@ export function ContentConsole() {
           <p><small>当前版本 {editing.version}。保存只改草稿，线上内容要等你发布才会变。</small></p>
           <button disabled={busy}>保存页面</button>
           <button type="button" className="secondary" onClick={() => setEditing(null)}>取消编辑</button></form></section>}
+      {previewLink && <section aria-labelledby="link-title"><h2 id="link-title">预览链接 · {previewLink.pageKey}</h2>
+        <p><a href={previewLink.path} target="_blank" rel="noreferrer">{previewLink.path}</a></p>
+        <p><small>到期时间 {new Date(previewLink.expiresAt).toISOString().slice(0, 16).replace('T', ' ')} UTC ·
+          页面为 noindex 且不写入任何埋点；手机／桌面版在生成时决定。</small></p>
+        <button type="button" className="secondary" onClick={() => { void navigator.clipboard?.writeText(location.origin + previewLink.path); setNotice('链接已复制。'); }}>复制链接</button>
+        <button type="button" className="secondary" onClick={() => setPreviewLink(null)}>收起</button>
+      </section>}
+      <section aria-labelledby="redirect-title"><h2 id="redirect-title">URL 重定向</h2>
+        <p><small>改过已发布页面的 slug 后，旧地址会自动登记 301；这里可以复核、补登记或删除。只接受站内路径。</small></p>
+        {redirects.length === 0 && <p>尚无重定向。</p>}
+        {redirects.map(doc => <article key={doc.id}>
+          <h3>{doc.fromPath} → {doc.toPath}<span className="preset">{doc.statusCode}{doc.auto ? ' · 自动' : ''}</span></h3>
+          <small>{doc.locale}{doc.pageKey ? ` · 来源页面 ${doc.pageKey}` : ''}</small>
+          {canPublish && <div className="actions"><button className="secondary" disabled={busy} onClick={() => removeRedirect(doc)}>删除</button></div>}
+        </article>)}
+        {canPublish && <form onSubmit={createRedirect}><div className="permission-grid">
+          <label>语言<select name="locale" defaultValue="zh-HK">{LOCALES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label>旧地址<input name="fromPath" required placeholder="/zh-HK/pages/old-about" maxLength={300} /></label>
+          <label>新地址<input name="toPath" required placeholder="/zh-HK/pages/about" maxLength={300} /></label>
+        </div><button disabled={busy}>登记重定向</button></form>}
+      </section>
       {preview && <section aria-labelledby="preview-title"><h2 id="preview-title">草稿预览</h2>
         <div className="actions"><button type="button" className="secondary" onClick={() => setViewport('desktop')}>桌面</button>
           <button type="button" className="secondary" onClick={() => setViewport('mobile')}>手机</button></div>

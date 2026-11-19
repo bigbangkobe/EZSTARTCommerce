@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
 import type { ServerResponse } from 'node:http';
 import { cookie, header, uuid, type ApiRequest } from '../identity/controller.js';
 import { ManagementHttp } from '../identity/management-http.js';
@@ -60,5 +60,41 @@ export class ContentController extends ManagementHttp {
     await this.write(request, 'PageRollbackRequest', body);
     this.send(response, request, 201, await this.contentService().rollbackPage(cookie(request, 'ez_admin_session'),
       header(request, 'x-csrf-token'), uuid(id), body, this.context(request)));
+  }
+
+  /**
+   * 预览外链：返回 201 与一次性 token（只在这一次响应里出现，库里只有摘要）。
+   * 前台路由是 /preview/{token}?locale=&viewport=，链接短期有效、noindex、不写埋点。
+   */
+  @Post('pages/:id/preview-token')
+  async previewToken(@Param('id') id: string, @Body() body: { locale: string; viewport: string;
+    expectedVersion: number; ttlMinutes?: number }, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    await this.write(request, 'PreviewRequest', body);
+    this.send(response, request, 201, await this.contentService().createPreviewToken(cookie(request, 'ez_admin_session'),
+      header(request, 'x-csrf-token'), uuid(id), body, this.context(request)));
+  }
+
+  @Get('redirects')
+  async redirects(@Query('limit') limit: unknown, @Query('cursor') cursor: unknown,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    const page = this.pagination(limit, cursor);
+    this.send(response, request, 200, await this.contentService().listRedirects(cookie(request, 'ez_admin_session'),
+      page.limit, page.cursor));
+  }
+
+  @Post('redirects')
+  async createRedirect(@Body() body: { locale: string; fromPath: string; toPath: string; statusCode?: number },
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    await this.write(request, 'RedirectWriteRequest', body);
+    this.send(response, request, 201, await this.contentService().createRedirect(cookie(request, 'ez_admin_session'),
+      header(request, 'x-csrf-token'), body, this.context(request)));
+  }
+
+  @Delete('redirects/:id')
+  async deleteRedirect(@Param('id') id: string, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    await this.guardWrite(request);
+    await this.contentService().deleteRedirect(cookie(request, 'ez_admin_session'),
+      header(request, 'x-csrf-token'), uuid(id), this.context(request));
+    this.send(response, request, 204, null);
   }
 }

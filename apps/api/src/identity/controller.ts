@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parse, serialize } from 'cookie';
 import { securityPolicy as policy } from '../../../../packages/config/src/security-policy.js';
 import { IdentityContracts } from './contracts.js';
+import { originAllowed } from './config.js';
 import { AuthError, IdentityService } from './service.js';
 
 export type ApiRequest = IncomingMessage & { requestId: string };
@@ -40,7 +41,7 @@ export class IdentityController {
   }
   private async write(request: ApiRequest, schema: string, body: unknown) {
     const service = this.service();
-    if (header(request, 'origin') !== service.config.allowedOrigin) throw new AuthError(403, 'FORBIDDEN');
+    if (!originAllowed(service.config, header(request, 'origin'))) throw new AuthError(403, 'FORBIDDEN');
     await service.limitIp(this.context(request));
     this.contracts.assert(schema, body);
     return service;
@@ -114,7 +115,7 @@ export class IdentityController {
   @Post('logout')
   async logout(@Body() body: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     const service = this.service();
-    if (header(request, 'origin') !== service.config.allowedOrigin) throw new AuthError(403, 'FORBIDDEN');
+    if (!originAllowed(service.config, header(request, 'origin'))) throw new AuthError(403, 'FORBIDDEN');
     await service.limitIp(this.context(request));
     if (body && (typeof body !== 'object' || Object.keys(body).length)) throw new AuthError(422, 'VALIDATION_ERROR');
     await service.logout(cookie(request, 'ez_admin_session'), header(request, 'x-csrf-token'), this.context(request));

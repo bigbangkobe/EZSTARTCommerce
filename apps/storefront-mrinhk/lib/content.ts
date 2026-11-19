@@ -1,5 +1,7 @@
 // 内容页数据获取：读 EZSTARTCommerce 的公开前台接口。
-// 对应接口：GET /api/v1/storefront/pages/{slug}、GET /api/v1/storefront/pages（envelope: { data, meta }）
+// 对应接口：GET /api/v1/storefront/pages/{slug}、GET /api/v1/storefront/pages、
+// GET /api/v1/storefront/preview/{token}、GET /api/v1/storefront/redirect?path=
+// （envelope: { data, meta }）
 // 字段契约见 packages/contracts/openapi.yaml 的 PublicPage / PublicPageSummary。
 //
 // 关键事实：接口只返回**已发布版本快照**。保存草稿不会改变这里的数据，
@@ -92,4 +94,42 @@ export async function fetchContentRelease(locale?: string): Promise<string> {
   const config = await getJson<{ contentRelease?: string }>(`config${search ? `?${search}` : ''}`);
   const value = config.data?.contentRelease;
   return typeof value === 'string' && /^cr-[0-9]+$/.test(value) ? value : 'cr-0';
+}
+
+export type PreviewPage = Omit<ContentPage, 'contentRelease'> & {
+  preview: true;
+  viewport: 'mobile' | 'desktop';
+  expiresAt: string;
+};
+
+/**
+ * 预览页：带 token 才能读，且**永远不缓存**（草稿会继续被编辑，缓存会把旧草稿钉在链接上）。
+ * 返回 null 表示 token 过期或不存在——两种情况看起来必须一样。
+ */
+export async function fetchPreview(token: string): Promise<PreviewPage | null> {
+  try {
+    const res = await fetch(`${apiBase}/api/v1/storefront/preview/${encodeURIComponent(token)}`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    const body = (await res.json()) as Envelope<PreviewPage>;
+    return body.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 旧地址解析（改过 slug 的页面）：命中才返回目标，未命中返回 null。
+ * 前台据此发 301；接口不可用时也返回 null——宁可 404，也不猜一个地址把访客送错。
+ */
+export async function fetchRedirect(path: string): Promise<{ toPath: string; statusCode: number } | null> {
+  try {
+    const query = new URLSearchParams({ path });
+    const res = await fetch(`${apiBase}/api/v1/storefront/redirect?${query.toString()}`, { next: { revalidate: 30 } });
+    if (!res.ok) return null;
+    const body = (await res.json()) as Envelope<{ redirect: { toPath: string; statusCode: number } | null }>;
+    const redirect = body.data?.redirect ?? null;
+    return redirect && redirect.toPath.startsWith('/') ? redirect : null;
+  } catch {
+    return null;
+  }
 }

@@ -4,6 +4,7 @@ import {
   type ContentBlock, type ContentTranslationInput, type PageSnapshot,
 } from '../../../../packages/domain/src/content.js';
 import { AuthError } from '../identity/service.js';
+import { dropPageRedirects, livePagePaths, recordSlugRedirect } from './preview.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -87,6 +88,8 @@ export async function publishPageVersion(tx: Tx, command: PublishCommand): Promi
   if (locked.version !== command.expectedVersion) throw new AuthError(409, 'VERSION_CONFLICT');
   const page = await tx.contentPage.findUnique({ where: { id: command.pageId }, include: { translations: true } });
   if (!page) throw new AuthError(404, 'NOT_FOUND');
+  // 发布前记住每个语言「上一次在线」的地址：发布后旧地址就该 301 到新地址，而不是变死链。
+  const previousSlugs = new Map(page.translations.map(translation => [translation.locale, translation.publishedSlug]));
   const locales = await contentLocales(tx);
   const translations = draftOf(page.translations);
   const blocks = contentRule(() => normalizeBlocks(page.blocks));
@@ -102,6 +105,11 @@ export async function publishPageVersion(tx: Tx, command: PublishCommand): Promi
     publishedBy: command.actorId } });
   for (const translation of page.translations) {
     await tx.contentPageTranslation.update({ where: { id: translation.id }, data: { publishedSlug: translation.slug } });
+    const previous = previousSlugs.get(translation.locale) ?? null;
+    if (previous && previous !== translation.slug) {
+      await recordSlugRedirect(tx, { locale: translation.locale, fromSlug: previous, toSlug: translation.slug,
+        pageId: page.id, actorId: command.actorId });
+    }
   }
   await tx.contentPage.update({ where: { id: page.id }, data: { publishedVersionId: created.id, publishedAt: command.now,
     status: 'published', scheduledAt: null, version: version + 1, updatedBy: command.actorId } });
@@ -114,6 +122,10 @@ export async function withdrawPageVersion(tx: Tx, command: { pageId: string;
   actorId: string | null; now: Date }): Promise<{ releaseSeq: number; releaseToken: string }> {
   const locked = await lockPage(tx, command.pageId);
   if (!locked.publishedVersionId) throw new AuthError(409, 'STATE_CONFLICT');
+  const translations = await tx.contentPageTranslation.findMany({ where: { pageId: command.pageId },
+    select: { locale: true, publishedSlug: true } });
+  // 页面要下线了：指向它的 301 必须一起清理，否则访客会被送到 404。
+  await dropPageRedirects(tx, { pageId: command.pageId, paths: livePagePaths(translations) });
   await tx.contentPageVersion.update({ where: { id: locked.publishedVersionId }, data: { status: 'withdrawn' } });
   await tx.contentPageTranslation.updateMany({ where: { pageId: command.pageId }, data: { publishedSlug: null } });
   await tx.contentPage.update({ where: { id: command.pageId }, data: { publishedVersionId: null, publishedAt: null,

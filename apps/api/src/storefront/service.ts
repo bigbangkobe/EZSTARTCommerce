@@ -1,6 +1,8 @@
 import type { Prisma } from '../../../../packages/database/src/client.js';
-import { contentReleaseToken, visibleBlocks, type PageSnapshot } from '../../../../packages/domain/src/content.js';
+import { contentReleaseToken, normalizeBlocks, visibleBlocks, type PageSnapshot } from '../../../../packages/domain/src/content.js';
+import { isPreviewLive, PREVIEW_TOKEN_PATTERN } from '../../../../packages/domain/src/preview.js';
 import { effectiveReviewStatus, normalizeMarketCode, SUPPORTED_LOCALES, StoreRuleError } from '../../../../packages/domain/src/store.js';
+import { digestPreviewToken, lookupRedirect } from '../content/preview.js';
 import { AuthError, IdentityService } from '../identity/service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -113,6 +115,54 @@ export class StorefrontService {
       alternates: snapshot.translations.map(item => ({ locale: item.locale, slug: item.slug })),
       version: row.publishedVersion.version,
     };
+  }
+
+
+  /**
+   * 预览外链（M04 第二批）：返回**草稿**内容，但只给可见区块。
+   * 预览是「发布后会是什么样」的检查，不是编辑器——隐藏区块仍然不该出现在预览里。
+   * token 不存在与已过期同样返回 404：不区分原因，不给探测留信号。
+   */
+  async getPreview(token: string) {
+    if (!PREVIEW_TOKEN_PATTERN.test(token)) throw new AuthError(404, 'NOT_FOUND');
+    return this.run(async tx => {
+      const row = await tx.contentPreviewToken.findUnique({ where: { tokenHash: digestPreviewToken(token) },
+        include: { page: { include: { translations: true } } } });
+      if (!row) throw new AuthError(404, 'NOT_FOUND');
+      // 失效判定用数据库时间：多实例部署时各机器时钟可能漂移，预览有效期不该因此变长。
+      const rows = await tx.$queryRaw<{ now: Date }[]>`SELECT now() AS now`;
+      if (!isPreviewLive(row.expiresAt, rows[0]?.now ?? new Date())) throw new AuthError(404, 'NOT_FOUND');
+      const translation = row.page.translations.find(item => item.locale === row.locale);
+      if (!translation) throw new AuthError(404, 'NOT_FOUND');
+      let blocks: ReturnType<typeof normalizeBlocks> = [];
+      try { blocks = normalizeBlocks(row.page.blocks); } catch { blocks = []; }
+      return {
+        pageKey: row.page.pageKey, pageType: row.page.pageType, locale: row.locale,
+        slug: translation.slug, title: translation.title, seoTitle: translation.seoTitle,
+        seoDescription: translation.seoDescription, indexable: false,
+        blocks: visibleBlocks(blocks).map(block => ({ id: block.id, type: block.type, position: block.position, config: block.config })),
+        alternates: row.page.translations.map(item => ({ locale: item.locale, slug: item.slug })),
+        version: row.page.version, preview: true as const, viewport: row.viewport,
+        expiresAt: row.expiresAt.toISOString(),
+      };
+    });
+  }
+
+  /** 旧地址解析：返回最终目标（已把链走完），查不到就是 null。 */
+  async redirect(rawPath: string) {
+    return this.run(async tx => ({ redirect: await lookupRedirect(tx, rawPath) }));
+  }
+
+  /**
+   * 全量重定向清单：给前台入口层做一次缓存后本地匹配，避免每个请求都回源。
+   * 门店级重定向数量很小（改 slug 才产生），上限 500 条足以覆盖多年运营。
+   */
+  async listRedirects() {
+    return this.run(async tx => {
+      const rows = await tx.seoRedirect.findMany({ select: { fromPath: true, toPath: true, statusCode: true },
+        orderBy: { createdAt: 'desc' }, take: 500 });
+      return { items: rows };
+    });
   }
 
   /**

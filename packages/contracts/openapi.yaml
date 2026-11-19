@@ -1192,6 +1192,51 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/redirects:
+    get:
+      tags: [Content]
+      operationId: listRedirects
+      summary: List published-URL redirects
+      security: [{ AdminSession: [] }]
+      x-permission: content.read
+      parameters: [{ $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+    post:
+      tags: [Content]
+      operationId: createRedirect
+      summary: Register a site-local redirect (301/308)
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.publish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RedirectWriteRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/redirects/{id}:
+    parameters: [{ $ref: '#/components/parameters/UuidId' }]
+    delete:
+      tags: [Content]
+      operationId: deleteRedirect
+      summary: Remove a redirect
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.publish
+      responses:
+        '204': { description: Redirect removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/merchandising/{pageKey}:
     parameters: [{ $ref: '#/components/parameters/PageKey' }]
     get:
@@ -1432,6 +1477,42 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/PublicPageSuccess' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/redirects:
+    get:
+      tags: [Storefront]
+      operationId: listStorefrontRedirects
+      summary: List site-local redirects for edge-side matching
+      responses:
+        '200': { $ref: '#/components/responses/PublicRedirectListSuccess' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/preview/{token}:
+    get:
+      tags: [Storefront]
+      operationId: getStorefrontPreview
+      summary: Read a draft page through a short-lived preview token
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[A-Za-z0-9_-]{43}$' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicPreviewSuccess' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/redirect:
+    get:
+      tags: [Storefront]
+      operationId: lookupStorefrontRedirect
+      summary: Resolve a legacy URL to its current target
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 300 }
+      responses:
+        '200': { $ref: '#/components/responses/PublicRedirectSuccess' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/collections/{slug}:
@@ -4279,6 +4360,21 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/PublicPageListEnvelope' }
+    PublicPreviewSuccess:
+      description: Draft page rendered through a short-lived preview token (no-store, noindex)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicPreviewPageEnvelope' }
+    PublicRedirectSuccess:
+      description: Legacy URL resolution; redirect is null when nothing is registered
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicRedirectEnvelope' }
+    PublicRedirectListSuccess:
+      description: All site-local redirects, bounded to a store-scale list
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicRedirectListEnvelope' }
     ProductPublishSuccess:
       description: Product publication result
       content:
@@ -5635,6 +5731,74 @@ components:
             locale: { type: string, enum: [zh-CN, zh-HK, en] }
             contentRelease: { type: string, pattern: '^cr-[0-9]+$' }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicPreviewPage:
+      type: object
+      additionalProperties: false
+      required: [pageKey, pageType, locale, slug, title, seoTitle, seoDescription, indexable, blocks, alternates, version, preview, viewport, expiresAt]
+      properties:
+        pageKey: { type: string, minLength: 1, maxLength: 100 }
+        pageType: { type: string, enum: [standard, article, policy, faq, announcement] }
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        slug: { type: string, minLength: 1, maxLength: 180 }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        seoTitle: { type: [string, 'null'], maxLength: 70 }
+        seoDescription: { type: [string, 'null'], maxLength: 320 }
+        indexable: { type: boolean, enum: [false], description: A preview is never indexable. }
+        blocks: { type: array, items: { $ref: '#/components/schemas/PublicPageBlock' } }
+        alternates: { type: array, items: { $ref: '#/components/schemas/PublicPageAlternate' } }
+        version: { type: integer, minimum: 1 }
+        preview: { type: boolean, enum: [true] }
+        viewport: { type: string, enum: [mobile, desktop] }
+        expiresAt: { type: string, format: date-time }
+    PublicPreviewPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PublicPreviewPage' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicRedirectEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [redirect]
+          properties:
+            redirect:
+              oneOf:
+                - type: 'null'
+                - $ref: '#/components/schemas/PublicRedirectTarget'
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicRedirectTarget:
+      type: object
+      additionalProperties: false
+      required: [toPath, statusCode]
+      properties:
+        toPath: { type: string, pattern: '^/[A-Za-z0-9._~-][A-Za-z0-9._~/-]*$', maxLength: 300 }
+        statusCode: { type: integer, enum: [301, 308] }
+    PublicRedirectListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items]
+          properties:
+            items: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/PublicRedirectRule' } }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicRedirectRule:
+      type: object
+      additionalProperties: false
+      required: [fromPath, toPath, statusCode]
+      properties:
+        fromPath: { type: string, pattern: '^/[A-Za-z0-9._~-][A-Za-z0-9._~/-]*$', maxLength: 300 }
+        toPath: { type: string, pattern: '^/[A-Za-z0-9._~-][A-Za-z0-9._~/-]*$', maxLength: 300 }
+        statusCode: { type: integer, enum: [301, 308] }
     ProductPublishEnvelope:
       type: object
       additionalProperties: false
@@ -6370,6 +6534,27 @@ components:
         locale: { type: string, enum: [zh-CN, zh-HK, en] }
         viewport: { type: string, enum: [mobile, desktop] }
         expectedVersion: { type: integer, minimum: 1 }
+        ttlMinutes: { type: integer, minimum: 5, maximum: 1440, description: Defaults to 60 minutes; the hard ceiling is 24 hours. }
+    PreviewTokenResult:
+      type: object
+      additionalProperties: false
+      required: [token, path, locale, viewport, expiresAt, pageVersion]
+      properties:
+        token: { type: string, pattern: '^[A-Za-z0-9_-]{43}$' }
+        path: { type: string, pattern: '^/(zh-CN|zh-HK|en)/preview/[A-Za-z0-9_-]{43}\?viewport=(mobile|desktop)$' }
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        viewport: { type: string, enum: [mobile, desktop] }
+        expiresAt: { type: string, format: date-time }
+        pageVersion: { type: integer, minimum: 1 }
+    RedirectWriteRequest:
+      type: object
+      additionalProperties: false
+      required: [locale, fromPath, toPath]
+      properties:
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        fromPath: { type: string, pattern: '^/[A-Za-z0-9._~-][A-Za-z0-9._~/-]*$', minLength: 2, maxLength: 300 }
+        toPath: { type: string, pattern: '^/[A-Za-z0-9._~-][A-Za-z0-9._~/-]*$', minLength: 2, maxLength: 300 }
+        statusCode: { type: integer, enum: [301, 308], default: 301 }
     PagePublishRequest:
       type: object
       additionalProperties: false

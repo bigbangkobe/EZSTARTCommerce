@@ -1496,6 +1496,8 @@ model ContentPage {
   updatedAt          DateTime              @updatedAt @db.Timestamptz(3)
   translations       ContentPageTranslation[]
   versions           ContentPageVersion[]  @relation("PageVersions")
+  previewTokens      ContentPreviewToken[]
+  redirects          SeoRedirect[]
   @@index([status, position])
 }
 
@@ -1534,6 +1536,38 @@ model ContentPageVersion {
   createdAt   DateTime     @default(now()) @db.Timestamptz(3)
   @@unique([pageId, version])
   @@index([status, publishedAt])
+}
+
+/// 预览外链：只存 token 的 SHA-256，库被读走也拿不到可用链接。
+/// 绑定页面 + 语言 + 视口与签发时的草稿版本，过期即失效（服务端判定，不依赖客户端时间）。
+model ContentPreviewToken {
+  id        String      @id @default(uuid()) @db.Uuid
+  pageId    String      @db.Uuid
+  page      ContentPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  tokenHash String      @unique
+  locale    String
+  viewport  String      @default("desktop")
+  expiresAt DateTime    @db.Timestamptz(3)
+  createdBy String?     @db.Uuid
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+  @@index([expiresAt])
+  @@index([pageId, expiresAt])
+}
+
+/// 已发布地址重定向：改 slug 时自动登记旧地址 → 新地址，前台按它回 301。
+/// 只允许站内相对路径；同址自跳与循环链在服务端拒绝。
+model SeoRedirect {
+  id         String       @id @default(uuid()) @db.Uuid
+  locale     String
+  fromPath   String       @unique
+  toPath     String
+  statusCode Int          @default(301)
+  pageId     String?      @db.Uuid
+  page       ContentPage? @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  createdBy  String?      @db.Uuid
+  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
+  @@index([locale])
+  @@index([pageId])
 }
 
 /// 单行计数器：任何发布/撤下都会 +1，前台用它判断内容是否换代（只增不减）。

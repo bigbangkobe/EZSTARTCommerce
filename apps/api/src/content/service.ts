@@ -2,12 +2,36 @@ import type { Prisma } from '../../../../packages/database/src/client.js';
 import {
   contentReleaseToken, normalizeBlocks, normalizePageTranslations, normalizePublishPlan, assertPageKey, assertPageType,
 } from '../../../../packages/domain/src/content.js';
+import { normalizePreviewPlan, previewPath, PreviewRuleError } from '../../../../packages/domain/src/preview.js';
+import {
+  assertRedirectWritable, normalizeRedirectPath, REDIRECT_STATUS_CODES, RedirectRuleError, type RedirectEntry,
+  type RedirectStatusCode,
+} from '../../../../packages/domain/src/redirect.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import {
   contentLocales, contentRule, publishPageVersion, rollbackPageVersion, schedulePage, withdrawPageVersion,
 } from './publish.js';
+import { issuePreviewToken } from './preview.js';
 
 type Tx = Prisma.TransactionClient;
+
+const PREVIEW_CODES: Record<string, string> = { VALIDATION_ERROR: 'VALIDATION_ERROR' };
+const REDIRECT_CODES: Record<string, string> = { REDIRECT_SELF: 'REDIRECT_SELF', REDIRECT_LOOP: 'REDIRECT_LOOP' };
+
+function previewRule<T>(fn: () => T): T {
+  try { return fn(); } catch (error) {
+    if (error instanceof PreviewRuleError) throw new AuthError(422, PREVIEW_CODES[error.code] ?? 'VALIDATION_ERROR');
+    throw error;
+  }
+}
+
+function redirectRule<T>(fn: () => T): T {
+  try { return fn(); } catch (error) {
+    if (error instanceof RedirectRuleError) throw new AuthError(422, REDIRECT_CODES[error.code] ?? 'VALIDATION_ERROR');
+    throw error;
+  }
+}
+
 const includePage = { translations: true, versions: { orderBy: { version: 'desc' }, take: 20 } } as const;
 type PageRow = Prisma.ContentPageGetPayload<{ include: typeof includePage }>;
 
@@ -180,6 +204,99 @@ export class ContentService {
       await this.identity.recordAudit(tx, ctx, actor.id, 'content.page.rolled_back', id, 'success',
         `from v${body.sourceVersion}: ${body.reason}`);
       return { releaseToken: result.releaseToken, page: this.view(await this.load(tx, id), result.releaseSeq) };
+    });
+  }
+
+
+  /**
+   * 预览外链：绑定「页面 + 语言 + 视口 + 当前草稿版本」的短期 token。
+   * 只有后台正在看的那个版本能签发——两个编辑同时改稿时，A 的链接不会显示 B 还没审阅的内容。
+   */
+  async createPreviewToken(supplied: string, csrfValue: string, id: string,
+    body: { locale: string; viewport: string; expectedVersion: number; ttlMinutes?: number }, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfValue, 'content.preview', async (tx, actor, _session, now) => {
+      const page = await this.load(tx, id);
+      if (page.version !== body.expectedVersion) throw new AuthError(409, 'VERSION_CONFLICT');
+      const locales = await contentLocales(tx);
+      const plan = previewRule(() => normalizePreviewPlan(body, locales, now));
+      const { token, tokenHash } = issuePreviewToken();
+      // 同一页面只保留最近 10 条有效链接：旧链接不需要撤销按钮，过期自然失效。
+      const stale = await tx.contentPreviewToken.findMany({ where: { pageId: id, expiresAt: { gt: now } },
+        orderBy: { createdAt: 'desc' }, skip: 9, select: { id: true } });
+      if (stale.length) await tx.contentPreviewToken.deleteMany({ where: { id: { in: stale.map(row => row.id) } } });
+      await tx.contentPreviewToken.create({ data: { pageId: id, tokenHash, locale: plan.locale,
+        viewport: plan.viewport, expiresAt: plan.expiresAt, createdBy: actor.id } });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'content.page.preview_issued', id, 'success',
+        `${plan.locale}/${plan.viewport}`);
+      return { token, path: previewPath(token, plan), locale: plan.locale, viewport: plan.viewport,
+        expiresAt: plan.expiresAt.toISOString(), pageVersion: page.version };
+    });
+  }
+
+  /** 重定向清单：改 slug 后旧地址的去向要能被运营复核。 */
+  async listRedirects(supplied: string, limit: number, cursor: string | null) {
+    return this.identity.withPermission(supplied, null, 'content.read', async tx => {
+      if (cursor && !await tx.seoRedirect.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
+      const rows = await tx.seoRedirect.findMany({ include: { page: { select: { pageKey: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
+      const items = rows.slice(0, limit).map(row => ({ id: row.id, locale: row.locale, fromPath: row.fromPath,
+        toPath: row.toPath, statusCode: row.statusCode, pageKey: row.page?.pageKey ?? null,
+        auto: row.page !== null, createdAt: row.createdAt.toISOString() }));
+      const hasMore = rows.length > limit;
+      return { items, hasMore, nextCursor: hasMore ? items.at(-1)!.id : null };
+    });
+  }
+
+  /**
+   * 手工登记重定向。只做站内路径；已在线页面不能被重定向挡掉（那是配置错误，不是重定向）。
+   * 自跳与成环在写入前拒绝，不留「保存成功但前台无限跳转」的状态。
+   */
+  async createRedirect(supplied: string, csrfValue: string,
+    body: { locale: string; fromPath: string; toPath: string; statusCode?: number }, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfValue, 'content.publish', async (tx, actor) => {
+      const locales = await contentLocales(tx);
+      if (!locales.includes(body.locale)) throw new AuthError(422, 'VALIDATION_ERROR');
+      const fromPath = redirectRule(() => normalizeRedirectPath(body.fromPath, 'fromPath'));
+      const toPath = redirectRule(() => normalizeRedirectPath(body.toPath, 'toPath'));
+      const statusCode = body.statusCode ?? 301;
+      if (!REDIRECT_STATUS_CODES.includes(statusCode as RedirectStatusCode)) throw new AuthError(422, 'VALIDATION_ERROR');
+      // 路径里的语言前缀必须与提交的语言一致：不一致的重定向在解析时永远不命中，
+      // 属于「保存成功但前台静默失效」，这里直接拒绝。
+      const prefixed = /^\/([a-z]{2}(?:-[A-Z]{2})?)\//.exec(fromPath)?.[1] ?? null;
+      if (prefixed && locales.includes(prefixed) && prefixed !== body.locale) throw new AuthError(422, 'VALIDATION_ERROR');
+      // 挡掉在线页面等于让正常地址 301 到别处，必须拒绝并提示改内容页而不是加重定向。
+      const segments = fromPath.split('/');
+      const shadowedSlug = segments.length === 4 && segments[1] === body.locale && segments[2] === 'pages' ? segments[3] : null;
+      if (shadowedSlug) {
+        const live = await tx.contentPageTranslation.findFirst({ where: { locale: body.locale, publishedSlug: shadowedSlug } });
+        if (live) throw new AuthError(409, 'REDIRECT_SHADOWS_PAGE');
+      }
+      // 与解析端一致：读全量再在内存里判环，避免漏看别的语言标签下的记录。
+      const entries: RedirectEntry[] = await tx.seoRedirect.findMany({
+        select: { fromPath: true, toPath: true, statusCode: true }, take: 500 });
+      redirectRule(() => assertRedirectWritable(entries, fromPath, toPath));
+      const row = await (async () => {
+        try {
+          return await tx.seoRedirect.create({ data: { locale: body.locale, fromPath, toPath,
+            statusCode, createdBy: actor.id }, include: { page: { select: { pageKey: true } } } });
+        } catch (error) {
+          if ((error as { code?: string }).code === 'P2002') throw new AuthError(409, 'REDIRECT_EXISTS');
+          throw error;
+        }
+      })();
+      await this.identity.recordAudit(tx, ctx, actor.id, 'content.redirect.created', row.id, 'success', `${fromPath} -> ${toPath}`);
+      return { id: row.id, locale: row.locale, fromPath: row.fromPath, toPath: row.toPath, statusCode: row.statusCode,
+        pageKey: row.page?.pageKey ?? null, auto: row.page !== null, createdAt: row.createdAt.toISOString() };
+    });
+  }
+
+  async deleteRedirect(supplied: string, csrfValue: string, id: string, ctx: RequestContext) {
+    return this.identity.withPermission(supplied, csrfValue, 'content.publish', async (tx, actor) => {
+      const row = await tx.seoRedirect.findUnique({ where: { id } });
+      if (!row) throw new AuthError(404, 'NOT_FOUND');
+      await tx.seoRedirect.delete({ where: { id } });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'content.redirect.deleted', id, 'success', row.fromPath);
+      return null;
     });
   }
 

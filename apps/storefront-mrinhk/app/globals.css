@@ -374,3 +374,10 @@ body {
 .footer-nav { display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center; margin-bottom: 10px; }
 .footer-nav a { color: var(--muted); font-size: 0.82rem; text-decoration: none; }
 .footer-nav a:hover { color: var(--red); }
+
+/* ---------- preview (M04 第二批) ---------- */
+.preview-shell { padding-bottom: 48px; }
+.preview-notice { margin: 0; padding: 10px 16px; background: #FDF3E1; color: #7A5312; font-size: 0.8rem;
+  letter-spacing: 0.04em; text-align: center; border-bottom: 1px solid #EFE0C6; }
+.preview-frame { max-width: 390px; margin: 28px auto; border: 1px solid var(--line); border-radius: 20px;
+  box-shadow: var(--shadow-sm); padding: 28px 22px 36px; }

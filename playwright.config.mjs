@@ -9,6 +9,6 @@ export default defineConfig({ testDir: './e2e', fullyParallel: false, workers: 1
       command: 'pnpm --filter @ezstart/storefront-mrinhk build && pnpm --filter @ezstart/storefront-mrinhk start',
       url: 'http://127.0.0.1:3002/zh-HK',
       reuseExistingServer: false,
-      timeout: 180000,
+      timeout: 420000,
     },
   ] });

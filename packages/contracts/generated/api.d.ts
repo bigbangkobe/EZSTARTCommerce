@@ -759,6 +759,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/redirects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List published-URL redirects */
+        get: operations["listRedirects"];
+        put?: never;
+        /** Register a site-local redirect (301/308) */
+        post: operations["createRedirect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/redirects/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a redirect */
+        delete: operations["deleteRedirect"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/merchandising/{pageKey}": {
         parameters: {
             query?: never;
@@ -1011,6 +1048,57 @@ export interface paths {
         };
         /** Get a published content page */
         get: operations["getStorefrontPage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storefront/redirects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List site-local redirects for edge-side matching */
+        get: operations["listStorefrontRedirects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storefront/preview/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a draft page through a short-lived preview token */
+        get: operations["getStorefrontPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storefront/redirect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve a legacy URL to its current target */
+        get: operations["lookupStorefrontRedirect"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3101,6 +3189,58 @@ export interface components {
             };
             meta: components["schemas"]["ResponseMeta"];
         };
+        PublicPreviewPage: {
+            pageKey: string;
+            /** @enum {string} */
+            pageType: "standard" | "article" | "policy" | "faq" | "announcement";
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            slug: string;
+            title: string;
+            seoTitle: string | null;
+            seoDescription: string | null;
+            /**
+             * @description A preview is never indexable.
+             * @enum {boolean}
+             */
+            indexable: false;
+            blocks: components["schemas"]["PublicPageBlock"][];
+            alternates: components["schemas"]["PublicPageAlternate"][];
+            version: number;
+            /** @enum {boolean} */
+            preview: true;
+            /** @enum {string} */
+            viewport: "mobile" | "desktop";
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        PublicPreviewPageEnvelope: {
+            data: components["schemas"]["PublicPreviewPage"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PublicRedirectEnvelope: {
+            data: {
+                redirect: null | components["schemas"]["PublicRedirectTarget"];
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PublicRedirectTarget: {
+            toPath: string;
+            /** @enum {integer} */
+            statusCode: 301 | 308;
+        };
+        PublicRedirectListEnvelope: {
+            data: {
+                items: components["schemas"]["PublicRedirectRule"][];
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PublicRedirectRule: {
+            fromPath: string;
+            toPath: string;
+            /** @enum {integer} */
+            statusCode: 301 | 308;
+        };
         ProductPublishEnvelope: {
             data: components["schemas"]["ProductPublicationResult"];
             meta: components["schemas"]["ResponseMeta"];
@@ -3745,6 +3885,30 @@ export interface components {
             /** @enum {string} */
             viewport: "mobile" | "desktop";
             expectedVersion: number;
+            /** @description Defaults to 60 minutes; the hard ceiling is 24 hours. */
+            ttlMinutes?: number;
+        };
+        PreviewTokenResult: {
+            token: string;
+            path: string;
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            /** @enum {string} */
+            viewport: "mobile" | "desktop";
+            /** Format: date-time */
+            expiresAt: string;
+            pageVersion: number;
+        };
+        RedirectWriteRequest: {
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            fromPath: string;
+            toPath: string;
+            /**
+             * @default 301
+             * @enum {integer}
+             */
+            statusCode: 301 | 308;
         };
         PagePublishRequest: {
             expectedVersion: number;
@@ -5818,6 +5982,33 @@ export interface components {
                 "application/json": components["schemas"]["PublicPageListEnvelope"];
             };
         };
+        /** @description Draft page rendered through a short-lived preview token (no-store, noindex) */
+        PublicPreviewSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicPreviewPageEnvelope"];
+            };
+        };
+        /** @description Legacy URL resolution; redirect is null when nothing is registered */
+        PublicRedirectSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicRedirectEnvelope"];
+            };
+        };
+        /** @description All site-local redirects, bounded to a store-scale list */
+        PublicRedirectListSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicRedirectListEnvelope"];
+            };
+        };
         /** @description Product publication result */
         ProductPublishSuccess: {
             headers: {
@@ -7331,6 +7522,69 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    listRedirects: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    createRedirect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedirectWriteRequest"];
+            };
+        };
+        responses: {
+            201: components["responses"]["Created"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    deleteRedirect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     getMerchandisingDraft: {
         parameters: {
             query?: never;
@@ -7638,6 +7892,51 @@ export interface operations {
         responses: {
             200: components["responses"]["PublicPageSuccess"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    listStorefrontRedirects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicRedirectListSuccess"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getStorefrontPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicPreviewSuccess"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    lookupStorefrontRedirect: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicRedirectSuccess"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
