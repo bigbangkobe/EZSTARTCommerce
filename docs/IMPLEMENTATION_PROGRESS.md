@@ -666,3 +666,13 @@
 验证：契约 **51 项**全绿、契约生成物一致、Prisma schema 有效；新增前端无依赖测试 **6 项**（`merchandising.test.ts`：闭集校验、手工/动态互斥、发布门槛、排序稳定性、快照不可变）；新增真实 PostgreSQL HTTP 集成 **1 项**（`merchandising-http.test.ts`，覆盖草稿与线上分离、版本冲突、缺语言阻断、手工不合格商品拒绝发布、动态补足与读取时资格失效、发布后失效商品的 issues、发布权限与撤下）；后台与前台 typecheck、生产构建通过。
 
 测试环境修复：Windows 上把测试用嵌入式 PostgreSQL 的数据目录从仓库 `.local-tools` 改到系统临时目录（`EZ_TEST_PG_DIR` 可覆盖）——仓库目录会让 `initdb` 的 bootstrap 阶段卡住数分钟，导致历史套件成片超时；迁移子进程超时同时从 120s 放宽到 240s。改完后单套件启动约 5 秒，`storefront` 等此前超时的套件恢复可跑。
+
+部署：提交 `91bac76` 已推送 `origin/main` 并部署 mrinhk（备份数据库 → 快进拉取 → 重建 api/admin/storefront 镜像 → 第 31 条迁移 `202611190100_merchandising_layouts` 应用成功 → API 健康 → Caddy/公网 200）。
+
+生产冒烟：
+
+- `/api/v1/storefront/merchandising/home?locale=zh-HK` → **404**（尚未发布版面，前台按设计退回主题默认陈列）；
+- `/api/v1/storefront/merchandising/unknown` → **404**（未知 pageKey 不泄露是否存在）；
+- `/api/v1/admin/merchandising/home` 无会话 → **401**（陈列读取同样要登录，不是公开接口）；
+- `https://admin.mrinhk.com/admin/merchandising` → **200**；`https://mrinhk.com/zh-HK` → **200**，HTML 中 `home.hero` / `home.about` / `home.products` 三个默认区块标记齐全（未发布版面时首页未被陈列打空）；
+- 数据库确认 `"MerchandisingLayout"` 与 `"MerchandisingVersion"` 两张表已建。
