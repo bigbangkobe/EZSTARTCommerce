@@ -3,39 +3,12 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { site, whatsappLink } from '../../lib/site';
 import { altPaths, copyFor, isLocale, localePath, type Locale } from '../../lib/i18n';
-import { fetchProducts, formatPrice } from '../../lib/products';
+import { fetchProducts } from '../../lib/products';
 import { fetchContentRelease } from '../../lib/content';
 import { fetchMerchandising } from '../../lib/merchandising';
+import { ProductCards } from '../product-cards';
 import AnalyticsTracker from '../analytics-tracker';
 import SectionTracker from '../section-tracker';
-
-/** 卡片渲染统一走这里：默认精选与后台陈列区块共用一套样式与埋点字段。 */
-function ProductCards({ products, locale }: { products: { id: string; slug: string; name: string; category?: string;
-  price: number; currency: string; variants: { id: string }[] }[]; locale: Locale }) {
-  const t = copyFor[locale];
-  return (
-    <div className="cards">
-      {products.map((product) => (
-        <div className="card product-card" key={product.id}
-          data-ez-placement={product.id} data-ez-variant={product.variants[0]?.id ?? undefined}>
-          <div className="product-thumb">{product.category ?? t.products.thumbFallback}</div>
-          <div className="product-body">
-            <h3>
-              <Link href={localePath(locale, `/products/${encodeURIComponent(product.slug)}`)}>{product.name}</Link>
-            </h3>
-            <div className="product-price">
-              {formatPrice(product.price, product.currency)}
-              <small> {t.common.from}</small>
-            </div>
-            <a className="btn btn-ghost product-cta" href={whatsappLink} target="_blank" rel="noopener noreferrer">
-              {t.products.inquiry}
-            </a>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 function SectionHead({ num, title, jp }: { num: string; title: string; jp: string }) {
   return (

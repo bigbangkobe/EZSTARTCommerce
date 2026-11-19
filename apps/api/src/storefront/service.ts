@@ -4,9 +4,12 @@ import { isPreviewLive, PREVIEW_TOKEN_PATTERN } from '../../../../packages/domai
 import { effectiveReviewStatus, normalizeMarketCode, SUPPORTED_LOCALES, StoreRuleError } from '../../../../packages/domain/src/store.js';
 import { digestPreviewToken, lookupRedirect } from '../content/preview.js';
 import {
-  assertMerchandisingPageKey, sectionTitle, type MerchandisingPageKey, type MerchandisingSection,
+  categoryMerchandisingKey, parseMerchandisingPageKey, sectionTitle, type MerchandisingSection,
 } from '../../../../packages/domain/src/merchandising.js';
-import { fulfilledSales30d, selectProducts, sellableByIds, sellablePool } from '../merchandising/resolve.js';
+import {
+  fulfilledSales30d, selectProducts, sellableByIds, sellablePool, sellableWhere,
+  type SellableScope,
+} from '../merchandising/resolve.js';
 import { AuthError, IdentityService } from '../identity/service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -285,10 +288,34 @@ export class StorefrontService {
    * 手工区块里已失效的商品直接不出现（后台 issues 会提示运营替换）；
    * 动态区块排除不合格商品后由后续候选补足，因此展示数量仍能维持到 limit。
    */
+  /** 快照区块 → 对外区块：商品每次读取都重新过资格，手工缺位直接不出现（后台 issues 会提示）。 */
+  private async resolveSections(tx: Tx, sections: readonly MerchandisingSection[], scope: SellableScope,
+    locale: string, fallback: string) {
+    const output = [];
+    for (const section of sections.filter(item => item.visible)) {
+      // 手工区块按配置的 id 取（顺序即优先级）；动态区块按规则在候选池里排序。
+      const rows = section.sortMode === 'manual'
+        ? await sellableByIds(tx, scope, section.productIds)
+        : await sellablePool(tx, scope, section.categoryIds);
+      const eligibleIds = new Set(rows.map(row => row.id));
+      const units = section.sortMode === 'fulfilled_sales_30d'
+        ? await fulfilledSales30d(tx, rows.map(row => row.id), scope.now) : new Map<string, number>();
+      const selection = selectProducts(section, rows, units, eligibleIds);
+      output.push({ sectionId: section.sectionId, type: section.type,
+        title: sectionTitle(section, locale, fallback), sortMode: section.sortMode,
+        products: selection.rows.map(row => this.publicView(row, locale, fallback)) });
+    }
+    return output;
+  }
+
+  /** 公开的陈列接口只服务首页；分类版面随分类页一起下发，不额外开放按 id 读取。 */
   async merchandising(pageKeyInput: string, localeInput: string | null, marketInput: string | null) {
-    let pageKey: MerchandisingPageKey;
-    try { pageKey = assertMerchandisingPageKey(pageKeyInput); }
-    catch { throw new AuthError(404, 'NOT_FOUND'); }
+    let pageKey: string;
+    try {
+      const ref = parseMerchandisingPageKey(pageKeyInput);
+      if (ref.kind !== 'home') throw new AuthError(404, 'NOT_FOUND');
+      pageKey = ref.pageKey;
+    } catch { throw new AuthError(404, 'NOT_FOUND'); }
     return this.run(async tx => {
       const settings = await this.settings(tx);
       const locale = this.locale(settings, localeInput);
@@ -298,22 +325,56 @@ export class StorefrontService {
       const layout = await tx.merchandisingLayout.findUnique({ where: { pageKey } });
       if (!layout || layout.status !== 'published' || !layout.publishedSnapshot) throw new AuthError(404, 'NOT_FOUND');
       const snapshot = layout.publishedSnapshot as unknown as { sections?: MerchandisingSection[]; version?: number };
-      const scope = { marketCode: market.marketCode, eligibleProductIds: market.eligibleProductIds, now: new Date() };
-      const sections = [];
-      for (const section of (snapshot.sections ?? []).filter(item => item.visible)) {
-        // 手工区块按配置的 id 取（顺序即优先级）；动态区块按规则在候选池里排序。
-        const rows = section.sortMode === 'manual'
-          ? await sellableByIds(tx, scope, section.productIds)
-          : await sellablePool(tx, scope, section.categoryIds);
-        const eligibleIds = new Set(rows.map(row => row.id));
-        const units = section.sortMode === 'fulfilled_sales_30d'
-          ? await fulfilledSales30d(tx, rows.map(row => row.id), scope.now) : new Map<string, number>();
-        const selection = selectProducts(section, rows, units, eligibleIds);
-        sections.push({ sectionId: section.sectionId, type: section.type,
-          title: sectionTitle(section, locale, settings.defaultLocale), sortMode: section.sortMode,
-          products: selection.rows.map(row => this.publicView(row, locale, settings.defaultLocale)) });
-      }
+      const scope: SellableScope = { marketCode: market.marketCode,
+        eligibleProductIds: market.eligibleProductIds, now: new Date() };
+      const sections = await this.resolveSections(tx, snapshot.sections ?? [], scope, locale, settings.defaultLocale);
       return { pageKey, version: snapshot.version ?? layout.version, locale, marketCode: market.marketCode, sections };
+    });
+  }
+
+  /**
+   * 分类页（M04 第四批）：一次请求给齐「分类信息 + 排版」。
+   * 有已发布版面就按版面渲染，没有就退回该分类的平铺商品——
+   * 分类页首先得能逛，版面是它的排版方式，不是存在前提。
+   * slug 解析与商品详情同口径：当前语言 → 默认语言 → 任意语言，但只接受启用中的分类。
+   */
+  async getCategory(slug: string, localeInput: string | null, marketInput: string | null) {
+    return this.run(async tx => {
+      const settings = await this.settings(tx);
+      const locale = this.locale(settings, localeInput);
+      const market = this.market(settings, marketInput);
+      if (!market) throw new AuthError(404, 'NOT_FOUND');
+      const candidates = await tx.categoryTranslation.findMany({ where: { slug },
+        include: { category: { include: { translations: true } } } });
+      if (!candidates.length) throw new AuthError(404, 'NOT_FOUND');
+      const rank = (value: string) => value === locale ? 0 : value === settings.defaultLocale ? 1 : 2;
+      const hit = [...candidates].sort((left, right) => rank(left.locale) - rank(right.locale)
+        || left.categoryId.localeCompare(right.categoryId)).find(row => row.category.enabled);
+      if (!hit) throw new AuthError(404, 'NOT_FOUND');
+      const category = hit.category;
+      const translation = this.localized(category.translations, locale, settings.defaultLocale);
+      const scope: SellableScope = { marketCode: market.marketCode, eligibleProductIds: market.eligibleProductIds,
+        now: new Date(), categoryIds: [category.id] };
+
+      const layout = await tx.merchandisingLayout.findUnique({ where: { pageKey: categoryMerchandisingKey(category.id) } });
+      const snapshot = layout?.status === 'published' && layout.publishedSnapshot
+        ? layout.publishedSnapshot as unknown as { sections?: MerchandisingSection[]; version?: number } : null;
+      const sections = snapshot
+        ? await this.resolveSections(tx, snapshot.sections ?? [], scope, locale, settings.defaultLocale) : [];
+      // 版面为空（或全是隐藏区块）时仍然给商品：前台不能因为运营排了空版面就变成空白页。
+      const products = sections.length ? [] : (await tx.product.findMany({ where: sellableWhere(scope),
+        include: includeProduct, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 60 }))
+        .map(row => this.publicView(row, locale, settings.defaultLocale));
+
+      return {
+        category: { id: category.id, parentId: category.parentId ?? null, name: translation?.name ?? '',
+          slug: translation?.slug ?? slug, description: translation?.description ?? null, position: category.position },
+        // 各语言地址来自同一份分类翻译：前台据此生成 canonical/alternate，站点地图也用同一口径。
+        alternates: category.translations.filter(item => item.slug)
+          .map(item => ({ locale: item.locale, slug: item.slug! })),
+        layout: snapshot ? { version: snapshot.version ?? layout!.version, sections } : null,
+        products, locale, marketCode: market.marketCode, contentRelease: await this.contentRelease(tx),
+      };
     });
   }
 
@@ -326,7 +387,9 @@ export class StorefrontService {
       return { items: rows.map(row => {
         const translation = this.localized(row.translations, locale, settings.defaultLocale);
         return { id: row.id, parentId: row.parentId ?? null, position: row.position,
-          name: translation?.name ?? '', slug: translation?.slug ?? null, description: translation?.description ?? null };
+          name: translation?.name ?? '', slug: translation?.slug ?? null, description: translation?.description ?? null,
+          // 列表里带上各语言 slug：站点地图与导航的 alternate 都靠它，不必再逐个分类回源。
+          alternates: row.translations.filter(item => item.slug).map(item => ({ locale: item.locale, slug: item.slug! })) };
       }), locale };
     });
   }

@@ -10,16 +10,18 @@ type Layout = { pageKey: string; kind: string; status: string; version: number; 
 type PickProduct = { id: string; name: string; status: string; publishedAt: string | null; markets: string[];
   sellable: boolean; reasons: string[] };
 type PickCategory = { id: string; name: string };
+type PageEntry = { pageKey: string; kind: string; targetId: string | null; name: string | null; status: string; version: number };
 type Session = { permissionCodes: string[]; csrfToken: string };
 
 const LOCALES = [['zh-CN', '简体'], ['zh-HK', '繁體'], ['en', 'English']] as const;
 const SORT_MODES = [['manual', '手工顺序'], ['newest', '新品优先'], ['fulfilled_sales_30d', '近 30 天销量'],
   ['price_asc', '价格由低到高'], ['price_desc', '价格由高到低']] as const;
-const PAGE_KEYS = [['home', '首页']] as const;
+/** 页面选择器的显示名：首页固定，分类用分类名（没有就退回 id，不显示空白选项）。 */
+const pageLabel = (entry: PageEntry) => entry.kind === 'home' ? '首页' : entry.name || entry.targetId || entry.pageKey;
 
 /** 每个错误码都要能告诉运营「改哪里」，而不是只说保存失败。 */
 const ERROR_TEXT: Record<string, string> = {
-  MERCHANDISING_PAGE_UNKNOWN: '本实例只开放首页陈列；其它页面的排版需要等对应前台路由上线。',
+  MERCHANDISING_PAGE_UNKNOWN: '这个页面还没开放陈列配置（目前支持首页与分类页）。',
   MERCHANDISING_SECTION_UNSUPPORTED: '当前主题只注册了「商品网格」，其它区块需要定制开发。',
   MERCHANDISING_SECTION_DUPLICATE: '同一版面内区块 id 不能重复。',
   MERCHANDISING_SORT_UNSUPPORTED: '排序方式未实现，请从已提供的新品／销量／价格中选择。',
@@ -30,6 +32,7 @@ const ERROR_TEXT: Record<string, string> = {
   MERCHANDISING_NO_VISIBLE_SECTION: '至少需要一个可见区块才能发布，空版面不能上线。',
   MERCHANDISING_COLLECTION_UNSUPPORTED: '专题（collection）尚未上线，不能在这里引用。',
   MERCHANDISING_PRODUCT_INELIGIBLE: '有手工商品已下架、未发布或当前市场不可售，请先替换再发布。',
+  MERCHANDISING_PRODUCT_OUT_OF_SCOPE: '分类版面只能选本分类的商品；跨分类推荐请用首页版面。',
   VERSION_CONFLICT: '版面已在别处修改，请刷新后重新编辑（避免覆盖别人的改动）。',
   VALIDATION_ERROR: '配置不符合规则：请检查标题长度、展示上限与商品清单。',
 };
@@ -50,6 +53,7 @@ export function MerchandisingConsole() {
   const [doc, setDoc] = useState<Layout | null>(null);
   const [products, setProducts] = useState<PickProduct[]>([]);
   const [categories, setCategories] = useState<PickCategory[]>([]);
+  const [pages, setPages] = useState<PageEntry[]>([]);
   const [markup, setMarkup] = useState('');
   const [query, setQuery] = useState('');
   const [reason, setReason] = useState('內容調整');
@@ -82,10 +86,16 @@ export function MerchandisingConsole() {
     if (current.permissionCodes.includes('content.read')) {
       const layout = await request<Layout>(`merchandising/${target}`);
       setDoc(layout);
+      setPageKey(target);
+      // 分类版面只列本分类商品：选不到范围外的，也就不会到保存时才被拒。
+      const categoryId = target.startsWith('category:') ? target.slice('category:'.length) : null;
       // 选择器失败不该把整个控制台打空：没有候选就只能手填 id，页面其余部分仍然可用。
       const picked = await request<{ items: PickProduct[]; categories: PickCategory[] }>(
-        `merchandising/products?limit=100${search ? `&q=${encodeURIComponent(search)}` : ''}`).catch(() => null);
+        `merchandising/products?limit=100${search ? `&q=${encodeURIComponent(search)}` : ''}`
+        + `${categoryId ? `&categoryId=${encodeURIComponent(categoryId)}` : ''}`).catch(() => null);
       setProducts(picked?.items ?? []); setCategories(picked?.categories ?? []);
+      const listing = await request<{ items: PageEntry[] }>('merchandising/pages').catch(() => null);
+      setPages(listing?.items ?? [{ pageKey: 'home', kind: 'home', targetId: null, name: null, status: 'none', version: 0 }]);
     }
     setReady(true);
   }
@@ -131,7 +141,7 @@ export function MerchandisingConsole() {
     await run(async () => {
       const saved = await request<Layout>(`merchandising/${pageKey}`, 'PATCH',
         { expectedVersion: doc.version, sections: doc.sections });
-      setDoc(saved); setNotice(`草稿已保存（版本 ${saved.version}）。线上首页仍是上一版，发布后才生效。`);
+      setDoc(saved); setNotice(`草稿已保存（版本 ${saved.version}）。线上页面仍是上一版，发布后才生效。`);
     });
   }
 
@@ -140,7 +150,7 @@ export function MerchandisingConsole() {
     await run(async () => {
       const result = await request<Layout & { releaseToken: string }>(`merchandising/${pageKey}/publish`, 'POST',
         { expectedVersion: doc.version });
-      setDoc(result); setNotice(`已发布（版本 ${result.version}，内容标记 ${result.releaseToken}）。首页最多半分钟内更新。`);
+      setDoc(result); setNotice(`已发布（版本 ${result.version}，内容标记 ${result.releaseToken}）。前台最多半分钟内更新。`);
     });
   }
 
@@ -149,25 +159,26 @@ export function MerchandisingConsole() {
     await run(async () => {
       const result = await request<Layout>(`merchandising/${pageKey}/unpublish`, 'POST',
         { expectedVersion: doc.version, reason: reason.trim() || '內容調整' });
-      setDoc(result); setNotice('已撤下：首页回到主题默认陈列，草稿仍保留。');
+      setDoc(result); setNotice('已撤下：前台回到主题默认陈列，草稿仍保留。');
     });
   }
 
   const issueFor = (productId: string) => doc?.issues.find(issue => issue.productId === productId)?.reason ?? null;
 
   return <main>
-    <h1>首页陈列</h1>
+    <h1>页面陈列</h1>
     <nav><a href="/admin/content">内容页</a><a href="/admin/catalog">商品</a><a href="/admin/media">媒体库</a>
       <a href="/admin/settings">店铺设置</a></nav>
-    <p><small>陈列决定首页展示哪些商品、按什么顺序；保存只改草稿，发布后才对外生效，撤下会回到主题默认布局。</small></p>
+    <p><small>陈列决定页面展示哪些商品、按什么顺序。首页与分类页各有一份版面：分类版面只能选本分类商品，动态区块的候选也限制在该分类内。保存只改草稿，发布后才对外生效，撤下会回到主题默认布局。</small></p>
     {!ready && <p>加载中…</p>}
     {ready && !permissions.includes('content.read') && <section><h2>没有内容读取权限</h2><p>请联系店主分配内容权限。</p></section>}
     {ready && permissions.includes('content.read') && <>
       <section aria-labelledby="layout-title"><h2 id="layout-title">版面</h2>
         <div className="permission-grid">
-          <label>页面<select value={pageKey} onChange={event => { const value = event.target.value;
-            setPageKey(value); void load(value, query).catch(caught => setError(caught.message)); }}>
-            {PAGE_KEYS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label>页面<select value={pageKey} onChange={event => { void load(event.target.value, query)
+            .catch(caught => setError(caught.message)); }}>
+            {pages.map(entry => <option key={entry.pageKey} value={entry.pageKey}>
+              {pageLabel(entry)}{entry.status === 'none' ? '（未配置）' : ''}</option>)}</select></label>
           <label>状态<input readOnly value={doc ? `${doc.status === 'published' ? '已发布' : '草稿'} · 版本 ${doc.version}` : ''} /></label>
           <label>线上版本<input readOnly value={doc?.published
             ? `v${doc.published.version}${doc.published.publishedAt ? ` · ${doc.published.publishedAt.slice(0, 16).replace('T', ' ')}` : ''}`

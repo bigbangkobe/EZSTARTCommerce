@@ -1271,6 +1271,18 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
+  /admin/merchandising/pages:
+    get:
+      tags: [Content]
+      operationId: listMerchandisingPages
+      summary: List addressable merchandising scopes (home plus every enabled category)
+      security: [{ AdminSession: [] }]
+      x-permission: content.read
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/merchandising/products:
     get:
       tags: [Content]
@@ -1284,6 +1296,11 @@ paths:
           in: query
           required: false
           schema: { type: string, maxLength: 200 }
+        - name: categoryId
+          in: query
+          required: false
+          description: Restrict candidates to one category (used when laying out a category page)
+          schema: { type: string, format: uuid }
       responses:
         '200': { $ref: '#/components/responses/Success' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1513,6 +1530,20 @@ paths:
         - { $ref: '#/components/parameters/MarketCode' }
       responses:
         '200': { $ref: '#/components/responses/Success' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/categories/{slug}:
+    get:
+      tags: [Storefront]
+      operationId: getStorefrontCategory
+      summary: Read one enabled category with its published layout or plain product list
+      parameters:
+        - { $ref: '#/components/parameters/Slug' }
+        - { $ref: '#/components/parameters/Locale' }
+        - { $ref: '#/components/parameters/MarketCode' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicCategorySuccess' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/pages:
@@ -3789,7 +3820,13 @@ components:
       name: pageKey
       in: path
       required: true
-      schema: { type: string, minLength: 1, maxLength: 100 }
+      description: 'Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.'
+      schema:
+        type: string
+        minLength: 4
+        maxLength: 45
+        pattern: '^(home|category:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$'
+      example: 'category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11'
     Slug:
       name: slug
       in: path
@@ -4430,6 +4467,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/PublicMerchandisingEnvelope' }
+    PublicCategorySuccess:
+      description: Enabled category with its published layout, or the plain product list when no layout is published
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicCategoryEnvelope' }
     PublicPageSuccess:
       description: Published content page read from the immutable release snapshot
       content:
@@ -5745,6 +5787,13 @@ components:
             nextCursor: { type: [string, 'null'] }
             hasMore: { type: boolean }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicCategoryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PublicCategoryPage' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     PublicMerchandisingEnvelope:
       type: object
       additionalProperties: false
@@ -6116,6 +6165,44 @@ components:
         onHand: { type: integer, minimum: 0, readOnly: true }
         reserved: { type: integer, minimum: 0, readOnly: true }
         available: { type: integer, minimum: 0, readOnly: true }
+    PublicCategory:
+      type: object
+      additionalProperties: false
+      required: [id, parentId, name, slug, description, position]
+      properties:
+        id: { type: string, format: uuid }
+        parentId: { type: [string, 'null'], format: uuid }
+        name: { type: string, maxLength: 160 }
+        slug: { type: string, maxLength: 180 }
+        description: { type: [string, 'null'], maxLength: 3000 }
+        position: { type: integer, minimum: 0 }
+    PublicCategoryPage:
+      type: object
+      additionalProperties: false
+      description: layout is present when a page layout is published (sections may be empty if every section is hidden); products is filled whenever no visible section renders, so the page is never blank.
+      required: [category, alternates, layout, products, locale, marketCode, contentRelease]
+      properties:
+        category: { $ref: '#/components/schemas/PublicCategory' }
+        alternates:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [locale, slug]
+            properties:
+              locale: { type: string, enum: [zh-CN, zh-HK, en] }
+              slug: { type: string, maxLength: 180 }
+        layout:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [version, sections]
+          properties:
+            version: { type: integer, minimum: 1 }
+            sections: { type: array, items: { $ref: '#/components/schemas/PublicMerchandisingSection' } }
+        products: { type: array, maxItems: 60, items: { $ref: '#/components/schemas/PublicProduct' } }
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        marketCode: { type: string, pattern: '^[A-Z]{2}$' }
+        contentRelease: { type: string, pattern: '^cr-[0-9]+$' }
     PublicMerchandisingSection:
       type: object
       additionalProperties: false

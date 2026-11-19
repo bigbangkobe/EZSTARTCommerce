@@ -1574,7 +1574,7 @@ model SeoRedirect {
 /// 草稿在 blocks，线上只读 publishedSnapshot——保存草稿永远不影响线上陈列。
 model MerchandisingLayout {
   id                String                 @id @default(uuid()) @db.Uuid
-  /// 本批只开放 home；分类/专题沿用同一结构，等对应前台路由上线再放开。
+  /// home 或 category:<uuid>（见第 32 条迁移的 CHECK）；专题等路由上线后再加。
   pageKey           String                 @unique
   kind              String                 @default("home")
   status            String                 @default("draft")

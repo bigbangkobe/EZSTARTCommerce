@@ -55,6 +55,7 @@ const zhHK = {
   nav: {
     home: '首頁',
     products: '商品',
+    categories: '分類',
     contact: '聯絡',
     cart: '購物袋',
     member: '會員',
@@ -109,6 +110,14 @@ const zhHK = {
     inquiry: 'WhatsApp 查詢',
     viewDetail: '查看詳情',
     thumbFallback: '商品圖片',
+  },
+  categories: {
+    heading: '分類',
+    jp: 'カテゴリー',
+    empty: '分類正在整理中，歡迎先透過 WhatsApp 查詢。',
+    error: '分類暫時無法載入，請稍後再試。',
+    all: '全部分類',
+    products: '此分類的商品',
   },
   productDetail: {
     specs: '規格',
@@ -292,6 +301,7 @@ const zhHK = {
       description: '以日式職人精神對待每一件事。香港選物小店，WhatsApp 直接聯繫，專人回覆。',
     },
     products: { title: '商品', description: 'IN先生現售商品，WhatsApp 直接查詢細節與庫存。' },
+    categories: { title: '商品分類', description: '按分類瀏覽 IN先生現售商品，WhatsApp 直接查詢細節與庫存。' },
     contact: { title: '聯絡', description: '透過 WhatsApp 聯絡 IN先生，查詢商品、訂單與配送。' },
     cart: { title: '購物袋', description: '確認購物袋內容後前往結帳。' },
     checkout: { title: '結帳', description: '填寫收貨資料並確認訂單。' },
@@ -306,6 +316,7 @@ const zhCN: Copy = {
   nav: {
     home: '首页',
     products: '商品',
+    categories: '分类',
     contact: '联系',
     cart: '购物袋',
     member: '会员',
@@ -360,6 +371,14 @@ const zhCN: Copy = {
     inquiry: 'WhatsApp 查询',
     viewDetail: '查看详情',
     thumbFallback: '商品图片',
+  },
+  categories: {
+    heading: '分类',
+    jp: 'カテゴリー',
+    empty: '分类正在整理中，欢迎先通过 WhatsApp 咨询。',
+    error: '分类暂时无法加载，请稍后再试。',
+    all: '全部分类',
+    products: '此分类的商品',
   },
   productDetail: {
     specs: '规格',
@@ -543,6 +562,7 @@ const zhCN: Copy = {
       description: '以日式职人精神对待每一件事。香港选物小店，WhatsApp 直接联系，专人回复。',
     },
     products: { title: '商品', description: 'IN先生现售商品，WhatsApp 直接查询细节与库存。' },
+    categories: { title: '商品分类', description: '按分类浏览 IN先生现售商品，WhatsApp 直接咨询细节与库存。' },
     contact: { title: '联系', description: '通过 WhatsApp 联系 IN先生，查询商品、订单与配送。' },
     cart: { title: '购物袋', description: '确认购物袋内容后前往结账。' },
     checkout: { title: '结账', description: '填写收货资料并确认订单。' },
@@ -555,6 +575,7 @@ const en: Copy = {
   nav: {
     home: 'Home',
     products: 'Shop',
+    categories: 'Categories',
     contact: 'Contact',
     cart: 'Bag',
     member: 'Account',
@@ -609,6 +630,14 @@ const en: Copy = {
     inquiry: 'Ask on WhatsApp',
     viewDetail: 'View details',
     thumbFallback: 'Product photo',
+  },
+  categories: {
+    heading: 'Categories',
+    jp: 'カテゴリー',
+    empty: 'Categories are being prepared. Message us on WhatsApp in the meantime.',
+    error: 'Categories could not be loaded. Please try again shortly.',
+    all: 'All categories',
+    products: 'Products in this category',
   },
   productDetail: {
     specs: 'Options',
@@ -793,6 +822,7 @@ const en: Copy = {
       description: 'A small Hong Kong shop run with Japanese craftsman care. Message us on WhatsApp and get a personal reply.',
     },
     products: { title: 'Products', description: 'What Mr. IN currently offers. Ask about details and stock on WhatsApp.' },
+    categories: { title: 'Categories', description: 'Browse Mr. IN products by category. Ask about details and stock on WhatsApp.' },
     contact: { title: 'Contact', description: 'Reach Mr. IN on WhatsApp for products, orders and delivery.' },
     cart: { title: 'Your bag', description: 'Review your bag before checkout.' },
     checkout: { title: 'Checkout', description: 'Enter delivery details and confirm your order.' },

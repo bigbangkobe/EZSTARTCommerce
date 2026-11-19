@@ -676,3 +676,19 @@
 - `/api/v1/admin/merchandising/home` 无会话 → **401**（陈列读取同样要登录，不是公开接口）；
 - `https://admin.mrinhk.com/admin/merchandising` → **200**；`https://mrinhk.com/zh-HK` → **200**，HTML 中 `home.hero` / `home.about` / `home.products` 三个默认区块标记齐全（未发布版面时首页未被陈列打空）；
 - 数据库确认 `"MerchandisingLayout"` 与 `"MerchandisingVersion"` 两张表已建。
+
+### 四、M04 第四批：分类页与分类陈列（候选池按分类收窄 + 手工位范围校验）
+
+范围：把 M04 的陈列从首页扩到分类页——分类页有了正式路由，版面按分类绑定，商品候选被限制在该分类内。专题（collection）仍未开放。
+
+- 契约：新增 `/admin/merchandising/pages`（页面选择器）、`/storefront/categories/{slug}`（分类页一次取齐分类信息 + 版面或平铺商品）；`/admin/merchandising/products` 增加 `categoryId` 过滤；`PageKey` 参数模式改为 `^(home|category:<uuid>)$`；新增 `PublicCategory`、`PublicCategoryPage`、`PublicCategoryEnvelope`、`PublicCategorySuccess`；契约测试 51 → **52 项**。
+- 领域：`parseMerchandisingPageKey` 把 pageKey 解析成 `{ kind, targetId, pageKey }`；三类失败分开报——格式错 422、kind 未开放（`collection:`）422 `MERCHANDISING_PAGE_UNKNOWN`、分类不存在 404。用分类 **id** 绑定，分类改名/改 slug 不会让已发布版面失联。
+- 第 32 条迁移 `202611190120_category_merchandising`：pageKey CHECK 收紧为 `home` 或 `category:<uuid>`，新增 kind 闭集与「kind 必须与 pageKey 形状一致」约束。
+- 服务端：版面的读/写/发布/撤下都先解析并校验分类存在；保存与发布时校验手工位商品属于该分类（`MERCHANDISING_PRODUCT_OUT_OF_SCOPE`）；商品选择器带 `categoryId` 时只列本分类商品。
+- 前台：`GET /storefront/categories/{slug}` 返回分类、各语言地址、已发布版面区块（含 `contentRelease`）与平铺商品；候选池通过 `sellableWhere` 的 `categoryIds` 统一收窄，动态区块即使不选分类也不会跨分类取货，手工位同样受此约束。
+- 前台页面：`/[locale]/categories`（索引）与 `/[locale]/categories/{slug}`（详情）；canonical/hreflang 用分类各语言 slug；分类不存在 404、接口不可用时显示「暂时无法加载」并 `noindex`；导航与站点地图收录分类；埋点 `pageKey=category:<slug>`。
+- 后台：`/admin/merchandising` 的页面下拉改为「首页 + 每个启用中的分类」（带未配置标记），分类版面下商品选择器只列本分类商品，新增 `MERCHANDISING_PRODUCT_OUT_OF_SCOPE` 文案。
+
+验证：契约 **52 项**全绿、生成物一致、Prisma schema 有效；领域 **6 项**；新增真实 PostgreSQL HTTP 集成 **1 项**（`category-merchandising-http.test.ts`，覆盖页面清单、key 三类失败、跨分类手工位拒绝、候选池收窄、英文 slug、停用分类 404、发布后商品移出分类的隐藏与补足、撤下后退回平铺商品、发布权限、首页不受影响）；后台与前台 typecheck、生产构建通过；端到端 **8 项**（4 用例 × 桌面/移动）。
+
+回归：merchandising-http 1、content 5、content-http 1、content-preview-http 1、storefront 1、identity-security 5 全绿。identity-http 20/22：并发恢复码用例在本机稳定 `ECONNRESET`（Windows + 嵌入式 PostgreSQL，双实例竞态），已用 `git stash` 在**改动前**复现同样失败，确认是环境问题而非本批引入；其余 20 项通过。

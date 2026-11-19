@@ -47,6 +47,18 @@ export class StorefrontController extends ManagementHttp {
   }
 
   /**
+   * 分类页：分类信息 + 已发布版面（没有版面就带平铺商品）。
+   * 缓存与陈列同档 30 秒：分类改名/换版面最多半分钟生效，商品资格仍靠重新读取收敛。
+   */
+  @Get('categories/:slug')
+  async category(@Param('slug') slug: string, @Query('locale') locale: unknown, @Query('marketCode') marketCode: unknown,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    if (!/^[^\s/]{1,180}$/.test(slug)) throw new AuthError(422, 'VALIDATION_ERROR');
+    response.setHeader('Cache-Control', 'public, max-age=30');
+    this.send(response, request, 200, await this.front().getCategory(slug, text(locale, 10), text(marketCode, 8)));
+  }
+
+  /**
    * 首页陈列：未发布时 404，前台据此退回主题默认布局（配置没做好不能把首页打空）。
    * 缓存 30 秒与重定向清单同档：陈列变更最多半分钟生效，但商品资格失效靠重新读取收敛。
    */

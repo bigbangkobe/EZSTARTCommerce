@@ -3,6 +3,7 @@ import { site } from '../lib/site';
 import { LOCALES, altPaths, isLocale, localePath, type Locale } from '../lib/i18n';
 import { fetchProducts } from '../lib/products';
 import { fetchPages } from '../lib/content';
+import { fetchCategories } from '../lib/categories';
 
 /**
  * 站点地图：只收已发布、明确可索引的页面。
@@ -14,7 +15,7 @@ import { fetchPages } from '../lib/content';
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = `https://${site.domain}`;
   const now = new Date();
-  const staticPaths = ['', '/products', '/contact'];
+  const staticPaths = ['', '/products', '/categories', '/contact'];
 
   // sitemap 的 alternate 必须是绝对地址，相对路径爬虫不会解析。
   const absoluteAlternates = (path: string) => Object.fromEntries(
@@ -61,6 +62,35 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         priority: 0.7,
         alternates: { languages },
       });
+    }
+  }
+
+  // 分类页：只收启用中的分类（列表接口已经过滤），并按分类 id 归并三语地址。
+  const categorySlugs = new Map<string, Map<Locale, string>>();
+  for (const locale of LOCALES) {
+    const { items } = await fetchCategories(locale);
+    for (const item of items) {
+      const map = categorySlugs.get(item.id) ?? new Map<Locale, string>();
+      for (const alternate of item.alternates ?? []) {
+        if (isLocale(alternate.locale)) map.set(alternate.locale, alternate.slug);
+      }
+      categorySlugs.set(item.id, map);
+    }
+  }
+  for (const slugs of categorySlugs.values()) {
+    const languages: Record<string, string> = {};
+    for (const locale of LOCALES) {
+      const slug = slugs.get(locale);
+      if (slug) languages[locale] = `${base}${localePath(locale, `/categories/${encodeURIComponent(slug)}`)}`;
+    }
+    const fallback = languages['zh-HK'] ?? Object.values(languages)[0];
+    if (!fallback) continue;
+    languages['x-default'] = fallback;
+    for (const locale of LOCALES) {
+      const slug = slugs.get(locale);
+      if (!slug) continue;
+      entries.push({ url: `${base}${localePath(locale, `/categories/${encodeURIComponent(slug)}`)}`,
+        lastModified: now, changeFrequency: 'weekly', priority: 0.6, alternates: { languages } });
     }
   }
 

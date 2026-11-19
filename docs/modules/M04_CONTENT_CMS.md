@@ -92,3 +92,25 @@ M00/M01、M02、M03。前台消费已发布的内容与商品陈列契约；主�
 - 文章/公告列表页、社交分享图字段。
 - 陈列的定时发布与历史回滚（复用内容页的计划机制前需先定「撤下计划绑定版本」的语义）。
 - 重定向命中次数统计与批量导入。
+
+## 第四批实现（2026-11-19）
+
+本批把陈列从首页扩到分类页：分类页有了正式路由，版面按分类绑定，候选商品被限制在该分类内。专题（collection）仍未开放。
+
+已实现：
+
+- **分类页面选择器**：`GET /admin/merchandising/pages` 返回「首页 + 每个启用中的分类」及各自版面状态（`none` 表示还没开始配）。后台 `/admin/merchandising` 的页面下拉直接用这份数据，不再写死只有首页。
+- **版面作用域扩到分类**：pageKey 从静态 `home` 扩为 `home | category:<uuid>`（领域 `parseMerchandisingPageKey`）。用分类 **id** 而不是 slug 绑定——分类改名/改 slug 时已发布版面不会失联或指到别的分类。三种失败分开报：`category:not-a-uuid` → 422、`collection:summer` → 422 `MERCHANDISING_PAGE_UNKNOWN`、不存在的分类 → 404。
+- **第 32 条迁移**：把 pageKey 的 CHECK 收紧为 `home` 或 `category:<uuid>`，并新增「kind 必须与 pageKey 形状一致」与 kind 闭集约束，杜绝 `kind=category` 但 key 是 home 这类读出来会错位的行。
+- **候选池按分类收窄**：分类页读取时把该分类作为页面级范围传进可售查询（`sellableWhere`），动态区块即使不选分类，也只能在这个分类里取商品；区块自己的 `categoryIds` 是在此之上的进一步筛选（与关系，不是或）。
+- **手工位必须属于该分类**：保存与发布都会校验，跨分类商品直接 422 `MERCHANDISING_PRODUCT_OUT_OF_SCOPE`。跨分类推荐请用首页版面，不要在分类页混装。后台的商品选择器在分类版面下带 `categoryId` 过滤，选不到范围外的商品。
+- **前台分类页**：新增 `GET /storefront/categories/{slug}`，一次返回分类信息、各语言地址、已发布版面区块（含 `contentRelease`）与平铺商品。有可渲染区块就按版面渲染；没发布版面、或发布后所有区块都被隐藏时，退回该分类的平铺商品（最多 60 件）——分类页首先得能逛，版面只是排版方式。
+- **分类页路由**：`/[locale]/categories`（索引，只列启用中的分类）与 `/[locale]/categories/{slug}`（详情）。canonical/hreflang 用分类各语言 slug 生成；分类不存在 404、接口不可用时显示「暂时无法加载」且 `noindex`（不让空壳页被收录，也不让已收录页因一次接口抖动消失）。导航、站点地图同步收录分类。
+- **埋点**：分类页 `pageKey=category:<slug>`，区块容器带 `data-ez-section`/`data-ez-section-id`，曝光/点击与首页同一套口径。
+
+本批未做（后续批次）：
+
+- 专题（MerchandisingCollection）：列表页与详情页、专题的版面绑定、专题 slug 变更 301。数据结构仍按 `kind` 预留，本批明确拒绝 `collection:` 前缀。
+- 分类页的定时发布与历史回滚（与首页共用同一套缺口）。
+- 分类 slug 变更的 301：当前分类没有改 slug 的后台入口，等 M03 分类编辑上线时一并做。
+- 文章/公告列表页与社交分享图字段。

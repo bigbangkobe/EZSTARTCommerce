@@ -119,12 +119,13 @@
 - SeoRedirect：locale、from_path（唯一）、to_path、status_code（301/308）、page_id（可空，页面删除后置空但保留跳转）、created_by。CHECK 约束保证两端都是站内相对路径且不相同。
 - 关键边界：预览只读草稿、不写 ContentRelease、不加载埋点；slug 变更时自动登记旧地址 → 新地址并把入站链改直；撤下页面时清理指向它的重定向；前台入口层缓存清单 30 秒后本地匹配，命中即 301。
 
-### MerchandisingLayout / MerchandisingVersion（M04 第三批已实现，202611190100）
+### MerchandisingLayout / MerchandisingVersion（M04 第三批 202611190100；第四批 202611190120 扩到分类）
 
-- MerchandisingLayout：page_key（唯一，本批只开放 home）、kind（home/category/collection）、sections（草稿区块 JSON）、status（draft/published）、version（乐观锁）、published_snapshot（线上不可变快照）、published_at/published_by、created_by/updated_by。
+- MerchandisingLayout：page_key（唯一，`home` 或 `category:<uuid>`，第 32 条迁移用 CHECK 锁死这两种形状）、kind（home/category；kind 必须与 page_key 形状一致）、sections（草稿区块 JSON）、status（draft/published）、version（乐观锁）、published_snapshot（线上不可变快照）、published_at/published_by、created_by/updated_by。
+- 分类版面用分类 id 绑定而不是 slug：分类改名或改 slug 时已发布版面不会失联，也不会指到别的分类上。分类被停用后版面仍在库里，但前台分类页 404。
 - MerchandisingVersion：layout_id + version（唯一）、snapshot（发布快照）、note、published_at/published_by；历史不可覆盖，回滚只能再发一版。
 - 区块字段：section_id、type（服务端闭集，本批只有 product_grid）、visible、position（由数组顺序重排）、title_by_locale、sort_mode（manual/newest/fulfilled_sales_30d/price_asc/price_desc）、limit（1–24）、product_ids（手工顺序）、category_ids（动态候选范围）。
-- 关键边界：CHECK 约束保证「draft 无快照、published 必有快照」；保存草稿不动线上；发布要求三语标题齐全且手工商品全部可售；读取时重跑商品资格，手工区块失效商品隐藏并在后台标 issues，动态区块由后续候选补足；发布同时推进 ContentRelease（区块埋点按新版本分组）。
+- 关键边界：CHECK 约束保证「draft 无快照、published 必有快照」；保存草稿不动线上；发布要求三语标题齐全且手工商品全部可售，分类版面还要求手工商品属于该分类（`MERCHANDISING_PRODUCT_OUT_OF_SCOPE`）；读取时重跑商品资格，手工区块失效商品隐藏并在后台标 issues，动态区块由后续候选补足；分类版面的候选池先按分类收窄，区块再在此范围内按规则筛选；发布同时推进 ContentRelease（区块埋点按新版本分组）。
 
 ### AfterSalesCase / Refund / Return
 

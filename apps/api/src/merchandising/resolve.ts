@@ -16,15 +16,21 @@ export interface SellableScope {
   marketCode: string;
   eligibleProductIds: readonly string[];
   now: Date;
+  /** 页面级候选范围（分类页）：无论区块怎么配，都不能把商品从别的分类拖进来。 */
+  categoryIds?: readonly string[];
 }
 
-export function sellableWhere(scope: SellableScope): Prisma.ProductWhereInput {
+export function sellableWhere(scope: SellableScope, extra: Prisma.ProductWhereInput[] = []): Prisma.ProductWhereInput {
   return {
     status: 'active',
     marketCodes: { has: scope.marketCode },
     AND: [
       { OR: [{ publishedAt: null }, { publishedAt: { lte: scope.now } }] },
       ...(scope.eligibleProductIds.length ? [{ id: { in: [...scope.eligibleProductIds] } }] : []),
+      // 页面级分类范围在这里统一收口：陈列、手工位、平铺商品三条路径共用同一个口径，
+      // 少写一处就会让分类页混进别的分类商品。
+      ...(scope.categoryIds?.length ? [{ categories: { some: { categoryId: { in: [...scope.categoryIds] } } } }] : []),
+      ...extra,
     ],
   };
 }
@@ -33,9 +39,11 @@ export function sellableWhere(scope: SellableScope): Prisma.ProductWhereInput {
 const POOL_LIMIT = 120;
 
 export async function sellablePool(tx: Tx, scope: SellableScope, categoryIds: readonly string[]): Promise<ProductRow[]> {
+  // 页面级范围（scope）与区块级范围是「与」的关系：分类页里的动态区块只能在该分类内再筛。
+  const filters: Prisma.ProductWhereInput[] = categoryIds.length
+    ? [{ categories: { some: { categoryId: { in: [...categoryIds] } } } }] : [];
   return tx.product.findMany({
-    where: { ...sellableWhere(scope),
-      ...(categoryIds.length ? { categories: { some: { categoryId: { in: [...categoryIds] } } } } : {}) },
+    where: sellableWhere(scope, filters),
     include: includeProduct,
     // 池子按创建时间截断不会漏掉新品：newest 排序的候选一定在最近的 120 件里。
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -43,10 +51,14 @@ export async function sellablePool(tx: Tx, scope: SellableScope, categoryIds: re
   });
 }
 
-/** 手工区块按 id 取商品：只取仍可售的那些，其余记为缺位交给后台修复。 */
+/**
+ * 手工区块按 id 取商品：只取仍可售的那些，其余记为缺位交给后台修复。
+ * 分类页的页面级范围在这里也生效——手工位不能把别的分类商品带上分类页
+ * （保存时已按分类校验，这里只是兜住「保存后商品被移出分类」的情况）。
+ */
 export async function sellableByIds(tx: Tx, scope: SellableScope, ids: readonly string[]): Promise<ProductRow[]> {
   if (!ids.length) return [];
-  return tx.product.findMany({ where: { ...sellableWhere(scope), id: { in: [...ids] } }, include: includeProduct });
+  return tx.product.findMany({ where: sellableWhere(scope, [{ id: { in: [...ids] } }]), include: includeProduct });
 }
 
 /**

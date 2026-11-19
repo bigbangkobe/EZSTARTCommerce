@@ -1,7 +1,7 @@
 import { Prisma } from '../../../../packages/database/src/client.js';
 import {
-  assertMerchandisingPageKey, assertMerchandisingPublishable, MerchandisingRuleError, merchandisingSnapshot,
-  normalizeMerchandisingSections, type MerchandisingPageKey, type MerchandisingSection,
+  assertMerchandisingPublishable, MerchandisingRuleError, merchandisingSnapshot, normalizeMerchandisingSections,
+  parseMerchandisingPageKey, type MerchandisingPageRef, type MerchandisingSection,
 } from '../../../../packages/domain/src/merchandising.js';
 import { contentReleaseToken } from '../../../../packages/domain/src/content.js';
 import { effectiveReviewStatus } from '../../../../packages/domain/src/store.js';
@@ -15,7 +15,7 @@ const MERCHANDISING_CODES = [
   'MERCHANDISING_PAGE_UNKNOWN', 'MERCHANDISING_SECTION_UNSUPPORTED', 'MERCHANDISING_SECTION_DUPLICATE',
   'MERCHANDISING_SORT_UNSUPPORTED', 'MERCHANDISING_MODE_CONFLICT', 'MERCHANDISING_PRODUCT_DUPLICATE',
   'MERCHANDISING_LIMIT_UNREACHABLE', 'MERCHANDISING_LOCALE_INCOMPLETE', 'MERCHANDISING_NO_VISIBLE_SECTION',
-  'MERCHANDISING_COLLECTION_UNSUPPORTED', 'MERCHANDISING_PRODUCT_INELIGIBLE',
+  'MERCHANDISING_COLLECTION_UNSUPPORTED', 'MERCHANDISING_PRODUCT_INELIGIBLE', 'MERCHANDISING_PRODUCT_OUT_OF_SCOPE',
 ] as const;
 
 function rule<T>(fn: () => T): T {
@@ -93,15 +93,43 @@ export class MerchandisingService {
       .flatMap(section => section.productIds.map(productId => ({ sectionId: section.sectionId, productId })));
   }
 
-  private async view(tx: Tx, pageKey: MerchandisingPageKey, row: MerchandisingLayoutRow | null) {
+  /**
+   * 分类版面的手工位必须属于这个分类：否则分类页会出现「点进去发现不在这个分类」的商品，
+   * 顾客会以为筛选坏了。跨分类推荐请用首页版面，不要在分类页混装。
+   */
+  private async assertCategoryScope(tx: Tx, ref: MerchandisingPageRef, sections: readonly MerchandisingSection[]) {
+    if (ref.kind !== 'category' || !ref.targetId) return;
+    const ids = [...new Set(this.manualProducts(sections).map(item => item.productId))];
+    if (!ids.length) return;
+    const linked = await tx.productCategory.findMany({ where: { categoryId: ref.targetId, productId: { in: ids } },
+      select: { productId: true } });
+    const allowed = new Set(linked.map(row => row.productId));
+    if (ids.some(id => !allowed.has(id))) throw new AuthError(422, 'MERCHANDISING_PRODUCT_OUT_OF_SCOPE');
+  }
+
+  /**
+   * 解析并校验版面作用域：分类版面必须指向一个真实存在的分类。
+   * 用 id 而不是 slug 绑定，分类改名/改 slug 时已发布版面不会失联。
+   */
+  private async ref(tx: Tx, pageKeyInput: string): Promise<MerchandisingPageRef> {
+    const ref = rule(() => parseMerchandisingPageKey(pageKeyInput));
+    if (ref.kind === 'category' && !await tx.category.findUnique({ where: { id: ref.targetId! }, select: { id: true } })) {
+      throw new AuthError(404, 'NOT_FOUND');
+    }
+    return ref;
+  }
+
+  private async view(tx: Tx, ref: MerchandisingPageRef, row: MerchandisingLayoutRow | null) {
     const release = await this.releaseSeq(tx);
-    if (!row) return { pageKey, kind: 'home', status: 'draft', version: 1, sections: [], issues: [],
+    if (!row) return { pageKey: ref.pageKey, kind: ref.kind, targetId: ref.targetId, status: 'draft', version: 1,
+      sections: [], issues: [],
       published: null, publishedAt: null, versions: [], contentRelease: contentReleaseToken(release), updatedAt: null };
     const locales = await contentLocales(tx);
     const sections = rule(() => normalizeMerchandisingSections(row.sections, locales));
     const issues = await this.eligibility(tx, this.manualProducts(sections).map(item => item.productId));
     return {
-      pageKey, kind: row.kind, status: row.status, version: row.version, sections,
+      pageKey: ref.pageKey, kind: ref.kind, targetId: ref.targetId, status: row.status, version: row.version,
+      sections,
       // 线上版本号来自快照本身：草稿再改几版，都不会让「已发布版本」跟着跳。
       published: row.publishedSnapshot
         ? { version: Number((row.publishedSnapshot as { version?: number }).version ?? row.version),
@@ -119,9 +147,34 @@ export class MerchandisingService {
 
   async get(supplied: string, pageKey: string) {
     return this.identity.withPermission(supplied, null, 'content.read', async tx => {
-      const key = rule(() => assertMerchandisingPageKey(pageKey));
-      return this.view(tx, key, await tx.merchandisingLayout.findUnique({ where: { pageKey: key },
+      const ref = await this.ref(tx, pageKey);
+      return this.view(tx, ref, await tx.merchandisingLayout.findUnique({ where: { pageKey: ref.pageKey },
         include: { versions: { orderBy: { version: 'desc' }, take: 20 } } }));
+    });
+  }
+
+  /**
+   * 版面清单：后台页面选择器的数据源。
+   * 首页永远在列；分类只列启用中的（停用分类即使有版面，前台也不会对外提供）。
+   * status='none' 表示还没有草稿——后台据此提示「选它就开始配」。
+   */
+  async pages(supplied: string) {
+    return this.identity.withPermission(supplied, null, 'content.read', async tx => {
+      const rows = await tx.merchandisingLayout.findMany({ select: { pageKey: true, kind: true, status: true, version: true,
+        publishedSnapshot: true } });
+      const byKey = new Map(rows.map(row => [row.pageKey, row]));
+      const categories = await tx.category.findMany({ where: { enabled: true }, include: { translations: true },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] });
+      const items: { pageKey: string; kind: string; targetId: string | null; name: string | null;
+        status: string; version: number }[] = [{ pageKey: 'home', kind: 'home', targetId: null, name: null,
+        status: byKey.get('home')?.status ?? 'none', version: byKey.get('home')?.version ?? 0 }];
+      for (const category of categories) {
+        const pageKey = `category:${category.id}`;
+        const row = byKey.get(pageKey);
+        items.push({ pageKey, kind: 'category', targetId: category.id, name: category.translations.find(item => item.locale === 'zh-HK')?.name
+          ?? category.translations[0]?.name ?? category.id, status: row?.status ?? 'none', version: row?.version ?? 0 });
+      }
+      return { items };
     });
   }
 
@@ -131,9 +184,11 @@ export class MerchandisingService {
    */
   async save(supplied: string, csrfValue: string, pageKey: string, body: LayoutBody, ctx: RequestContext) {
     return this.identity.withPermission(supplied, csrfValue, 'content.write', async (tx, actor, _session, now) => {
-      const key = rule(() => assertMerchandisingPageKey(pageKey));
+      const ref = await this.ref(tx, pageKey);
+      const key = ref.pageKey;
       const locales = await contentLocales(tx);
       const sections = rule(() => normalizeMerchandisingSections(body.sections ?? [], locales));
+      await this.assertCategoryScope(tx, ref, sections);
       // advisory lock 返回 void，$queryRaw 反序列化不了；用 $executeRaw 只拿影响行数。
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`merchandising:${key}`}))`;
       const existing = await tx.merchandisingLayout.findUnique({ where: { pageKey: key } });
@@ -143,12 +198,12 @@ export class MerchandisingService {
           data: { sections: sections as unknown as Prisma.InputJsonValue, version: existing.version + 1,
             updatedBy: actor.id, updatedAt: now },
           include: { versions: { orderBy: { version: 'desc' }, take: 20 } } })
-        : await tx.merchandisingLayout.create({ data: { pageKey: key, kind: 'home', status: 'draft', version: 2,
+        : await tx.merchandisingLayout.create({ data: { pageKey: key, kind: ref.kind, status: 'draft', version: 2,
           sections: sections as unknown as Prisma.InputJsonValue, createdBy: actor.id, updatedBy: actor.id },
           include: { versions: true } });
       await this.identity.recordAudit(tx, ctx, actor.id, 'merchandising.layout.saved', row.id, 'success',
         `v${row.version} · ${sections.length} sections`);
-      return this.view(tx, key, row);
+      return this.view(tx, ref, row);
     });
   }
 
@@ -158,7 +213,8 @@ export class MerchandisingService {
    */
   async publish(supplied: string, csrfValue: string, pageKey: string, body: LayoutPublishBody, ctx: RequestContext) {
     return this.identity.withPermission(supplied, csrfValue, 'content.publish', async (tx, actor, _session, now) => {
-      const key = rule(() => assertMerchandisingPageKey(pageKey));
+      const ref = await this.ref(tx, pageKey);
+      const key = ref.pageKey;
       const locales = await contentLocales(tx);
       // advisory lock 返回 void，$queryRaw 反序列化不了；用 $executeRaw 只拿影响行数。
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`merchandising:${key}`}))`;
@@ -166,6 +222,7 @@ export class MerchandisingService {
       if (!existing) throw new AuthError(404, 'NOT_FOUND');
       if (existing.version !== body.expectedVersion) throw new AuthError(409, 'VERSION_CONFLICT');
       const sections = rule(() => normalizeMerchandisingSections(existing.sections, locales));
+      await this.assertCategoryScope(tx, ref, sections);
       rule(() => assertMerchandisingPublishable(sections, locales));
       const issues = await this.eligibility(tx, this.manualProducts(sections).map(item => item.productId));
       if ([...issues.values()].some(reason => reason !== null)) throw new AuthError(422, 'MERCHANDISING_PRODUCT_INELIGIBLE');
@@ -183,7 +240,7 @@ export class MerchandisingService {
       const release = await tx.$queryRaw<{ seq: number }[]>`
         UPDATE "ContentRelease" SET "seq" = "seq" + 1, "updatedAt" = ${now} WHERE "id" = 1 RETURNING "seq"`;
       await this.identity.recordAudit(tx, ctx, actor.id, 'merchandising.layout.published', existing.id, 'success', `v${version}`);
-      const doc = await this.view(tx, key, row);
+      const doc = await this.view(tx, ref, row);
       return { ...doc, releaseToken: contentReleaseToken(release[0]?.seq ?? 0) };
     });
   }
@@ -192,7 +249,8 @@ export class MerchandisingService {
   async unpublish(supplied: string, csrfValue: string, pageKey: string,
     body: { reason: string; expectedVersion: number }, ctx: RequestContext) {
     return this.identity.withPermission(supplied, csrfValue, 'content.publish', async (tx, actor, _session, now) => {
-      const key = rule(() => assertMerchandisingPageKey(pageKey));
+      const ref = await this.ref(tx, pageKey);
+      const key = ref.pageKey;
       // advisory lock 返回 void，$queryRaw 反序列化不了；用 $executeRaw 只拿影响行数。
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`merchandising:${key}`}))`;
       const existing = await tx.merchandisingLayout.findUnique({ where: { pageKey: key } });
@@ -205,7 +263,7 @@ export class MerchandisingService {
       const release = await tx.$queryRaw<{ seq: number }[]>`
         UPDATE "ContentRelease" SET "seq" = "seq" + 1, "updatedAt" = ${now} WHERE "id" = 1 RETURNING "seq"`;
       await this.identity.recordAudit(tx, ctx, actor.id, 'merchandising.layout.withdrawn', existing.id, 'success', body.reason);
-      return { ...await this.view(tx, key, row), releaseToken: contentReleaseToken(release[0]?.seq ?? 0) };
+      return { ...await this.view(tx, ref, row), releaseToken: contentReleaseToken(release[0]?.seq ?? 0) };
     });
   }
 
@@ -213,11 +271,16 @@ export class MerchandisingService {
    * 商品选择器：只回摘要与资格原因，不把商品全字段抛给后台列表。
    * 不合格商品在 UI 里是禁选项——运营需要看到「为什么不能选」，而不是点了保存才报错。
    */
-  async products(supplied: string, query: string | null, limit: number) {
+  async products(supplied: string, query: string | null, limit: number, categoryId: string | null = null) {
     return this.identity.withPermission(supplied, null, 'content.read', async tx => {
       const markets = await this.sellableMarkets(tx);
+      const where: Prisma.ProductWhereInput = {
+        ...(query ? { translations: { some: { name: { contains: query, mode: 'insensitive' } } } } : {}),
+        // 分类版面只列本分类商品：选不到范围外的，也就不会到保存时才被拒。
+        ...(categoryId ? { categories: { some: { categoryId } } } : {}),
+      };
       const rows = await tx.product.findMany({
-        where: query ? { translations: { some: { name: { contains: query, mode: 'insensitive' } } } } : {},
+        where,
         include: { translations: true },
         orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }], take: limit });
       const now = new Date();

@@ -1,5 +1,6 @@
 """Contract regressions; run from any directory with Python unittest."""
 import copy
+import re
 import unittest
 from pathlib import Path
 
@@ -984,6 +985,57 @@ class ContractTests(unittest.TestCase):
                                 "meta": {"requestId": "req-test"}}))
         self.assertTrue(errors("PublicMerchandisingEnvelope",
                                {"data": dict(page, pageKey="collection:summer"), "meta": {"requestId": "req-test"}}))
+
+    def test_category_merchandising_is_bound_by_id_and_layout_wins_over_listing(self):
+        # 后台沿用同一组路径，但分类版面的 key 必须是 category:<uuid>；用 slug 会在改名后失联。
+        for suffix in ("", "/publish", "/unpublish"):
+            path = SPEC["paths"][f"/admin/merchandising/{{pageKey}}{suffix}"]
+            self.assertIn(("put" if suffix == "" else "post"), path)
+        key_param = next(item for item in SPEC["components"]["parameters"].values() if item["name"] == "pageKey")
+        pattern = key_param["schema"]["pattern"]
+        self.assertTrue(re.match(pattern, "home"))
+        self.assertTrue(re.match(pattern, f"category:{UUID}"))
+        self.assertFalse(re.match(pattern, "category:cigars"))
+        self.assertFalse(re.match(pattern, "collection:summer"))
+
+        pages = SPEC["paths"]["/admin/merchandising/pages"]["get"]
+        self.assertEqual("content.read", pages["x-permission"])
+        self.assertEqual([{"AdminSession": []}], pages["security"])
+        products = SPEC["paths"]["/admin/merchandising/products"]["get"]
+        self.assertIn("categoryId", [item.get("name") for item in products["parameters"]])
+
+        public = SPEC["paths"]["/storefront/categories/{slug}"]["get"]
+        self.assertEqual("getStorefrontCategory", public["operationId"])
+        self.assertNotIn("security", public)
+
+        category = {"id": UUID, "parentId": None, "name": "雪茄", "slug": "cigars", "description": None, "position": 0}
+        section = {"sectionId": "featured", "type": "product_grid", "title": "本月精選", "sortMode": "manual",
+                   "products": [{"id": UUID, "slug": "cigar-1", "name": "雪茄一號", "variants": [], "media": [],
+                                 "inStock": True}]}
+        envelope = {"data": {"category": category, "alternates": [{"locale": "zh-HK", "slug": "cigars"}],
+                             "layout": {"version": 2, "sections": [section]}, "products": [],
+                             "locale": "zh-HK", "marketCode": "HK", "contentRelease": "cr-7"},
+                    "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("PublicCategoryEnvelope", envelope))
+        # 没发布版面时给平铺商品：layout 为 null，商品数组才允许非空。
+        fallback = {"data": {"category": category, "alternates": [{"locale": "zh-HK", "slug": "cigars"}],
+                             "layout": None, "contentRelease": "cr-7",
+                             "products": [{"id": UUID, "slug": "cigar-1", "name": "雪茄一號", "variants": [], "media": [],
+                                           "inStock": True}], "locale": "zh-HK", "marketCode": "HK"},
+                    "meta": {"requestId": "req-test"}}
+        self.assertEqual([], errors("PublicCategoryEnvelope", fallback))
+        # 版面里不能夹带草稿字段，也不能出现未知分类字段（公开响应不是编辑器接口）。
+        self.assertTrue(errors("PublicCategoryEnvelope",
+                               {"data": {"category": dict(category, enabled=False),
+                                         "alternates": [{"locale": "zh-HK", "slug": "cigars"}], "layout": None,
+                                         "products": [], "locale": "zh-HK", "marketCode": "HK",
+                                         "contentRelease": "cr-7"}, "meta": {"requestId": "req-test"}}))
+        self.assertTrue(errors("PublicCategoryEnvelope",
+                               {"data": {"category": category, "alternates": [{"locale": "zh-HK", "slug": "cigars"}],
+                                         "layout": {"version": 2, "sections": [dict(section, position=0)]},
+                                         "products": [], "locale": "zh-HK", "marketCode": "HK",
+                                         "contentRelease": "cr-7"},
+                                "meta": {"requestId": "req-test"}}))
 
 if __name__ == "__main__":
     unittest.main()

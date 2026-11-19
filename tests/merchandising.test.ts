@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  assertMerchandisingPageKey, assertMerchandisingPublishable, MerchandisingRuleError, merchandisingSnapshot,
+  assertMerchandisingPublishable, categoryMerchandisingKey, MerchandisingRuleError, merchandisingSnapshot,
+  parseMerchandisingPageKey,
   normalizeMerchandisingSections, rankCandidates, sectionTitle, visibleLimit, type MerchandisingSection,
 } from '../packages/domain/src/merchandising.js';
 
@@ -110,7 +111,15 @@ test('snapshots are immutable copies and reads re-clamp the display limit', () =
 });
 
 test('page keys are a closed set', () => {
-  assert.equal(assertMerchandisingPageKey('home'), 'home');
-  assert.equal(code(() => assertMerchandisingPageKey('collection:summer')), 'VALIDATION_ERROR');
-  assert.equal(code(() => assertMerchandisingPageKey('category:cigars')), 'VALIDATION_ERROR');
+  // 版面作用域：首页固定；分类按 id 绑定（改 slug 不会让已发布版面失联）。
+  assert.deepEqual(parseMerchandisingPageKey('home'), { kind: 'home', targetId: null, pageKey: 'home' });
+  const categoryId = '6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11';
+  assert.deepEqual(parseMerchandisingPageKey(`category:${categoryId}`),
+    { kind: 'category', targetId: categoryId, pageKey: `category:${categoryId}` });
+  assert.equal(categoryMerchandisingKey(categoryId.toUpperCase()), `category:${categoryId}`);
+  // 还没上线的专题要能和写错的 key 区分开：一个提示「页面未开放」，一个提示「key 格式错」。
+  assert.equal(code(() => parseMerchandisingPageKey('collection:summer')), 'MERCHANDISING_PAGE_UNKNOWN');
+  assert.equal(code(() => parseMerchandisingPageKey('category:cigars')), 'VALIDATION_ERROR');
+  assert.equal(code(() => parseMerchandisingPageKey('category:')), 'VALIDATION_ERROR');
+  assert.equal(code(() => parseMerchandisingPageKey('')), 'VALIDATION_ERROR');
 });

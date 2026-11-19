@@ -19,9 +19,16 @@ export class MerchandisingRuleError extends Error {
 
 function fail(field: string, code = 'VALIDATION_ERROR'): never { throw new MerchandisingRuleError(field, code); }
 
-/** 版面标识：本批只开放首页；分类/专题沿用同一套结构，等对应前台路由上线再放开。 */
-export const MERCHANDISING_PAGE_KEYS = ['home'] as const;
-export type MerchandisingPageKey = typeof MERCHANDISING_PAGE_KEYS[number];
+/** 版面作用域：首页固定一份；分类页按分类 id 绑定（一个分类一份版面）。专题等路由上线后再加。 */
+export type MerchandisingPageKind = 'home' | 'category';
+
+export interface MerchandisingPageRef {
+  kind: MerchandisingPageKind;
+  /** 分类版面才有；首页为 null。 */
+  targetId: string | null;
+  /** 落库与后台路由使用的稳定 key：`home` 或 `category:<uuid>`。 */
+  pageKey: string;
+}
 
 export const MERCHANDISING_SECTION_TYPES = ['product_grid'] as const;
 export type MerchandisingSectionType = typeof MERCHANDISING_SECTION_TYPES[number];
@@ -35,16 +42,40 @@ export const MAX_GRID_PRODUCTS = 24;
 export const MIN_GRID_LIMIT = 1;
 export const MAX_GRID_LIMIT = 24;
 
-const PAGE_KEY_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
+const HOME_KEY = 'home';
+const CATEGORY_KEY_PREFIX = 'category:';
 const SECTION_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function assertMerchandisingPageKey(value: unknown): MerchandisingPageKey {
-  if (typeof value !== 'string' || !PAGE_KEY_PATTERN.test(value)) fail('pageKey');
-  if (!MERCHANDISING_PAGE_KEYS.includes(value as MerchandisingPageKey)) {
-    fail('pageKey', 'MERCHANDISING_PAGE_UNKNOWN');
-  }
-  return value as MerchandisingPageKey;
+export const HOME_MERCHANDISING_REF: MerchandisingPageRef = { kind: 'home', targetId: null, pageKey: HOME_KEY };
+
+/** 分类版面的 key：后台路由、快照与数据行都用它，分类改名/改 slug 不影响已发布版面。 */
+export function categoryMerchandisingKey(categoryId: string): string {
+  if (!UUID_PATTERN.test(categoryId)) fail('pageKey');
+  return `${CATEGORY_KEY_PREFIX}${categoryId.toLowerCase()}`;
+}
+
+export function categoryMerchandisingRef(categoryId: string): MerchandisingPageRef {
+  return { kind: 'category', targetId: categoryId.toLowerCase(), pageKey: categoryMerchandisingKey(categoryId) };
+}
+
+/**
+ * 解析版面 key。三类失败要分开：
+ * - 格式不对（`category:` 后面不是 id）→ VALIDATION_ERROR；
+ * - kind 未开放（例如 `collection:`）→ MERCHANDISING_PAGE_UNKNOWN；
+ * - kind 缺失（只写了 `home:` 之类）→ VALIDATION_ERROR。
+ * 后台据此分别提示「改 key」还是「这个页面还没上线」，而不是统一说保存失败。
+ */
+export function parseMerchandisingPageKey(value: unknown): MerchandisingPageRef {
+  if (typeof value !== 'string') fail('pageKey');
+  if (value === HOME_KEY) return HOME_MERCHANDISING_REF;
+  const separator = value.indexOf(':');
+  if (separator <= 0 || separator === value.length - 1) fail('pageKey');
+  const kind = value.slice(0, separator);
+  const targetId = value.slice(separator + 1);
+  if (kind !== 'category') fail('pageKey', 'MERCHANDISING_PAGE_UNKNOWN');
+  if (!UUID_PATTERN.test(targetId)) fail('pageKey');
+  return categoryMerchandisingRef(targetId);
 }
 
 /** 后台可见文本：拒绝 HTML 标签与控制字符，长度收敛。 */

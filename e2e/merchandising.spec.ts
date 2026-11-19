@@ -24,6 +24,12 @@ test('an operator edits, publishes and withdraws the home merchandising layout',
             sellable: false, reasons: ['PRODUCT_NOT_ACTIVE'] },
         ] }, meta: { requestId: 'req' } } });
     }
+    if (method === 'GET' && url.pathname.endsWith('/merchandising/pages')) {
+      return route.fulfill({ json: { data: { items: [
+        { pageKey: 'home', kind: 'home', targetId: null, name: null, status: layout.status, version: layout.version },
+        { pageKey: 'category:cat-1', kind: 'category', targetId: 'cat-1', name: '雪茄', status: 'none', version: 0 },
+      ] }, meta: { requestId: 'req' } } });
+    }
     if (method === 'GET' && url.pathname.endsWith('/merchandising/home')) {
       return route.fulfill({ json: { data: layout, meta: { requestId: 'req' } } });
     }
@@ -45,7 +51,7 @@ test('an operator edits, publishes and withdraws the home merchandising layout',
   });
 
   await page.goto('/admin/merchandising');
-  await expect(page.getByRole('heading', { name: '首页陈列', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '页面陈列', exact: true })).toBeVisible();
   // 线上版本是只读输入框：未发布时明确写出「前台用主题默认布局」，避免运营以为已经在用草稿。
   await expect(page.getByRole('textbox', { name: '线上版本' })).toHaveValue('未发布（前台用主题默认布局）');
 
@@ -85,4 +91,69 @@ test('the home page keeps the themed layout when no merchandising is published',
   await expect(page.locator('[data-ez-section="home.products"]')).toBeVisible();
   // 未发布版面不会凭空多出后台配置的区块。
   await expect(page.locator('[data-ez-section="home.featured"]')).toHaveCount(0);
+});
+
+test('an operator lays out a category page with products from that category only', async ({ page }) => {
+  const calls: { method: string; path: string; search: string; body: any }[] = [];
+  const body_sections = (request: any) => request.postDataJSON?.()?.sections ?? [];
+  let layout: any = { pageKey: 'category:cat-1', kind: 'category', targetId: 'cat-1', status: 'draft', version: 1,
+    sections: [], published: null, publishedAt: null, versions: [], issues: [], contentRelease: 'cr-1', updatedAt: null };
+
+  await page.route('**/api/v1/admin/**', async route => {
+    const request = route.request(); const url = new URL(request.url()); const method = request.method();
+    calls.push({ method, path: url.pathname, search: url.search, body: request.postDataJSON?.() ?? null });
+    if (url.pathname.endsWith('/auth/session')) {
+      return route.fulfill({ json: { data: { user: { id: 'staff-1' }, csrfToken: 'csrf-test-token',
+        permissionCodes: ['content.read', 'content.write', 'content.publish'] } } });
+    }
+    if (method === 'GET' && url.pathname.endsWith('/merchandising/pages')) {
+      return route.fulfill({ json: { data: { items: [
+        { pageKey: 'home', kind: 'home', targetId: null, name: null, status: 'none', version: 0 },
+        { pageKey: 'category:cat-1', kind: 'category', targetId: 'cat-1', name: '雪茄', status: 'none', version: 0 },
+      ] }, meta: { requestId: 'req' } } });
+    }
+    if (method === 'GET' && url.pathname.endsWith('/merchandising/products')) {
+      // 分类版面只列本分类商品：请求必须带上 categoryId，服务端才收敛候选范围。
+      return route.fulfill({ json: { data: { markets: ['HK'], categories: [{ id: 'cat-1', name: '雪茄' }],
+        items: [{ id: 'prod-cigar', name: '雪茄一號', status: 'active', publishedAt: '2026-11-01T00:00:00.000Z',
+          markets: ['HK'], sellable: true, reasons: [] }] }, meta: { requestId: 'req' } } });
+    }
+    if (method === 'GET' && url.pathname.endsWith('/merchandising/home')) {
+      // 控制台进来先加载首页版面；这里必须返回完整形状，否则渲染会读到 undefined。
+      return route.fulfill({ json: { data: { pageKey: 'home', kind: 'home', status: 'draft', version: 1, sections: [],
+        published: null, publishedAt: null, versions: [], issues: [], contentRelease: 'cr-1', updatedAt: null },
+        meta: { requestId: 'req' } } });
+    }
+    if (method === 'GET' && url.pathname.includes('/merchandising/category')) {
+      return route.fulfill({ json: { data: layout, meta: { requestId: 'req' } } });
+    }
+    if (method === 'PATCH') {
+      layout = { ...layout, version: layout.version + 1, sections: body_sections(request) };
+      return route.fulfill({ json: { data: layout, meta: { requestId: 'req' } } });
+    }
+    return route.fulfill({ json: { data: {}, meta: { requestId: 'req' } } });
+  });
+
+  await page.goto('/admin/merchandising');
+  await page.getByLabel('页面').selectOption({ label: '雪茄（未配置）' });
+  await expect(page.getByRole('textbox', { name: '线上版本' })).toHaveValue('未发布（前台用主题默认布局）');
+
+  await page.getByRole('button', { name: '新增商品网格' }).click();
+  await page.getByLabel('简体标题').fill('本月精选');
+  await page.getByLabel('繁體标题').fill('本月精選');
+  await page.getByLabel('English标题').fill('Featured');
+  await page.getByRole('button', { name: '保存草稿' }).click();
+  await expect(page.getByText(/草稿已保存/)).toBeVisible();
+
+  const patch = calls.find(call => call.method === 'PATCH');
+  expect(patch?.path).toContain('category:cat-1');
+  expect(patch?.body.sections[0].titleByLocale.en).toBe('Featured');
+  const pickerCall = calls.filter(call => call.method === 'GET' && call.path.endsWith('/merchandising/products'));
+  expect(pickerCall.some(call => call.search.includes('categoryId=cat-1'))).toBe(true);
+});
+
+test('the category index renders its heading even when the catalogue API is unavailable', async ({ page }) => {
+  await page.goto(`${shop}/zh-HK/categories`);
+  await expect(page.locator('[data-ez-section="categories.index"]')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '分類', exact: true })).toBeVisible();
 });

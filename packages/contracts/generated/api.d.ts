@@ -801,6 +801,10 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
+                /**
+                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
+                 */
                 pageKey: components["parameters"]["PageKey"];
             };
             cookie?: never;
@@ -809,6 +813,23 @@ export interface paths {
         get: operations["getMerchandisingDraft"];
         /** Replace merchandising configuration draft for one page */
         put: operations["saveMerchandisingDraft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/merchandising/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List addressable merchandising scopes (home plus every enabled category) */
+        get: operations["listMerchandisingPages"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1065,6 +1086,23 @@ export interface paths {
         };
         /** List public categories */
         get: operations["listStorefrontCategories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storefront/categories/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one enabled category with its published layout or plain product list */
+        get: operations["getStorefrontCategory"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3202,6 +3240,10 @@ export interface components {
             };
             meta: components["schemas"]["ResponseMeta"];
         };
+        PublicCategoryEnvelope: {
+            data: components["schemas"]["PublicCategoryPage"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         PublicMerchandisingEnvelope: {
             data: components["schemas"]["PublicMerchandisingPage"];
             meta: components["schemas"]["ResponseMeta"];
@@ -3485,6 +3527,34 @@ export interface components {
             readonly onHand?: number;
             readonly reserved?: number;
             readonly available?: number;
+        };
+        PublicCategory: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            parentId: string | null;
+            name: string;
+            slug: string;
+            description: string | null;
+            position: number;
+        };
+        /** @description layout is present when a page layout is published (sections may be empty if every section is hidden); products is filled whenever no visible section renders, so the page is never blank. */
+        PublicCategoryPage: {
+            category: components["schemas"]["PublicCategory"];
+            alternates: {
+                /** @enum {string} */
+                locale: "zh-CN" | "zh-HK" | "en";
+                slug: string;
+            }[];
+            layout: {
+                version: number;
+                sections: components["schemas"]["PublicMerchandisingSection"][];
+            } | null;
+            products: components["schemas"]["PublicProduct"][];
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            marketCode: string;
+            contentRelease: string;
         };
         PublicMerchandisingSection: {
             sectionId: string;
@@ -6073,6 +6143,15 @@ export interface components {
                 "application/json": components["schemas"]["PublicMerchandisingEnvelope"];
             };
         };
+        /** @description Enabled category with its published layout, or the plain product list when no layout is published */
+        PublicCategorySuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicCategoryEnvelope"];
+            };
+        };
         /** @description Published content page read from the immutable release snapshot */
         PublicPageSuccess: {
             headers: {
@@ -6391,6 +6470,10 @@ export interface components {
     };
     parameters: {
         UuidId: string;
+        /**
+         * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+         * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
+         */
         PageKey: string;
         Slug: string;
         ProviderCode: string;
@@ -7699,6 +7782,10 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
+                /**
+                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
+                 */
                 pageKey: components["parameters"]["PageKey"];
             };
             cookie?: never;
@@ -7717,6 +7804,10 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
+                /**
+                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
+                 */
                 pageKey: components["parameters"]["PageKey"];
             };
             cookie?: never;
@@ -7736,11 +7827,28 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    listMerchandisingPages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     listMerchandisingProducts: {
         parameters: {
             query?: {
                 limit?: components["parameters"]["Limit"];
                 q?: string;
+                /** @description Restrict candidates to one category (used when laying out a category page) */
+                categoryId?: string;
             };
             header?: never;
             path?: never;
@@ -7759,6 +7867,10 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
+                /**
+                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
+                 */
                 pageKey: components["parameters"]["PageKey"];
             };
             cookie?: never;
@@ -7783,6 +7895,10 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
+                /**
+                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
+                 */
                 pageKey: components["parameters"]["PageKey"];
             };
             cookie?: never;
@@ -8035,6 +8151,26 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    getStorefrontCategory: {
+        parameters: {
+            query: {
+                locale: components["parameters"]["Locale"];
+                marketCode: components["parameters"]["MarketCode"];
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicCategorySuccess"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     listStorefrontPages: {
         parameters: {
             query: {
@@ -8079,6 +8215,10 @@ export interface operations {
             };
             header?: never;
             path: {
+                /**
+                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
+                 */
                 pageKey: components["parameters"]["PageKey"];
             };
             cookie?: never;
