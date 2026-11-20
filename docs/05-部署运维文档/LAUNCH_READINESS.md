@@ -18,12 +18,16 @@
 
 | 能力 | 状态 | 证据 |
 |---|---|---|
-| 线上支付发起 → 签名回调 → 入账 | ✅ | `tests/payments-online-http.test.ts` |
-| 线上退款（两阶段 + 崩溃窗口可控） | ✅ | `tests/refund-online-http.test.ts` |
-| 丢回调自动收敛（对账任务） | ✅ | `tests/reconcile-http.test.ts` + staging 实测 200 |
-| 后台自助配支付（列表/启停/测试连接） | ✅ | `tests/payment-methods-http.test.ts` |
+| 线上支付发起 → 签名回调 → 入账 | ✅ | `tests/payments-online-http.test.ts` + staging 冒烟 |
+| 线上退款（两阶段 + 崩溃窗口可控） | ✅ | `tests/refund-online-http.test.ts` + staging 冒烟 |
+| 丢回调自动收敛（对账任务） | ✅ | `tests/reconcile-http.test.ts` + staging 鉴权与计数实测 |
+| 后台自助配支付（列表/启停/测试连接） | ✅ | `tests/payment-methods-http.test.ts` + staging 连接测试 `ok` |
+| 退款双人复核（发起人不可自批） | ✅ | staging 冒烟断言 `SELF_APPROVAL_FORBIDDEN` |
 | COD 线下收款、拒收、退回 | ✅ | `tests/aftersales-http.test.ts`（既有） |
-| 部署可复制（镜像/迁移/密钥/反代） | ✅ | staging 36 条迁移全部应用，`/health/ready` 200 |
+| 部署可复制（镜像/迁移/密钥/反代） | ✅ | staging 库从零重建，36 条迁移全部应用，`/health/ready` 200 |
+
+**staging 端到端冒烟**：`scripts/smoke-payments.mjs` 在真实容器上 **25/25 通过**——收钱链路（错签名 400、过期时间戳 400、正确回调 202、重复回调幂等且流水仍 1 条）、退钱链路（职责分离 403、财务账号批准后走渠道收敛 `refunded`、幂等重放 409、超额 409）、对账端点鉴权。
+口径说明：mock 网关的支付单存在进程内存，**"渠道已成功但回调丢失 → 对账救回"只能在进程内集成测试里验证**（`tests/reconcile-http.test.ts`），staging 上没法用 HTTP 造出这个状态；接真渠道后需在真实回调丢失场景复验一次。
 
 **测试基线**：全量 **396 条通过**（110 条交易/支付/售后核心 + 264 条其余模块 + 22 条身份与 MFA），契约校验 54 项通过。
 Linux 容器（生产镜像）复跑单元层 255 条：252 通过，3 条因容器内以 root 运行、embedded Postgres 拒绝启动而跳过（环境限制，非代码问题）。
@@ -42,7 +46,7 @@ Linux 容器（生产镜像）复跑单元层 255 条：252 通过，3 条因容
 | 6 | 管理员账号与 MFA | 引导 + TOTP + 恢复码已验证（staging 实测） | 🟡 流程就绪，生产待建号 | 我方 + 客户 |
 | 7 | 生产域名/HTTPS/索引策略 | Caddy 自动证书；生产已 307 → HTTPS | ✅ 就绪 | 我方 |
 | 8 | 邮件通知 | Worker + SMTP 已实现 | ⬜ SMTP 未配置 | 客户 |
-| 9 | 备份恢复演练 | 备份脚本与恢复步骤已有 | ⬜ 未演练 | 我方 |
+| 9 | 备份恢复演练 | 备份脚本与恢复步骤已有 | ✅ 已演练（318KB/2s/95 表一致，见 AWS_ENVIRONMENTS 6.3.1） | 我方 |
 | 10 | 生产订单与退款演练 | 沙箱链路已演练 | 🟡 沙箱已过，生产待做 | 我方 |
 
 **判定**：`canLaunch` 需要 10/10。当前 1 项就绪、4 项部分就绪、5 项待客户输入。

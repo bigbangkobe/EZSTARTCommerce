@@ -12,7 +12,7 @@
 | 环境 | 用途 | 地址 | 状态 |
 |---|---|---|---|
 | `prod-mrinhk` | mrinhk 商户正式实例 | `mrinhk.com` / `admin.mrinhk.com` | 运行中 |
-| `staging` | 新版本验证、支付链路演练 | `https://localhost:8443`（仅本机，经 SSH 访问） | **运行中**（2026-11-20 建立） |
+| `staging` | 新版本验证、支付链路演练 | `https://localhost:8443`（仅本机，经 SSH 访问） | **运行中**（支付冒烟 25/25，2026-11-20） |
 | 本地容器 | 无 AWS 依赖的功能验证 | `docker compose` | 可用 |
 
 > **staging 与生产完全隔离**：独立目录 `/opt/ezstart-staging`、独立 compose project `ezstart-staging`、
@@ -231,17 +231,62 @@ curl -sk -X POST https://localhost:8443/api/v1/internal/jobs/reconcile \
   -H 'content-type: application/json' -H "x-job-token: $INTERNAL_JOB_TOKEN" -d '{"olderThanMinutes":5}'
 ```
 
-**2026-11-20 实测结果**（新镜像首次部署）：
+**2026-11-20 第二轮实测**（支付版本 `c8c6760`，库从零重建）
 
 | 检查项 | 结果 |
 |---|---|
-| 迁移 | 36 条全部应用（含新增 `202611200400_refund_event_types`） |
-| `/health/live` | 200 `alive` |
-| `/health/ready` | 200（迁移清单与库内记录逐条比对通过） |
-| 配置校验 | `http://` 来源被拒启动，改 `https://` 后正常——生产 HTTPS 约束有效 |
-| 店主初始化 | `POST /admin/auth/bootstrap` 202，`nextAction=enroll_mfa`；用户 1、owner 角色 1、引导令牌已消费 |
-| 对账端点 | 无令牌 401、错令牌 401、正确令牌 200 并返回计数报告 |
-| 生产隔离 | 同期 `mrinhk.com/api/v1/health/ready` 仍 200，5 个生产容器全部 Up |
+| 库重建 | 删除 staging 卷后从零应用 **36 条**迁移，`_prisma_migrations` 与代码清单逐条校验通过 |
+| `/health/live` | 200 |
+| `/health/ready` | 200（迁移清单、Postgres 版本、`AdminUser` 可查全部通过） |
+| 支付渠道自助配置 | 后台播种行存在 → 填 `secret://env/` 引用 → 连接测试 `ok` |
+| 端到端支付冒烟 | **25/25 通过**（见下） |
+| 生产隔离 | 同期 `mrinhk.com/api/v1/health/ready` 200，5 个生产容器全部 Up |
+
+冒烟脚本 `scripts/smoke-payments.mjs` 覆盖四段：
+
+| 段 | 断言 |
+|---|---|
+| 初始化 | 店主引导与 MFA、市场审核启用、商品上架、运费、渠道播种与连接测试 |
+| 收钱 | 下单 → 收银台跳转 → 错签名 400 → 过期时间戳 400 → 正确签名 202 `accepted` → 台账 `succeeded` → 重复回调 202 `duplicate` → 流水仍 1 条 |
+| 退钱 | 发起 → 同一人批准被拒 403 `SELF_APPROVAL_FORBIDDEN` → 财务账号批准 → 执行收敛 `refunded`（含渠道退款号）→ 幂等重放 409 → 超额 409 `REFUND_EXCEEDS_BALANCE` |
+| 对账 | 无令牌 401；带令牌 200 并返回计数 |
+
+复用命令：
+
+```bash
+cd /opt/ezstart-staging
+docker compose run --rm --no-deps -T \
+  -v /opt/ezstart-staging/src:/repo:ro \
+  -v /opt/ezstart-secrets:/secrets \
+  api node /repo/scripts/smoke-payments.mjs
+```
+
+> 脚本只允许 `PAYMENTS_ENVIRONMENT=sandbox` 的实例运行，且会在开跑前清理 `ip:` 限流计数
+> （15 分钟 60 次的阈值针对真实用户，不针对同一台机器上的验收脚本；账号级失败计数不动）。
+> 财务账号由脚本自行创建（走真实 MFA 注册流程），凭据写入 `/opt/ezstart-secrets/admin.json`（600）。
+> **mock 适配器的支付单存在进程内存里**：容器重启后历史 mock 单查不到，这不影响真渠道，但冒烟必须在同一次部署内连跑。
+
+### 6.6.1 坑：迁移校验和与换行符（API 起不来先查这里）
+
+API 启动时会把 `packages/database/migrations/*/migration.sql` 的 sha256 与库内 `_prisma_migrations.checksum` 逐条比对，不一致直接拒绝启动，日志只有一行 `api.start_failed / CONFIGURATION_OR_DATABASE_UNAVAILABLE`——**故意不打印细节**，因为真实错误可能带连接串。
+
+本次踩到：staging 库早期是用**从 Windows 直接拷贝的 CRLF 源码**建的，库里记的是 CRLF 版本的校验和；后来改为 `git archive` 投递（`.gitattributes` 强制 LF），同一文件 LF 版 1286 字节、CRLF 版 1304 字节，checksum 全不一致 → 启动失败。
+
+判别与处置：
+
+```bash
+# 1) 看两边字节数与 sha256（12 位足够比对）
+sha256sum packages/database/migrations/202611160001_invitations/migration.sql
+# 2) 看库里记的值
+docker compose exec -T postgres psql -U ezstart -d ezstart -tAc \
+  "select migration_name, left(checksum,12) from _prisma_migrations where migration_name like '202611160001%'"
+```
+
+- **生产**：库内是 LF 校验和（`11a3b6babd6b`），与 `git archive` 投递一致 → 安全。
+- **staging**：库内是 CRLF（`b42423b27f08`），属历史包袱 → 删卷重建，不要改代码放宽校验。
+
+**硬规则**：部署源码一律用 `git archive`（或服务器本地 `git pull`）投递，不要从 Windows 工作区直接 `scp`/`rsync` 整个目录；`migration.sql` 一旦应用就不能再改内容（包括换行），否则等于改了历史。
+
 
 > staging 不发布 80/443（生产 Caddy 占用）。这也是已知缺口 4：同机多实例的端口尚未参数化。
 
@@ -332,6 +377,7 @@ docker rmi ezstart-staging-api                          # 删镜像
 | 2026-11-17 | 改为 git 部署；DB 回归 183/183；从零迁移 16 条通过 | — |
 | 2026-11-18 | 生产部署 `7c1b569`（25 条迁移），报表模块上线 | — |
 | 2026-11-20 | 本文档建立；实测连通与状态快照；代码 `234c746`（35 条迁移） | — |
+| 2026-11-20 | staging 库重建并部署支付版本 `c8c6760`；36 条迁移从零应用；支付冒烟 25/25；记录迁移校验和换行符坑 | — |
 
 ---
 
