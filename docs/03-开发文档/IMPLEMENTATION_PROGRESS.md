@@ -745,3 +745,13 @@
 - 后台：`/admin/catalog` 保存分类前先比对 slug，改过就提示「旧地址已登记 301 跳转到新地址」；表单说明补上「停用会摘掉指向该分类的跳转」。
 
 验证：契约 **53 项**全绿（本批无契约变更，`contracts:check` 生成物一致）、Prisma schema 有效；领域 `catalog.test.ts` **8 项**（新增 1 项覆盖 `categoryPath` 的非法 slug 与语言）；新增真实 PostgreSQL HTTP 集成 **1 项**（`category-redirect-http.test.ts`，覆盖改 slug 登记 301 / 旧地址 404 / 未登记地址不跳 / 清单归属与 `auto` / 连续改名改直 / 非 ASCII slug 跳过登记并清理 / 清空 slug / 停用摘跳转 / 只读 403）；前后台 typecheck 与生产构建通过；全量 `node --test`（`--test-concurrency=4`）**332 项全绿**——默认并发下 embedded PostgreSQL 会在 `identity-http` 等处抛 `P2028`（开事务超时），逐个文件重跑全部通过，属本机资源竞争而非代码问题；端到端新增 1 项（分类改名提示 301），本地整包 **59 项全绿**（桌面 project）。
+
+部署：提交 `2f0c096`（功能）随 `52cac35`（文档）推送 `origin/main` 后部署 mrinhk（`./deploy.sh`：镜像构建 → 迁移容器退出 0 → API healthy → Caddy 链路 200）。生产库确认：迁移总数 **34**、最新为 `202611200200_category_redirects`、`SeoRedirect."categoryId"` 为可空 uuid、CHECK `seo_redirect_single_owner` 已建、`SeoRedirect` 当前 0 行（店铺尚未有过 slug 变更）。
+
+生产冒烟：
+
+- `https://mrinhk.com/api/v1/storefront/redirect?path=/zh-HK/categories/cigars` → **200**，`redirect: null`（没登记就是 404，不猜目标）；
+- `https://mrinhk.com/api/v1/storefront/categories?locale=zh-HK` → **200**，返回现有分类（该店铺分类当前 `slug: null`，说明分类页要等店主补 slug 才可达——与第四批结论一致）；
+- `https://mrinhk.com/api/v1/admin/redirects` 无会话 → **401**；
+- `https://admin.mrinhk.com/admin/catalog` → **200**（分类编辑与 301 提示随商品页面一起上线）；
+- `https://mrinhk.com/zh-HK/categories` → **200**。
