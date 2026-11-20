@@ -133,11 +133,18 @@ export function CatalogConsole() {
       return name ? { locale, name, ...(slug ? { slug } : {}) } : null;
     }).filter(item => item !== null);
     const position = Number(values.get('cat-position') ?? editingCategory.position);
+    // 保存前就能算出来的事不要写在提示里让运营去猜：改了 slug 就是登记了 301。
+    const slugChanged = translations.some(item => {
+      const previous = editingCategory.translations.find(entry => entry.locale === item.locale)?.slug ?? null;
+      return Boolean(previous) && previous !== (item.slug ?? null);
+    });
     void run(async () => {
       await request(`categories/${editingCategory.id}`, 'PATCH', { parentId: editingCategory.parentId,
         position: Number.isFinite(position) && position >= 0 ? position : editingCategory.position,
         enabled: values.get('cat-enabled') === 'yes', translations }, editingCategory.version);
-      setEditingCategory(null); setNotice('分类已更新；前台分类页与站点地图最多半分钟内生效。');
+      setEditingCategory(null); setNotice(slugChanged
+        ? '分类已更新；旧地址已登记 301 跳转到新地址，前台分类页与站点地图最多半分钟内生效。'
+        : '分类已更新；前台分类页与站点地图最多半分钟内生效。');
     });
   }
 
@@ -365,8 +372,9 @@ export function CatalogConsole() {
                 <option value="yes">启用</option><option value="no">停用（前台不再展示）</option></select></label>
               <label>排序<input name="cat-position" type="number" min={0} defaultValue={editingCategory.position} /></label>
             </div>
-            <p><small>slug 决定前台地址 <code>/categories/&lt;slug&gt;</code>：留空的分类不会出现在前台分类页与站点地图。
-              清空某种语言的名称会删除该语言翻译。当前版本 {editingCategory.version}。</small></p>
+            <p><small>slug 决定前台地址 <code>/&lt;语言&gt;/categories/&lt;slug&gt;</code>：留空的分类不会出现在前台分类页与站点地图。
+              改 slug 会自动把旧地址登记为 301 跳转到新地址（分类地址常被外部链接引用，不能直接变成 404）；
+              停用分类会同时摘掉指向它的跳转。清空某种语言的名称会删除该语言翻译。当前版本 {editingCategory.version}。</small></p>
             <button disabled={busy}>保存分类</button>
             <button type="button" className="secondary" onClick={() => setEditingCategory(null)}>取消</button>
           </form>

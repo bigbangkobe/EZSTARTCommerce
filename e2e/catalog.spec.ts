@@ -108,3 +108,34 @@ test('an operator gives a category its slugs so the storefront category page bec
   ]);
   expect(patch?.body['enabled']).toBe(true);
 });
+
+test('renaming a category slug tells the operator the old address now redirects', async ({ page }) => {
+  // 分类地址常被外部链接和搜索结果引用；改 slug 时界面必须说清「旧地址已登记 301」，
+  // 否则运营会以为改完就断了，或者以为还要手工去重定向页补一条。
+  const teas = { id: 'cat-3', parentId: null, position: 0, enabled: true, version: 5,
+    translations: [{ locale: 'zh-HK', name: '茶葉', slug: 'teas' }, { locale: 'en', name: 'Tea', slug: 'teas-en' }] };
+  const writes: { body: Record<string, unknown> }[] = [];
+  await page.route('**/api/v1/admin/**', async route => {
+    const request = route.request(); const url = new URL(request.url()); const method = request.method();
+    if (url.pathname.endsWith('/auth/session')) return route.fulfill({ json: { data: { user: { id: 'owner-1' },
+      permissionCodes: ['catalog.read', 'catalog.write'], csrfToken: 'csrf-test-token' } } });
+    if (url.pathname.endsWith('/categories') && method === 'GET') return route.fulfill({ json: { data: { items: [teas] } } });
+    if (url.pathname.endsWith('/brands')) return route.fulfill({ json: { data: { items: [] } } });
+    if (url.pathname.endsWith('/products') && method === 'GET') return route.fulfill({ json: { data: { items: [], nextCursor: null, hasMore: false } } });
+    if (method === 'PATCH' && url.pathname.includes('/categories/')) {
+      writes.push({ body: request.postDataJSON() ?? {} });
+      return route.fulfill({ json: { data: { ...teas, version: 6,
+        translations: [{ locale: 'zh-HK', name: '茶葉', slug: 'teas-2026' }, { locale: 'en', name: 'Tea', slug: 'teas-en' }] } } });
+    }
+    return route.fulfill({ json: { data: { items: [] } } });
+  });
+
+  await page.goto('/admin/catalog');
+  await page.getByRole('button', { name: '编辑分类', exact: true }).click();
+  const editor = page.getByRole('region', { name: '编辑分类「茶葉」' });
+  await editor.locator('input[name="cat-slug:zh-HK"]').fill('teas-2026');
+  await editor.getByRole('button', { name: '保存分类' }).click();
+
+  await expect(page.getByText('分类已更新；旧地址已登记 301 跳转到新地址，前台分类页与站点地图最多半分钟内生效。')).toBeVisible();
+  expect((writes[0]?.body['translations'] as { locale: string; slug?: string }[])[0]).toMatchObject({ locale: 'zh-HK', slug: 'teas-2026' });
+});

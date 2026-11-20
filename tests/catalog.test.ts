@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { assertCategoryParent, assertMarketSelection, assertPublishable, normalizeMedia, normalizeProductTranslations,
-  normalizeSlug, normalizeVariants, publicationState, CatalogRuleError } from '../packages/domain/src/catalog.js';
+import { assertCategoryParent, assertMarketSelection, assertPublishable, categoryPath, normalizeMedia,
+  normalizeProductTranslations, normalizeSlug, normalizeVariants, publicationState, CatalogRuleError } from '../packages/domain/src/catalog.js';
 
 const now = new Date('2026-11-16T00:00:00.000Z');
 
@@ -85,4 +85,16 @@ test('media entries are position scoped and cannot repeat the same asset', () =>
   assert.throws(() => normalizeMedia([{ mediaId: id, position: 0 }, { mediaId: id, position: 1 }]), CatalogRuleError);
   assert.throws(() => normalizeMedia([{ mediaId: 'nope', position: 0 }]), CatalogRuleError);
   assert.throws(() => normalizeMedia([{ mediaId: id, position: -1 }]), CatalogRuleError);
+});
+
+test('category paths are only built from slugs that can be expressed as a site path', () => {
+  assert.equal(categoryPath('zh-HK', 'cigars'), '/zh-HK/categories/cigars');
+  assert.equal(categoryPath('en', 'new-arrivals-2026'), '/en/categories/new-arrivals-2026');
+  // 重定向表只接受站内 ASCII 路径：中文 slug 也能在前台访问，但登记成跳转永远不会命中，
+  // 所以这里必须拒绝，让调用方选择「跳过登记」而不是写一条静默失效的记录。
+  assert.throws(() => categoryPath('zh-HK', '雪茄'), CatalogRuleError);
+  assert.throws(() => categoryPath('zh-HK', 'has space'), CatalogRuleError);
+  assert.throws(() => categoryPath('zh-HK', 'cigars/extra'), CatalogRuleError);
+  assert.throws(() => categoryPath('zh-hk', 'cigars'), CatalogRuleError);
+  assert.throws(() => categoryPath('', 'cigars'), CatalogRuleError);
 });

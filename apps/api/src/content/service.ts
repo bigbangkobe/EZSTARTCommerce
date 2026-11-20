@@ -3,6 +3,7 @@ import {
   contentReleaseToken, normalizeBlocks, normalizePageTranslations, normalizePublishPlan, assertPageKey, assertPageType,
 } from '../../../../packages/domain/src/content.js';
 import { normalizePreviewPlan, previewPath, PreviewRuleError } from '../../../../packages/domain/src/preview.js';
+import { categoryMerchandisingKey, collectionMerchandisingKey } from '../../../../packages/domain/src/merchandising.js';
 import {
   assertRedirectWritable, normalizeRedirectPath, REDIRECT_STATUS_CODES, RedirectRuleError, type RedirectEntry,
   type RedirectStatusCode,
@@ -233,15 +234,25 @@ export class ContentService {
     });
   }
 
-  /** 重定向清单：改 slug 后旧地址的去向要能被运营复核。 */
+  /**
+   * 重定向清单：改 slug 后旧地址的去向要能被运营复核。
+   * 自动登记（改 slug 产生）与手工登记必须一眼分得出，否则运营会以为某条跳转是自己写的；
+   * pageKey 复用陈列作用域的写法，点过去就是能改地址的那个对象的版面。
+   */
   async listRedirects(supplied: string, limit: number, cursor: string | null) {
     return this.identity.withPermission(supplied, null, 'content.read', async tx => {
       if (cursor && !await tx.seoRedirect.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
       const rows = await tx.seoRedirect.findMany({ include: { page: { select: { pageKey: true } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
-      const items = rows.slice(0, limit).map(row => ({ id: row.id, locale: row.locale, fromPath: row.fromPath,
-        toPath: row.toPath, statusCode: row.statusCode, pageKey: row.page?.pageKey ?? null,
-        auto: row.page !== null, createdAt: row.createdAt.toISOString() }));
+      const items = rows.slice(0, limit).map(row => {
+        // 归属：内容页用自身 pageKey；专题/分类没有内容页 key，用陈列作用域 key（collection:/category:<id>）。
+        const ownerKey = row.page?.pageKey
+          ?? (row.collectionId ? collectionMerchandisingKey(row.collectionId) : null)
+          ?? (row.categoryId ? categoryMerchandisingKey(row.categoryId) : null);
+        return { id: row.id, locale: row.locale, fromPath: row.fromPath,
+          toPath: row.toPath, statusCode: row.statusCode, pageKey: ownerKey,
+          auto: ownerKey !== null, createdAt: row.createdAt.toISOString() };
+      });
       const hasMore = rows.length > limit;
       return { items, hasMore, nextCursor: hasMore ? items.at(-1)!.id : null };
     });

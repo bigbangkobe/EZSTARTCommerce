@@ -135,6 +135,14 @@
 - SeoRedirect 新增 collection_id（可空，专题删除时置空并保留历史跳转）：专题改 slug 时登记旧地址 → 新地址 301；停用或删除专题时清理指向它的跳转，避免把访客送进 404。
 - 关键边界：前台只列「启用 + 当前语言有 slug + 至少有一件当前市场可售商品」的专题；专题页优先渲染已发布版面，没有版面时按 position 平铺商品；专题页的候选池被锁定在该专题内，跨专题筛选保存即拒。
 
+### SeoRedirect 归属（M04 第六批 202611200200）
+
+- 归属字段：page_id（内容页）/ collection_id（专题）/ category_id（分类），都可为空（手工登记的跳转），三者互斥——CHECK `seo_redirect_single_owner` 保证 `num_nonnulls(...) <= 1`。归属字段决定停用/删除时的清理范围，多个归属并存会让「该不该跟着下线」变得不可推断。
+- 写入口径：改 slug 时按语言登记旧地址 → 新地址 301，并把原本指向旧地址的跳转改直（连续改名后入站链接直达最新地址，不堆成链）；登记后若链路成环或自跳，宁可删掉这条记录，也不留下无限跳转。
+- 清理口径：slug 清空、语言被删除、或新 slug 无法表达成站内路径时，删除 `to_path` 指向该旧地址的跳转；停用分类/专题（前台 404）时删除该归属的全部跳转，重新启用后地址由当前 slug 决定。删除对象时归属字段置空、跳转保留（历史链接仍能跳到当时的地址）。
+- 地址形状：只接受站内 ASCII 路径（`normalizeRedirectPath`）。中文 slug 在前台可以访问（链接按百分号编码），但登记成跳转永远不会命中，因此分类/专题的 `sitePath` 对这类 slug 返回 null，服务层跳过登记而不是写坏记录。
+- 清单口径：`GET /admin/redirects` 的 `page_key` 内容页用自身 page_key，专题/分类用陈列作用域 key（`collection:<id>` / `category:<id>`）；非空即表示这条跳转是改 slug 自动登记的，运营据此区分自动与手工。
+
 ### AfterSalesCase / Refund / Return
 
 - AfterSalesCase：case_number、order_id、type、status、reason_code、customer_message、owner_id、source、created_at、closed_at。

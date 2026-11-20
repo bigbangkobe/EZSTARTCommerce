@@ -278,6 +278,7 @@ model Category {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
   translations CategoryTranslation[]
   products ProductCategory[]
+  redirects SeoRedirect[]
 }
 
 model CategoryTranslation {
@@ -1605,11 +1606,15 @@ model SeoRedirect {
   /// 专题 slug 变更产生的跳转归属；内容页用 pageId，两者互斥（都可为空 = 手工登记的跳转）。
   collectionId String?     @db.Uuid
   collection   Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  /// 分类 slug 变更产生的跳转归属。三个归属字段互斥（DB CHECK seo_redirect_single_owner 保证）。
+  categoryId String?   @db.Uuid
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   createdBy  String?      @db.Uuid
   createdAt  DateTime     @default(now()) @db.Timestamptz(3)
   @@index([locale])
   @@index([pageId])
   @@index([collectionId])
+  @@index([categoryId])
 }
 
 /// 陈列版面：首页/分类/专题共用一张表，pageKey 决定它服务哪个地址。

@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, permanentRedirect } from 'next/navigation';
 import { DEFAULT_LOCALE, copyFor, isLocale, localePath, type Locale } from '../../../../lib/i18n';
 import { fetchCategory } from '../../../../lib/categories';
+import { fetchRedirect } from '../../../../lib/content';
 import { ProductCards } from '../../../product-cards';
 import AnalyticsTracker from '../../../analytics-tracker';
 import SectionTracker from '../../../section-tracker';
@@ -47,7 +48,12 @@ export default async function CategoryPage({ params }: { params: Promise<{ local
   const locale: Locale = raw;
   const t = copyFor[locale];
   const result = await fetchCategory(decodeURIComponent(slug), locale);
-  if (!result.ok && result.error === 'not_found') notFound();
+  if (!result.ok && result.error === 'not_found') {
+    // 改过 slug 的旧分类地址：服务端登记过 301 才跳，没登记就照常 404（不猜目标）。
+    const target = await fetchRedirect(localePath(locale, `/categories/${decodeURIComponent(slug)}`));
+    if (target) permanentRedirect(target.toPath);
+    notFound();
+  }
 
   const pageKey = `category:${decodeURIComponent(slug)}`;
   if (!result.ok) {

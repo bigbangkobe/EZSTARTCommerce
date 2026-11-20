@@ -33,6 +33,19 @@ export function normalizeSlug(value: string, field = 'slug'): string {
   return slug;
 }
 
+/**
+ * 分类的公开地址：`/{locale}/categories/{slug}`，必须与前台路由一致。
+ *
+ * 只接受能表达成站内路径的 slug（`[a-z0-9-]`）：重定向登记表只存 `[A-Za-z0-9._~/-]` 的路径，
+ * 含中文或空格的 slug 即使登记了也永远不会命中，属于「保存成功但静默失效」。
+ * 因此这里严格校验、由调用方决定「登记不了就跳过」而不是造一条坏记录。
+ */
+export function categoryPath(locale: string, slug: string): string {
+  if (typeof locale !== 'string' || !/^[a-z]{2}(?:-[A-Z]{2})?$/.test(locale)) fail('locale');
+  if (typeof slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) fail('slug');
+  return `/${locale}/categories/${slug}`;
+}
+
 function normalizeName(value: string): string {
   const name = value.trim();
   if (name.length < 1 || name.length > 160) fail('name');

@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma } from '../../../../packages/database/src/client.js';
 import { assertCategoryParent, assertMarketSelection, assertPublishable, normalizeAttributes, normalizeLabelTranslations,
-  normalizeMedia, normalizeProductTranslations, normalizeVariants, publicationState, CatalogRuleError } from '../../../../packages/domain/src/catalog.js';
+  normalizeMedia, normalizeProductTranslations, normalizeVariants, publicationState, categoryPath, CatalogRuleError } from '../../../../packages/domain/src/catalog.js';
 import { effectiveReviewStatus, normalizeMarketCode } from '../../../../packages/domain/src/store.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
+import { recordPathRedirect } from '../content/preview.js';
 
 type Tx = Prisma.TransactionClient;
 const includeProduct = { translations: true, variants: { include: { inventory: true } }, media: true, categories: true } as const;
@@ -119,13 +120,48 @@ export class CatalogService {
       const translations = body.translations ? this.rule(() => normalizeLabelTranslations(body.translations!, false)) : null;
       const parentId = body.parentId === undefined ? existing.parentId : body.parentId;
       if (parentId !== existing.parentId) await this.assertParent(tx, id, parentId);
+      const enabled = body.enabled ?? existing.enabled;
       const row = await this.guarded(() => tx.category.update({ where: { id }, include: { translations: true }, data: {
-        parentId, position: body.position ?? existing.position, enabled: body.enabled ?? existing.enabled, version: { increment: 1 },
+        parentId, position: body.position ?? existing.position, enabled, version: { increment: 1 },
         ...(translations ? { translations: { deleteMany: {}, create: translations } } : {}),
       } }));
-      await this.identity.recordAudit(tx, ctx, actor.id, 'catalog.category.updated', id);
+
+      // 改 slug 要留下 301：分类地址比内容页更常被外部链接和搜索结果引用，
+      // 改完不登记等于把已经积累的入站流量直接送进 404。
+      const redirected: string[] = [];
+      if (translations) {
+        for (const previous of existing.translations) {
+          // 从来没填过 slug 就是「第一次有地址」，没有旧地址可言，不产生跳转。
+          if (!previous.slug) continue;
+          const fromPath = this.sitePath(previous.locale, previous.slug);
+          // 旧地址表达不成站内路径（中文/空格 slug）：它从来没有被登记过，也就无需处理。
+          if (!fromPath) continue;
+          const next = translations.find(item => item.locale === previous.locale) ?? null;
+          const toPath = next?.slug ? this.sitePath(previous.locale, next.slug) : null;
+          if (!toPath) {
+            // 这条地址已经没有可用去向（语言被删、slug 被清空、新 slug 无法表达成站内路径）：
+            // 指向它的 301 一起清理，否则会把访客从一个 404 送到另一个 404。
+            await tx.seoRedirect.deleteMany({ where: { categoryId: id, toPath: fromPath } });
+            continue;
+          }
+          if (toPath === fromPath) continue;
+          await recordPathRedirect(tx, { locale: previous.locale, fromPath, toPath,
+            owner: { categoryId: id }, actorId: actor.id });
+          redirected.push(`${fromPath} -> ${toPath}`);
+        }
+      }
+      // 停用即下线（前台按 404 处理）：指向这个分类的跳转全部摘掉，重新启用时地址由当前 slug 决定。
+      if (existing.enabled && !enabled) await tx.seoRedirect.deleteMany({ where: { categoryId: id } });
+
+      await this.identity.recordAudit(tx, ctx, actor.id, 'catalog.category.updated', id, 'success',
+        redirected.length ? redirected.join(' ') : undefined);
       return this.categoryView(row);
     }, true);
+  }
+
+  /** 分类的公开路径；slug 含中文/空格等无法表达成站内路径时返回 null（登记了也不会命中）。 */
+  private sitePath(locale: string, slug: string): string | null {
+    try { return categoryPath(locale, slug); } catch { return null; }
   }
 
   // ---- 品牌 -----------------------------------------------------------------

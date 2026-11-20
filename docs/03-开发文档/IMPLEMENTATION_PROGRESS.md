@@ -732,3 +732,16 @@
 - `https://mrinhk.com/zh-HK/collections`、`/en/collections` → **200**，HTML 含 `collections.index` 区块标记与「專題」文案；
 - `https://mrinhk.com/zh-HK` 导航已出现 `/zh-HK/collections` 入口；`sitemap.xml` 已包含三语专题索引地址与 hreflang；
 - `https://admin.mrinhk.com/admin/catalog` → **200**（专题编辑区随商品页面一起上线）。
+
+## 2026-11-20：M04 第六批 分类 slug 变更 301
+
+范围：补上分类改 slug 的 301。分类编辑入口在第四批就有了，但改 slug 只是换了地址——外部链接、搜索引擎结果和顾客书签会直接落到 404。跳转基础设施（`SeoRedirect` + `slugChangePlan`）在第二批已就位，本批把它接到分类上，并把「一条跳转归谁」收紧成数据库约束。
+
+- 第 34 条迁移 `202611200200_category_redirects`：`SeoRedirect` 新增 `categoryId`（FK → `Category`，`ON DELETE SET NULL`）与索引；新增 CHECK `seo_redirect_single_owner`（`num_nonnulls("pageId","collectionId","categoryId") <= 1`）。归属字段决定停用/删除时的清理范围，多个归属并存会让「该不该跟着下线」变成不可推断的状态。
+- 领域：`packages/domain/src/catalog.ts` 新增 `categoryPath(locale, slug)`，只接受 `[a-z0-9-]` 形式的 slug。原因是重定向表只存站内 ASCII 路径（`normalizeRedirectPath` 显式排除 `%` 与空白），中文 slug 在前台能访问（链接按百分号编码）但登记成跳转永远不会命中；这里严格拒绝、由调用方跳过登记，而不是写一条「保存成功但永不生效」的记录。
+- 服务端：`CatalogService.updateCategory` 逐语言比对旧 slug（分类翻译是整体替换，只能按语言比对新旧值）。旧地址 → 新地址登记 301 并复用 `recordPathRedirect`（归属参数化成 `pageId | collectionId | categoryId`）；原本指向旧地址的跳转被改直，所以连续改名两次后最早那条入站链接直接 301 到最新地址，不堆成链。slug 被清空、语言被删除、或新 slug 表达不成站内地址时，删除 `toPath` 指向该旧地址的跳转；停用分类（前台 404）时删除该归属的全部跳转。审计 detail 记录本次登记了哪些跳转。
+- 重定向清单：`GET /admin/redirects` 的 `pageKey` / `auto` 此前只认内容页，专题与分类的自动跳转会被误标成手工登记。现在按归属派生：内容页用自身 `pageKey`，专题/分类用陈列作用域 key（`collection:<id>` / `category:<id>`），`pageKey` 非空即自动登记。
+- 前台：`/[locale]/categories/{slug}` 在分类不存在时先查已登记的 301 再 404（与专题页同一口径，不猜目标）。
+- 后台：`/admin/catalog` 保存分类前先比对 slug，改过就提示「旧地址已登记 301 跳转到新地址」；表单说明补上「停用会摘掉指向该分类的跳转」。
+
+验证：契约 **53 项**全绿（本批无契约变更，`contracts:check` 生成物一致）、Prisma schema 有效；领域 `catalog.test.ts` **8 项**（新增 1 项覆盖 `categoryPath` 的非法 slug 与语言）；新增真实 PostgreSQL HTTP 集成 **1 项**（`category-redirect-http.test.ts`，覆盖改 slug 登记 301 / 旧地址 404 / 未登记地址不跳 / 清单归属与 `auto` / 连续改名改直 / 非 ASCII slug 跳过登记并清理 / 清空 slug / 停用摘跳转 / 只读 403）；前后台 typecheck 与生产构建通过；全量 `node --test`（`--test-concurrency=4`）**332 项全绿**——默认并发下 embedded PostgreSQL 会在 `identity-http` 等处抛 `P2028`（开事务超时），逐个文件重跑全部通过，属本机资源竞争而非代码问题；端到端新增 1 项（分类改名提示 301），本地整包 **59 项全绿**（桌面 project）。

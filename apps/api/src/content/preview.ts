@@ -27,12 +27,13 @@ async function redirectEntries(tx: Tx): Promise<RedirectEntry[]> {
 }
 
 /**
- * 旧地址 → 新地址登记（内容页与专题共用）。
+ * 旧地址 → 新地址登记（内容页 / 专题 / 分类共用）。
  * 失败即关闭：任何一步让链路成环时，宁可删掉这条重定向，也不把访客送进无限跳转。
- * owner 决定这条跳转归属于谁（内容页 / 专题）：撤下时按归属清理，不会误删别人的跳转。
+ * owner 决定这条跳转归属于谁（内容页 / 专题 / 分类）：撤下时按归属清理，不会误删别人的跳转。
+ * 三个归属字段互斥，由 DB 约束 seo_redirect_single_owner 保证。
  */
 export async function recordPathRedirect(tx: Tx, command: { locale: string; fromPath: string; toPath: string;
-  owner: { pageId?: string; collectionId?: string }; actorId: string | null }): Promise<void> {
+  owner: { pageId?: string; collectionId?: string; categoryId?: string }; actorId: string | null }): Promise<void> {
   const { fromPath, toPath } = command;
   if (fromPath === toPath) return;
   const entries = await redirectEntries(tx);
@@ -43,10 +44,12 @@ export async function recordPathRedirect(tx: Tx, command: { locale: string; from
   }
   const pageId = command.owner.pageId ?? null;
   const collectionId = command.owner.collectionId ?? null;
+  const categoryId = command.owner.categoryId ?? null;
   await tx.seoRedirect.upsert({
     where: { fromPath },
-    create: { locale: command.locale, fromPath, toPath, statusCode: 301, pageId, collectionId, createdBy: command.actorId },
-    update: { toPath, statusCode: 301, pageId, collectionId, createdBy: command.actorId },
+    create: { locale: command.locale, fromPath, toPath, statusCode: 301, pageId, collectionId, categoryId,
+      createdBy: command.actorId },
+    update: { toPath, statusCode: 301, pageId, collectionId, categoryId, createdBy: command.actorId },
   });
 
   const after = await redirectEntries(tx);
