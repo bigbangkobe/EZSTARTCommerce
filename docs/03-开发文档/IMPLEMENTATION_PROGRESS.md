@@ -768,3 +768,15 @@
 - 文案：三语 `pagesIndex.*` 与 `seo.pages`；`ContentIndexPage` 埋点 `pageKey=pages.index`，分组区块带 `data-ez-section=pages.index.<type>`。
 
 验证：前台 `tsc` 与 `next build` 通过（`/[locale]/pages` 三种语言均为 SSG，revalidate 30s）；用桩接口起前台逐项核对——分组顺序、`indexable:false` 不出现、120 字截断、中文段落无多余空格、FAQ 取首问、无区块页面只显示标题、`en` 空态 `noindex`、canonical 与 zh-HK/zh-CN/en/x-default 四个 hreflang、详情页「所有内容」回链、`sitemap.xml` 收录三条 `/pages`。生产内容页当前为 0 条（`/storefront/pages?locale=zh-HK` 返回空），因此线上索引页处于空态、`noindex`，待运营发布内容后自动转为可索引。
+
+部署：提交 `7089723` 推送 `origin/main` 后部署 mrinhk（`./deploy.sh`：镜像构建 → 迁移容器 Exited 0 → API healthy → Caddy 链路 200 → 公网可达）。本批无迁移、无契约变更。
+
+生产冒烟：
+
+- `https://mrinhk.com/zh-HK/pages`、`/zh-CN/pages`、`/en/pages` → **200**，空态文案「暫無公開內容…」/「暂无公开内容…」/「Nothing public yet…」；
+- 空态页返回 `robots: noindex`，canonical 为 `https://mrinhk.com/zh-HK/pages`（三语各自指向自己）；
+- `https://mrinhk.com/zh-HK/pages/nonexistent` → **404**（详情不存在就是不存在，不猜）；
+- `sitemap.xml` 中 `/pages` 条目为 **0** —— 生产内容页当前 0 条，空索引按设计不收录；
+- 首页 `/zh-HK` → **200**，页脚**没有**「所有內容」入口：页脚导航以 `pages.length > 0` 为前提，没有内容页时不渲染空导航。
+
+一个已知的空档：没有任何内容页时，索引页本身也没有任何站内入口（只能直接输地址）。这是刻意的——没有内容时页脚多一个「所有內容」只是把访客送到一句「暂无内容」。等运营发布第一篇内容页，页脚入口、sitemap 收录与可索引状态会一起自动生效。
