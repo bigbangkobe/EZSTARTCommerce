@@ -146,6 +146,24 @@ async function bootstrapOwner() {
 }
 
 log('A. 初始化');
+
+/**
+ * 冒烟脚本会在几分钟内发起几十次写请求，而 IP 限流窗口是 15 分钟 60 次——
+ * 它防的是真实用户的高频尝试，不是同一台机器上的验收脚本。
+ * 只清理 `ip:` 前缀的计数，账号级失败计数（登录爆破）保持原样。
+ */
+async function resetIpRateLimits() {
+  const { connectDatabase } = await import('/app/dist/packages/database/src/client.js');
+  const db = connectDatabase(process.env.DATABASE_URL);
+  try {
+    const { count } = await db.identityRateLimit.deleteMany({ where: { key: { startsWith: 'ip:' } } });
+    log(`已重置 IP 限流计数（${count} 条，仅沙箱冒烟）`);
+  } finally {
+    await db.$disconnect();
+  }
+}
+await resetIpRateLimits();
+
 const session = creds ? await loginExisting(creds) : await bootstrapOwner();
 const csrf = session.csrfToken;
 pass(`店主会话就绪（${session.permissionCodes.length} 项权限）`);
@@ -275,7 +293,7 @@ const order = must(await guest('POST', '/api/v1/storefront/checkout/orders', { b
 csrf: cartCsrf, idempotency: `smoke-order-${quote.quoteId}` }), '线上渠道下单');
 check('线上渠道下单成功且处于待付', order.paymentStatus === 'created', `${order.publicOrderNumber} / ${order.paymentStatus}`);
 
-const intent = must(await guest('POST', `/api/v1/storefront/checkout/orders/${order.id}/pay`, { body: {}, csrf: cartCsrf }),
+const intent = must(await guest('POST', `/api/v1/storefront/checkout/orders/${order.orderId}/pay`, { body: {}, csrf: cartCsrf }),
   '发起线上支付');
 check('拿到收银台跳转地址与渠道单号',
   Boolean(intent.redirectUrl && intent.providerTransactionId) && intent.status === 'pending', intent);
@@ -303,48 +321,121 @@ check('过期时间戳被拒（400，防重放）', expired.status === 400, expi
 const settled = await webhook(rawBody, sign(rawBody));
 check('签名正确回调被接收（202 accepted）', settled.status === 202 && settled.body?.data?.kind === 'accepted', settled.body);
 
-const afterPaid = must(await http('GET', `/api/v1/admin/payments?orderId=${order.id}`), '查询支付台账');
+const afterPaid = must(await http('GET', `/api/v1/admin/payments?orderId=${order.orderId}`), '查询支付台账');
 const paidRow = (afterPaid.items ?? [])[0];
 check('订单转为已付、台账仅一条', paidRow?.status === 'succeeded', paidRow?.status);
 
 const replay = await webhook(rawBody, sign(rawBody));
 check('重复回调幂等（202 duplicate）', replay.status === 202 && replay.body?.data?.kind === 'duplicate', replay.body);
 
-const afterReplay = must(await http('GET', `/api/v1/admin/payments?orderId=${order.id}`), '复查台账');
+const afterReplay = must(await http('GET', `/api/v1/admin/payments?orderId=${order.orderId}`), '复查台账');
 check('重复回调没有造出第二条流水', (afterReplay.items ?? []).length === 1, `count=${(afterReplay.items ?? []).length}`);
 
-const orderDetail = must(await http('GET', `/api/v1/admin/orders/${order.id}`), '读取订单');
-check('订单付款状态投影正确', orderDetail.paymentStatus === 'paid', orderDetail.paymentStatus);
+// 订单付款状态是台账状态的投影（orderPaymentStatusFor），不是另一套 paid/pending 枚举。
+const orderDetail = must(await http('GET', `/api/v1/admin/orders/${order.orderId}`), '读取订单');
+check('订单付款状态随台账投影为成功', orderDetail.paymentStatus === 'succeeded', orderDetail.paymentStatus);
 
 // ---------------- C. 退钱 ----------------
+/**
+ * 退款必须两人复核：系统禁止发起人批准自己的退款（SELF_APPROVAL_FORBIDDEN）。
+ * 冒烟用一个独立财务账号批准并执行，顺带验证 finance 权限包可用。
+ */
+const FINANCE_EMAIL = process.env.SMOKE_FINANCE_EMAIL ?? `smoke-finance@${MARKET.toLowerCase()}.test`;
+
+async function financeSession() {
+  let saved = creds?.finance;
+  let password = saved?.password ?? null;
+  let totpSecret = saved?.totpSecret ?? null;
+
+  if (!password) {
+    password = `Fin-${randomBytes(9).toString('base64url')}9aA`;
+    const { connectDatabase } = await import('/app/dist/packages/database/src/client.js');
+    const { passwordHash } = await import('/app/dist/apps/api/src/identity/crypto.js');
+    const db = connectDatabase(process.env.DATABASE_URL);
+    try {
+      const hash = await passwordHash(password);
+      const user = await db.adminUser.upsert({ where: { email: FINANCE_EMAIL },
+        update: { passwordHash: hash, status: 'active' },
+        create: { email: FINANCE_EMAIL, displayName: '冒烟财务', locale: 'zh-HK', passwordHash: hash,
+          status: 'active', mfaRequired: true } });
+      const role = await db.adminRole.findUnique({ where: { presetKey: 'finance' } });
+      if (!role) die('finance 预设角色缺失（initialize 应已补齐）');
+      await db.adminUserRole.createMany({ data: [{ userId: user.id, roleId: role.id }], skipDuplicates: true });
+    } finally {
+      await db.$disconnect();
+    }
+  }
+
+  const jar = new Map();
+  const call = (method, path, opts = {}) => http(method, path, { ...opts, jar });
+
+  for (const offset of [0, 1, 2]) {
+    const login = await call('POST', '/api/v1/admin/auth/login',
+      { body: { email: FINANCE_EMAIL, password }, cookies: false });
+    if (login.status === 200) return { session: must(login, '财务登录'), call };
+
+    const challengeId = must(login, '财务登录挑战').challengeId;
+    if (totpSecret) {
+      const verify = await call('POST', '/api/v1/admin/auth/mfa/verify',
+        { body: { challengeId, code: totpCode(totpSecret, offset) } });
+      if (verify.status === 200) return { session: must(verify, '财务 MFA'), call };
+      continue;
+    }
+    // 首次运行：账号还没有 MFA，走注册流程拿到密钥。
+    const enrollment = must(await call('POST', '/api/v1/admin/auth/mfa/enrollments', { body: { challengeId } }),
+      '财务 MFA 注册');
+    totpSecret = enrollment.totpSecret;
+    const done = must(await call('POST', '/api/v1/admin/auth/mfa/enrollments/confirm', { body: {
+      challengeId, enrollmentId: enrollment.enrollmentId, code: totpCode(totpSecret) } }), '财务 MFA 确认');
+    const merged = { ...(creds ?? {}), finance: { password, totpSecret } };
+    await writeFile(SECRET_FILE, JSON.stringify(merged, null, 2), { mode: 0o600 });
+    creds = merged;
+    return { session: done.session, call };
+  }
+  die('财务账号登录失败（MFA 密钥可能已失效，删除 /secrets/admin.json 后重跑）');
+}
+
 log('C. 退钱');
 const refund = must(await http('POST', '/api/v1/admin/refunds', { body: {
-  orderId: order.id, paymentId: paidRow.id, amountMinor: order.totalMinor, currency: order.currency,
+  orderId: order.orderId, paymentId: paidRow.id, amountMinor: order.totalMinor, currency: order.currency,
   reasonCode: 'customer_request', reason: '冒烟：顾客取消' },
-csrf, idempotency: `smoke-refund-${order.id}` }), '创建退款单');
+csrf, idempotency: `smoke-refund-${order.orderId}` }), '创建退款单');
 check('退款单已创建（requested）', refund.status === 'requested', refund.status);
 
-const approved = must(await http('POST', `/api/v1/admin/refunds/${refund.id}/approve`,
-  { body: { reason: '冒烟批准' }, csrf, idempotency: `smoke-refund-approve-${refund.id}` }), '批准退款');
-check('退款单已批准', approved.status === 'approved', approved.status);
+// 同一人既发起又批准是财务舞弊的典型路径，必须先证明它被挡住。
+const selfApprove = await http('POST', `/api/v1/admin/refunds/${refund.id}/approve`,
+  { body: { reason: '冒烟自批' }, csrf, idempotency: `smoke-refund-approve-self-${refund.id}` });
+check('发起人不能批准自己的退款（职责分离）',
+  selfApprove.status === 403 && selfApprove.body?.error?.code === 'SELF_APPROVAL_FORBIDDEN',
+  `HTTP ${selfApprove.status} / ${selfApprove.body?.error?.code}`);
 
-const executed = must(await http('POST', `/api/v1/admin/refunds/${refund.id}/execute`,
-  { body: { reason: '冒烟执行退款' }, csrf, idempotency: `smoke-refund-exec-${refund.id}` }), '执行退款');
+const finance = await financeSession();
+pass(`财务账号就绪（${finance.session.permissionCodes.length} 项权限）`);
+
+const approved = must(await finance.call('POST', `/api/v1/admin/refunds/${refund.id}/approve`,
+  { body: { reason: '冒烟批准' }, csrf: finance.session.csrfToken,
+    idempotency: `smoke-refund-approve-${refund.id}` }), '财务批准退款');
+check('退款单已由第二人批准', approved.status === 'approved', approved.status);
+
+const executed = must(await finance.call('POST', `/api/v1/admin/refunds/${refund.id}/execute`,
+  { body: { reason: '冒烟执行退款' }, csrf: finance.session.csrfToken,
+    idempotency: `smoke-refund-exec-${refund.id}` }), '执行退款');
 check('退款已走渠道并收敛为 refunded', executed.status === 'refunded',
   `${executed.status} / providerRefundId=${executed.externalRefundId ?? '(空)'}`);
 
-const replayExec = await http('POST', `/api/v1/admin/refunds/${refund.id}/execute`,
-  { body: { reason: '冒烟重放' }, csrf, idempotency: `smoke-refund-exec-${refund.id}` });
+const replayExec = await finance.call('POST', `/api/v1/admin/refunds/${refund.id}/execute`,
+  { body: { reason: '冒烟重放' }, csrf: finance.session.csrfToken,
+    idempotency: `smoke-refund-exec-${refund.id}` });
 check('同一幂等键重放不报错也不产生第二笔', replayExec.status < 500,
   `HTTP ${replayExec.status} / status=${replayExec.body?.data?.status ?? 'n/a'}`);
 
-const refundList = must(await http('GET', `/api/v1/admin/refunds?orderId=${order.id}`), '退款列表');
+const refundList = must(await http('GET', `/api/v1/admin/refunds?orderId=${order.orderId}`), '退款列表');
 check('该订单只有一笔退款', (refundList.items ?? []).length === 1, `count=${(refundList.items ?? []).length}`);
 
 const overRefund = await http('POST', '/api/v1/admin/refunds', { body: {
-  orderId: order.id, paymentId: paidRow.id, amountMinor: order.totalMinor + 1, currency: order.currency,
+  orderId: order.orderId, paymentId: paidRow.id, amountMinor: order.totalMinor + 1, currency: order.currency,
   reasonCode: 'customer_request', reason: '冒烟：超额' },
-csrf, idempotency: `smoke-refund-over-${order.id}-${randomUUID()}` });
+csrf, idempotency: `smoke-refund-over-${order.orderId}-${randomUUID()}` });
 check('超额退款被拒（4xx）', overRefund.status >= 400 && overRefund.status < 500,
   `HTTP ${overRefund.status} / ${overRefund.body?.error?.code}`);
 
