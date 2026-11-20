@@ -288,6 +288,15 @@ export class CheckoutService {
     }
   }
 
+  /**
+   * 发起线上支付：用购物袋凭证定位归属，再交给支付服务调渠道。
+   * 与下单同一把凭证——拿到别人的 orderId 也发不起来。
+   */
+  async startOnlinePayment(orderId: string, token: string, ctx: RequestContext) {
+    const cartId = await this.db.$transaction(async tx => (await this.cartService.locate(tx, token)).id);
+    return this.payments.onlineIntent(orderId, cartId, ctx);
+  }
+
   async placeOrder(token: string, idempotencyKey: string, body: OrderBody, ctx: RequestContext,
     memberToken: string | null = null) {
     if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 16 || idempotencyKey.length > 128) throw new AuthError(422, 'VALIDATION_ERROR');

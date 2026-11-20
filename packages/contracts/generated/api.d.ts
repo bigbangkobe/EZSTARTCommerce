@@ -1478,6 +1478,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storefront/checkout/orders/{orderId}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create or reuse the provider payment intent and return the hosted checkout URL
+         * @description Guest-cart scoped. Ownership is proved by the cart credential that created the order, not by the order id alone. The amount always comes from the order snapshot and the internal payment number is reused as the provider idempotency key, so retries never open a second charge. Offline methods (COD, manual transfer) are rejected with PAYMENT_METHOD_NOT_ONLINE.
+         */
+        post: operations["startOnlinePayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storefront/analytics/events": {
         parameters: {
             query?: never;
@@ -1840,6 +1860,26 @@ export interface paths {
         head?: never;
         /** Configure or enable one approved payment adapter */
         patch: operations["updatePaymentMethod"];
+        trace?: never;
+    };
+    "/admin/payment-methods/{providerCode}/connection-test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify stored credentials against the provider without creating a payment
+         * @description Resolves the secret reference and calls the adapter's cheapest authenticated endpoint. Writes the outcome to connectionStatus so a misconfigured method stays invisible at checkout instead of failing real orders. Never returns credential material.
+         */
+        post: operations["testPaymentMethodConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/admin/orders/{id}/payment-result": {
@@ -9103,6 +9143,34 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    startOnlinePayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            /** @description Provider rejected or failed the payment creation */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     ingestAnalyticsEvents: {
         parameters: {
             query?: never;
@@ -9589,6 +9657,35 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    testPaymentMethodConnection: {
+        parameters: {
+            query?: {
+                environment?: "sandbox" | "production";
+            };
+            header?: never;
+            path: {
+                providerCode: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Success"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+            /** @description Provider unreachable or rejected the credentials */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["Unavailable"];
             default: components["responses"]["UnexpectedError"];
         };
     };

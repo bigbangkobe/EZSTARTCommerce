@@ -98,7 +98,7 @@ test('payment-adapter: production rejects env and file secret schemes', () => {
 });
 
 test('payment-adapter: checkout hides methods that are enabled but unverified', () => {
-  const base = { enabled: true, connectionStatus: 'verified', environment: 'production', requestEnvironment: 'production' };
+  const base = { enabled: true, connectionStatus: 'ok', environment: 'production', requestEnvironment: 'production' };
   assert.equal(checkoutVisible(base), true);
   assert.equal(checkoutVisible({ ...base, enabled: false }), false);
   assert.equal(checkoutVisible({ ...base, connectionStatus: 'failed' }), false);

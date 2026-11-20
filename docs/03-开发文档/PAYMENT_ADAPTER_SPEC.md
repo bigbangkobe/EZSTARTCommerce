@@ -258,13 +258,13 @@ POST /webhooks/payments/:provider
 
 ```text
 resolve secretRef → adapter.testConnection()
-  → ok: true  → connectionStatus = 'verified'，记 lastCheckedAt
+  → ok: true  → connectionStatus = 'ok'，记 lastCheckedAt
   → ok: false → connectionStatus = 'failed'，返回脱敏原因（不含密钥、不含完整响应体）
 ```
 
 - 测试连接**不创建真实支付**，用渠道提供的查询/鉴权接口；
 - 失败原因脱敏：只回错误码 + 简短说明，禁止回显请求头；
-- `enabled=true` 且 `connectionStatus != 'verified'` → 前台不展示该支付方式。
+- `enabled=true` 且 `connectionStatus != 'ok'` → 前台不展示该支付方式。
 
 这条是"客户自助配置"的安全阀：配错了不会导致线上下单失败，只会不可见。
 
@@ -279,7 +279,7 @@ resolve secretRef → adapter.testConnection()
 2. 客户：在 AWS Secrets Manager 写入密钥（或我方代写，客户给临时凭证）
 3. 客户：后台填 displayName / environment / publicConfig / secretRef
 4. 运营：填 approvalReference（类目批复）
-5. 客户：点"测试连接" → verified
+5. 客户：点"测试连接" → ok
 6. 运营：开启 enabled
 7. 我方：跑一笔沙箱支付 + 一笔退款 + 一次重复回调验证
 ```
@@ -322,7 +322,7 @@ V1 的抽象层必须一次做对，否则第二个客户会推倒重来。
 - [ ] 沙箱完成：成功支付、失败支付、取消、退款、重复回调、乱序回调各一笔。
 - [ ] 重复回调不产生第二条 `Payment`，`PaymentEvent` 不重复。
 - [ ] 验签失败返回 400 且不落库；未知单返回 200 且进死信。
-- [ ] `enabled=true` 但未 verified 时前台不展示。
+- [x] `enabled=true` 但连接未 `ok` 时前台不展示。
 - [ ] 日志与错误信息中检索不到密钥明文。
 - [ ] 后台修改配置后，**无需重启服务**即生效（配置读取 + 缓存 TTL）。
 
@@ -355,12 +355,34 @@ V1 的抽象层必须一次做对，否则第二个客户会推倒重来。
    pnpm add @aws-sdk/client-secrets-manager @aws-sdk/client-ssm --filter @ezstart/api
    ```
 4. **密钥值必须是扁平 JSON 对象**：`{"apiKey":"...","webhookSecret":"..."}`。非 JSON 一律拒绝，避免"值读到了但字段名猜不到"的隐性故障。
+5. **`connectionStatus` 取数据库约束值 `ok`，不是规格早期写的 `verified`**：`PaymentMethodConfig_connectionStatus_check` 只接受 `unverified / ok / failed`。改代码对齐约束，不动已上生产的迁移。
+6. **适配器调用必须走异步转换器**：`adapterCall()` 用 `await` 包住 rejection。同步 `try/catch` 抓不到 async 抛错，漏了这层验签失败会变成 500，渠道就会无限重试。
 
-### 12.3 尚未接入（W3 范围）
+### 12.3 已完成：业务编排接入（W3）
 
-- `PaymentsService` 尚未调用适配器：`createPayment` / `queryPayment` / `refund` 的业务编排未接。
-- 缺少 `POST /webhooks/payments/:provider` 控制器（当前只有承运商 webhook）。
-- 后台"测试连接"端点未实现（`connectionStatus` 字段已存在）。
-- 对账任务、死信队列未实现。
+| 改动 | 内容 |
+|---|---|
+| `packages/domain/src/payments.ts` | 状态机新增线上渠道的 `failed` 出口；`failed` 与 `cancelled` 分开记，否则失败率统计失真；failed 强制写原因 |
+| `apps/api/src/payments/service.ts` | `onlineIntent`（发起支付）、`handleWebhook`（验签→找单→幂等→金额→状态机→事件）、`testConnection`（写回连接状态） |
+| `apps/api/src/checkout/service.ts` | `startOnlinePayment`：用购物袋凭证定位归属，再交给支付服务 |
+| `apps/api/src/payment-webhooks/controller.ts` | 公开回调入口，`rawBody` 验签，返回 202 |
+| `apps/api/src/payments/controller.ts` | `POST /admin/payment-methods/:code/connection-test` |
+| `apps/api/src/app.ts` | `rawBody: true`；线上支付三件依赖按 `PAYMENTS_BASE_URL` 装配，未配置则整体关闭（503） |
+| 契约 | 新增 `startOnlinePayment` 与 `testPaymentMethodConnection` 两个 operation；`/webhooks/payments/{provider}` 复用已有定义 |
+| `tests/payments-online-http.test.ts` | 端到端：发起 → 幂等复用 → 签名回调入账 → 重放去重 → 篡改拒绝 → 已付不可再付 → 未知单 deferred |
 
-> 抽象层与业务层的接线放在 W3，与真实渠道适配器一起做——避免在没有渠道的情况下写一遍编排再改一遍。
+**编排层的关键取舍：**
+
+- **渠道调用在事务外**：外部 IO 不占数据库事务，失败也不留半截状态。
+- **未知单号回 202 而不是 404**：回调早于本地事务提交是常态，回 5xx 会引发重试风暴；记 deferred 交给对账补。
+- **金额不符不抛错**：记 `WEBHOOK_AMOUNT_MISMATCH` 冲突事件、不推进状态。抛 400 同样会让渠道无限重试。
+- **终态再收到前进事件**：记事件、不改状态，供对账解释差异。
+
+### 12.4 尚未完成
+
+- 对账任务（`pending` 超时拉 `queryPayment` 收敛）与死信重放未实现。
+- 退款编排未接入 `PaymentsService`（适配器已支持 `refund`，但缺对外接口与售后台账串联）。
+- 后台支付通道管理 UI 未接（端点已就绪）。
+- 真实渠道适配器未接入；`@aws-sdk/client-secrets-manager` 仍未安装。
+
+**当前验证结果：** 全量测试 **390/390** 通过（含真实 PostgreSQL 的 HTTP 集成测试）；契约校验 54 项通过。

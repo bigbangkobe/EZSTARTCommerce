@@ -1946,6 +1946,33 @@ paths:
         '503': { $ref: '#/components/responses/Unavailable' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
+  /storefront/checkout/orders/{orderId}/pay:
+    post:
+      tags: [Checkout]
+      operationId: startOnlinePayment
+      summary: Create or reuse the provider payment intent and return the hosted checkout URL
+      description: >-
+        Guest-cart scoped. Ownership is proved by the cart credential that created the order, not by
+        the order id alone. The amount always comes from the order snapshot and the internal payment
+        number is reused as the provider idempotency key, so retries never open a second charge.
+        Offline methods (COD, manual transfer) are rejected with PAYMENT_METHOD_NOT_ONLINE.
+      security: [{ GuestCartSession: [], CsrfToken: [] }]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '502': { description: Provider rejected or failed the payment creation }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+
   /storefront/analytics/events:
     post:
       tags: [Analytics]
@@ -2334,6 +2361,36 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/payment-methods/{providerCode}/connection-test:
+    post:
+      tags: [Payments]
+      operationId: testPaymentMethodConnection
+      summary: Verify stored credentials against the provider without creating a payment
+      description: >-
+        Resolves the secret reference and calls the adapter's cheapest authenticated endpoint.
+        Writes the outcome to connectionStatus so a misconfigured method stays invisible at
+        checkout instead of failing real orders. Never returns credential material.
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: payment.config
+      x-mfa-required: true
+      parameters:
+        - name: providerCode
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-z][a-z0-9_]{1,40}$' }
+        - name: environment
+          in: query
+          required: false
+          schema: { type: string, enum: [sandbox, production], default: production }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '502': { description: Provider unreachable or rejected the credentials }
+        '503': { $ref: '#/components/responses/Unavailable' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/orders/{id}/payment-result:
     post:

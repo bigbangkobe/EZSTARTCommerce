@@ -195,7 +195,8 @@ export function checkoutVisible(input: {
   requestEnvironment: string;
 }): boolean {
   if (!input.enabled) return false;
-  if (input.connectionStatus !== 'verified') return false;
+  // 数据库约束只认 unverified / ok / failed；只有 ok 才允许前台展示。
+  if (input.connectionStatus !== 'ok') return false;
   return input.environment === input.requestEnvironment;
 }
 

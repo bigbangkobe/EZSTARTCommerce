@@ -40,6 +40,15 @@ export class PaymentsController extends ManagementHttp {
       header(request, 'x-csrf-token'), this.version(request), body, this.context(request)));
   }
 
+  /** 测试连接：只验证凭据可用，不发起真实支付；结果写回 connectionStatus。 */
+  @Post('payment-methods/:providerCode/connection-test')
+  async testConnection(@Param('providerCode') providerCode: string, @Query('environment') environment: unknown,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    this.send(response, request, 200, await this.paymentsService().testConnection(
+      cookie(request, 'ez_admin_session'), header(request, 'x-csrf-token'), providerCode,
+      typeof environment === 'string' ? environment : 'production', this.context(request)));
+  }
+
   @Get('payments')
   async list(@Query('limit') limit: unknown, @Query('cursor') cursor: unknown, @Query('status') status: unknown,
     @Query('orderId') orderId: unknown, @Query('providerCode') providerCode: unknown,

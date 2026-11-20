@@ -25,7 +25,7 @@ const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 export type PaymentChannel = 'cod' | 'manual' | 'online';
 export type PaymentStatus = 'pending' | 'authorized' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'
   | 'collected' | 'rejected' | 'returned';
-export type PaymentOutcome = 'collected' | 'succeeded' | 'rejected' | 'cancelled' | 'returned';
+export type PaymentOutcome = 'collected' | 'succeeded' | 'rejected' | 'cancelled' | 'returned' | 'failed';
 
 export interface ProviderDefinition {
   readonly code: string;
@@ -56,11 +56,13 @@ export function provider(code: string): ProviderDefinition {
   return found;
 }
 
-/** 每个渠道可以登记的结果：COD 没有“授权成功”，线上支付没有“拒收”。 */
+/** 每个渠道可以登记的结果：COD 没有“授权成功/渠道失败”，线上支付没有“拒收”。 */
 const CHANNEL_OUTCOMES: Record<PaymentChannel, readonly PaymentOutcome[]> = {
   cod: ['collected', 'rejected', 'returned'],
   manual: ['collected', 'succeeded', 'cancelled', 'returned'],
-  online: ['succeeded', 'cancelled', 'returned'],
+  // failed 只对线上渠道开放：渠道侧拒绝、风控拦截、卡被拒都属于这一类，
+  // 与 cancelled（用户主动取消）分开记，否则失败率统计会失真。
+  online: ['succeeded', 'cancelled', 'returned', 'failed'],
 };
 
 /**
@@ -68,8 +70,8 @@ const CHANNEL_OUTCOMES: Record<PaymentChannel, readonly PaymentOutcome[]> = {
  * 后台不能把它改成失败或成功，必须先由服务端查询或回调给出结论。
  */
 const TRANSITIONS: Record<string, Partial<Record<PaymentOutcome, PaymentStatus>>> = {
-  pending: { collected: 'collected', succeeded: 'succeeded', rejected: 'rejected', cancelled: 'cancelled' },
-  authorized: { collected: 'collected', succeeded: 'succeeded', cancelled: 'cancelled' },
+  pending: { collected: 'collected', succeeded: 'succeeded', rejected: 'rejected', cancelled: 'cancelled', failed: 'failed' },
+  authorized: { collected: 'collected', succeeded: 'succeeded', cancelled: 'cancelled', failed: 'failed' },
   collected: { returned: 'returned' },
   succeeded: { returned: 'returned' },
   unknown: {},
@@ -115,11 +117,11 @@ function optionalText(value: string | null | undefined, max: number, field: stri
   return text;
 }
 
-/** 收款/拒收/退回登记入参。拒收与退回必须写原因——钱去哪了要能解释。 */
+/** 收款/拒收/退回/渠道失败登记入参。四种失败都必须写原因——钱去哪了要能解释。 */
 export function normalizeOutcome(input: { outcome?: unknown; amountMinor?: unknown; occurredAt?: unknown;
   reference?: unknown; reason?: unknown; expectedVersion?: unknown }, now = new Date()): OutcomeInput {
   const outcome = input.outcome;
-  if (typeof outcome !== 'string' || !['collected', 'succeeded', 'rejected', 'cancelled', 'returned'].includes(outcome)) {
+  if (typeof outcome !== 'string' || !['collected', 'succeeded', 'rejected', 'cancelled', 'returned', 'failed'].includes(outcome)) {
     fail('VALIDATION_ERROR');
   }
   if (!Number.isSafeInteger(input.amountMinor) || (input.amountMinor as number) < 1) fail('VALIDATION_ERROR');
@@ -132,7 +134,7 @@ export function normalizeOutcome(input: { outcome?: unknown; amountMinor?: unkno
   if (input.reference !== undefined && input.reference !== null && typeof input.reference !== 'string') fail('VALIDATION_ERROR');
   if (input.reason !== undefined && input.reason !== null && typeof input.reason !== 'string') fail('VALIDATION_ERROR');
   const reason = optionalText(input.reason as string | null | undefined, 1_000, 'VALIDATION_ERROR');
-  if ((outcome === 'rejected' || outcome === 'returned') && !reason) fail('REASON_REQUIRED');
+  if ((outcome === 'rejected' || outcome === 'returned' || outcome === 'failed') && !reason) fail('REASON_REQUIRED');
   return {
     outcome: outcome as PaymentOutcome,
     amountMinor: input.amountMinor as number,

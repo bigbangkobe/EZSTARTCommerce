@@ -4,14 +4,29 @@ import type { Prisma } from '../../../../packages/database/src/client.js';
 import {
   assertCodRequiresDispatch, assertCollectable, assertPaymentAmount, assertVersion, nextPaymentStatus,
   normalizeMethodPatch, normalizeOutcome, orderPaymentStatusFor, paymentNumber, provider, PaymentRuleError,
-  type MethodPatchInput, type OutcomeInput, type PaymentChannel, type ProviderDefinition,
+  type MethodPatchInput, type OutcomeInput, type PaymentChannel, type PaymentOutcome, type PaymentStatus,
+  type ProviderDefinition,
 } from '../../../../packages/domain/src/payments.js';
+import {
+  assertCreatePaymentInput, assertNoSecretShape, assertWebhookAmount, PaymentAdapterError,
+  webhookEventKey, type AdapterContext, type PaymentAdapter,
+} from '../../../../packages/domain/src/payment-adapter.js';
+import type { SecretResolver } from './adapters/secret-resolver.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 
 type Tx = Prisma.TransactionClient;
 type MethodRow = Prisma.PaymentMethodConfigGetPayload<{}>;
 type PaymentRow = Prisma.PaymentGetPayload<{}>;
 type PaymentOrderRow = Prisma.ShopOrderGetPayload<{}>;
+type Environment = 'sandbox' | 'production';
+
+/** 线上支付需要的三件外部能力；缺失时线上支付整体不可用（返回 503），线下不受影响。 */
+export interface OnlinePaymentDeps {
+  readonly resolver: SecretResolver;
+  readonly adapterFor: (code: string, environment: Environment) => PaymentAdapter;
+  /** 站点根地址，用于拼 returnUrl 与 notifyUrl，例：https://mrinhk.com */
+  readonly baseUrl: string;
+}
 
 /** 状态冲突是 409，输入问题是 422：与订单模块保持同一套映射。 */
 const CONFLICT_CODES = new Set(['VERSION_CONFLICT', 'PAYMENT_STATE_CONFLICT', 'PAYMENT_OUTCOME_NOT_ALLOWED',
@@ -38,7 +53,7 @@ export interface PaymentFilters { status?: string | null; orderId?: string | nul
  * 3. 订单付款状态是台账状态的投影：登记收款/拒收/退回时一起推进，且不伪造未发生的收款。
  */
 export class PaymentsService {
-  constructor(private readonly identity: IdentityService) {}
+  constructor(private readonly identity: IdentityService, private readonly online: OnlinePaymentDeps | null = null) {}
   private get db() { return this.identity.db; }
 
   private rule<T>(fn: () => T): T {
@@ -312,4 +327,226 @@ export class PaymentsService {
   }
 
   /** 供结账下单使用：按订单金额开一张待收流水（Payment 行必须在订单事务里一起落库）。 */
+
+  // ---- 线上支付 ---------------------------------------------------------------
+
+  private onlineDeps(): OnlinePaymentDeps {
+    if (!this.online) throw new AuthError(503, 'SERVICE_NOT_READY');
+    return this.online;
+  }
+
+  /** 适配器抛的规则错误统一转 400：回调里任何验签/金额问题都不该是 5xx。 */
+  private adapterRule<T>(fn: () => T): T {
+    try { return fn(); } catch (error) {
+      if (error instanceof PaymentAdapterError) {
+        throw new AuthError(error.code === 'SECRET_REFERENCE_INVALID' ? 422 : 400, error.code);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * 异步版本的规则转换。适配器方法都是 async，同步 try/catch 抓不到 rejection——
+   * 漏了这层，验签失败会变成 500，渠道就会一直重试。
+   */
+  private async adapterCall<T>(fn: () => Promise<T>, failureStatus: number): Promise<T> {
+    try { return await fn(); } catch (error) {
+      if (error instanceof PaymentAdapterError) {
+        throw new AuthError(error.code === 'SECRET_REFERENCE_INVALID' ? 422 : failureStatus, error.code);
+      }
+      throw error;
+    }
+  }
+
+  private async adapterCredentials(secretRef: string, environment: Environment): Promise<Record<string, string>> {
+    try {
+      return { ...await this.onlineDeps().resolver.resolve(secretRef) };
+    } catch (error) {
+      const code = (error as { code?: string }).code ?? 'SECRET_FETCH_FAILED';
+      // 密钥取不到属于配置问题，不是客户端问题；但要给出可诊断的错误码，不能静默空凭据。
+      throw new AuthError(code === 'SECRET_SCHEME_NOT_ALLOWED_IN_PRODUCTION' ? 422 : 503, code);
+    }
+  }
+
+  private adapterContext(code: string, environment: Environment, credentials: Record<string, string>,
+    publicConfig: Record<string, string>): AdapterContext {
+    return { providerCode: code, environment, credentials, publicConfig };
+  }
+
+  /**
+   * 发起线上支付：读订单与台账 → 解析密钥 → 调渠道拿收银台地址 → 回写渠道单号。
+   *
+   * 关键约束：
+   * 1. 归属校验用 cartId，与下单同一凭证；换个人拿到 orderId 也发不起来。
+   * 2. 金额只取订单快照，不接受客户端传入；渠道侧幂等键固定为内部台账号。
+   * 3. 渠道调用在数据库事务之外：外部 IO 不占事务，失败也不留半截状态。
+   */
+  async onlineIntent(orderId: string, cartId: string, ctx: RequestContext) {
+    const deps = this.onlineDeps();
+    if (typeof orderId !== 'string' || !/^[0-9a-f-]{36}$/i.test(orderId)) throw new AuthError(422, 'VALIDATION_ERROR');
+
+    const prep = await this.db.$transaction(async tx => {
+      const order = await tx.shopOrder.findUnique({ where: { id: orderId } });
+      if (!order || order.cartId !== cartId) throw new AuthError(404, 'NOT_FOUND');
+      if (order.orderStatus === 'cancelled') throw new AuthError(409, 'ORDER_ALREADY_CANCELLED');
+      const definition = this.rule(() => provider(order.paymentMethodCode));
+      if (definition.channel !== 'online') throw new AuthError(422, 'PAYMENT_METHOD_NOT_ONLINE');
+      const payment = await tx.payment.findUnique({ where: { dedupeKey: `${definition.code}:${order.id}` } });
+      if (!payment) throw new AuthError(409, 'STATE_CONFLICT');
+      if (payment.status === 'succeeded' || payment.status === 'collected') throw new AuthError(409, 'PAYMENT_ALREADY_RECORDED');
+      if (payment.status === 'cancelled' || payment.status === 'failed') throw new AuthError(409, 'PAYMENT_STATE_CONFLICT');
+      const environment: Environment = payment.environment === 'sandbox' ? 'sandbox' : 'production';
+      const config = await tx.paymentMethodConfig.findUnique({ where: { providerCode_environment:
+        { providerCode: definition.code, environment: payment.environment } } });
+      if (!config || !config.enabled || !config.approvalReference) throw new AuthError(422, 'PAYMENT_METHOD_UNAVAILABLE');
+      if (!config.secretRef) throw new AuthError(422, 'PAYMENT_CREDENTIAL_REQUIRED');
+      return { order, payment, definition, config, environment };
+    });
+
+    const credentials = await this.adapterCredentials(prep.config.secretRef as string, prep.environment);
+    const adapter = deps.adapterFor(prep.definition.code, prep.environment);
+    const base = deps.baseUrl.replace(/\/+$/, '');
+    const input = this.adapterRule(() => assertCreatePaymentInput({
+      paymentNumber: prep.payment.publicPaymentNumber,
+      orderNumber: prep.order.publicOrderNumber,
+      amountMinor: prep.order.totalMinor,
+      currency: prep.order.currency,
+      returnUrl: `${base}/checkout/return?order=${encodeURIComponent(prep.order.publicOrderNumber)}`,
+      notifyUrl: `${base}/api/v1/webhooks/payments/${prep.definition.code}`,
+      locale: 'zh-HK',
+    }, prep.environment));
+
+    // 渠道侧失败属于上游问题（502），不是客户端请求有问题。
+    const result = await this.adapterCall(() => adapter.createPayment(
+      this.adapterContext(prep.definition.code, prep.environment, credentials,
+        prep.config.publicConfig as Record<string, string>), input), 502);
+
+    // 跳转地址是给前端的，不写进 metadata：它会随台账查询与导出扩散，没必要留。
+    const metadata = { ...(prep.payment.metadata as Record<string, unknown>), adapterStatus: result.status };
+    this.adapterRule(() => assertNoSecretShape(metadata));
+    await this.db.$transaction(async tx => {
+      await tx.payment.update({ where: { id: prep.payment.id }, data: {
+        providerTransactionId: result.providerTransactionId, metadata: metadata as Prisma.InputJsonValue } });
+      await this.identity.recordAudit(tx, ctx, null, 'payments.online.intent', prep.payment.id, 'success');
+    });
+    return { paymentId: prep.payment.id, publicPaymentNumber: prep.payment.publicPaymentNumber,
+      providerCode: prep.definition.code, providerTransactionId: result.providerTransactionId,
+      redirectUrl: result.redirectUrl, status: result.status };
+  }
+
+  /**
+   * 接收渠道回调。顺序不可调整：
+   * 验签 → 找单（找不到返回 deferred，由对账补）→ 幂等（重复直接返回）→ 金额 → 状态机 → 事件。
+   *
+   * 返回的 kind 让控制器决定 HTTP 码：accepted/duplicate/deferred 都是 200，
+   * 只有验签失败才 400——渠道重试风暴比丢一条回调更难收拾。
+   */
+  async handleWebhook(providerCode: string, environment: Environment, headers: Record<string, string>,
+    rawBody: Buffer, ctx: RequestContext) {
+    const deps = this.onlineDeps();
+    const config = await this.db.paymentMethodConfig.findUnique({ where: { providerCode_environment:
+      { providerCode, environment } } });
+    // 未启用或未配置的渠道：不泄露它是否存在。
+    if (!config || !config.enabled || !config.secretRef) throw new AuthError(404, 'NOT_FOUND');
+
+    const credentials = await this.adapterCredentials(config.secretRef, environment);
+    const adapter = deps.adapterFor(providerCode, environment);
+    const adapterCtx = this.adapterContext(providerCode, environment, credentials,
+      config.publicConfig as Record<string, string>);
+    // 验签失败必须走到这里就断，绝不进入下面的落库逻辑。
+    const event = await this.adapterCall(() => adapter.verifyWebhook(adapterCtx, headers, rawBody), 400);
+
+    return this.guarded(() => this.db.$transaction(async tx => {
+      const payment = event.paymentNumber
+        ? await tx.payment.findUnique({ where: { publicPaymentNumber: event.paymentNumber }, include: { order: true } })
+        : await tx.payment.findFirst({ where: { providerCode, providerTransactionId: event.providerTransactionId },
+          include: { order: true } });
+      if (!payment) return { kind: 'deferred' as const, paymentStatus: null };
+
+      await this.lock(tx, `payment:${payment.id}`);
+      const eventKey = this.adapterRule(() => webhookEventKey(providerCode, event.eventId));
+      const prior = await tx.paymentEvent.findUnique({ where: { dedupeKey: eventKey } });
+      if (prior) return { kind: 'duplicate' as const, paymentStatus: payment.status };
+
+      // 只有“钱到账”才强制金额一致；失败/取消回调渠道可能不带金额，不能因此拒收事件。
+      // 金额不符不能抛 400：那会让渠道无限重试。记为冲突、不推进状态，留给对账处理。
+      let conflict: string | null = null;
+      if (event.status === 'succeeded') {
+        try {
+          this.adapterRule(() => assertWebhookAmount({ amountMinor: event.amountMinor, currency: event.currency,
+            expectedAmountMinor: payment.amountMinor, expectedCurrency: payment.currency }));
+        } catch {
+          conflict = 'WEBHOOK_AMOUNT_MISMATCH';
+        }
+      }
+
+      const outcome = event.status === 'succeeded' || event.status === 'cancelled' || event.status === 'failed'
+        ? event.status as PaymentOutcome : null;
+      let nextStatus: PaymentStatus = payment.status as PaymentStatus;
+      if (outcome && !conflict) {
+        try {
+          nextStatus = this.rule(() => nextPaymentStatus(payment.status, outcome, 'online'));
+        } catch (error) {
+          // 已终态又收到前进事件：不改状态，但要把事件留下来，供对账时解释差异。
+          if (error instanceof AuthError && error.code === 'PAYMENT_STATE_CONFLICT') conflict = error.code;
+          else throw error;
+        }
+      }
+
+      const advanced = nextStatus !== payment.status;
+      const paidAt = nextStatus === 'succeeded' ? event.occurredAt : payment.paidAt;
+      if (advanced) {
+        await tx.payment.update({ where: { id: payment.id }, data: {
+          status: nextStatus, paidAt,
+          failureCode: nextStatus === 'failed' ? 'provider_declined' : nextStatus === 'cancelled' ? 'cancelled' : null,
+          failureMessage: nextStatus === 'failed' || nextStatus === 'cancelled' ? `provider:${event.status}` : null,
+          version: { increment: 1 } } });
+        if (payment.order.orderStatus !== 'cancelled') {
+          await tx.shopOrder.update({ where: { id: payment.orderId }, data: {
+            paymentStatus: orderPaymentStatusFor(nextStatus), version: { increment: 1 } } });
+        }
+        if (nextStatus === 'succeeded') {
+          await redeemCouponInTx(tx, payment.orderId, { id: null, type: 'system' }, event.occurredAt);
+        }
+      }
+
+      await tx.paymentEvent.create({ data: { paymentId: payment.id, orderId: payment.orderId,
+        type: outcome ?? event.status, fromStatus: payment.status, toStatus: nextStatus, source: 'provider',
+        dedupeKey: eventKey, occurredAt: event.occurredAt, payload: {
+          providerTransactionId: event.providerTransactionId, adapterStatus: event.status,
+          amountMinor: event.amountMinor, currency: event.currency, ...(conflict ? { conflict } : {}) } as Prisma.InputJsonValue } });
+
+      return { kind: conflict ? 'conflict' as const : 'accepted' as const, paymentStatus: nextStatus };
+    }));
+  }
+
+  /**
+   * 后台“测试连接”：用最小代价验证凭据可用，结果写回 connectionStatus。
+   * 失败只影响前台是否展示该方式，不影响已存在的订单。
+   */
+  async testConnection(supplied: string, csrf: string | null, providerCode: string, environment: string,
+    ctx: RequestContext) {
+    const deps = this.onlineDeps();
+    if (environment !== 'sandbox' && environment !== 'production') throw new AuthError(422, 'VALIDATION_ERROR');
+    const env: Environment = environment;
+    return this.identity.withPermission(supplied, csrf, 'payment.config', async (tx, actor, _session, now) => {
+      const row = await tx.paymentMethodConfig.findUnique({ where: { providerCode_environment:
+        { providerCode, environment } } });
+      if (!row) throw new AuthError(404, 'NOT_FOUND');
+      if (!row.secretRef) throw new AuthError(422, 'PAYMENT_CREDENTIAL_REQUIRED');
+
+      const credentials = await this.adapterCredentials(row.secretRef, env);
+      const adapter = deps.adapterFor(providerCode, env);
+      const check = await this.adapterCall(() => adapter.testConnection(this.adapterContext(providerCode, env,
+        credentials, row.publicConfig as Record<string, string>)), 502);
+
+      const updated = await tx.paymentMethodConfig.update({ where: { id: row.id }, data: {
+        connectionStatus: check.ok ? 'ok' : 'failed', lastCheckedAt: now, version: { increment: 1 } } });
+      await this.identity.recordAudit(tx, ctx, actor.id, 'payments.method.connection_check', row.id,
+        'success', check.ok ? 'ok' : 'failed');
+      return { providerCode, environment, connectionStatus: updated.connectionStatus,
+        lastCheckedAt: updated.lastCheckedAt?.toISOString() ?? now.toISOString(),
+        detail: check.detail, version: updated.version };
+    });
+  }
 }

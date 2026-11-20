@@ -123,4 +123,12 @@ export class CheckoutController extends ManagementHttp {
     this.send(response, request, 201, await this.checkoutService().placeOrder(cartToken(request), key, body,
       this.context(request), optionalMemberToken(request)));
   }
+
+  /** 下单后发起线上支付：返回收银台跳转地址。COD 订单调用会明确拒绝。 */
+  @Post('orders/:orderId/pay')
+  async pay(@Param('orderId') orderId: string, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    assertCsrf(request);
+    this.send(response, request, 200, await this.checkoutService()
+      .startOnlinePayment(orderId, cartToken(request), this.context(request)));
+  }
 }

@@ -36,6 +36,29 @@ test('ledger states only move forward along the channel that owns them', () => {
   assert.equal(code(() => nextPaymentStatus('failed', 'succeeded', 'online')), 'PAYMENT_STATE_CONFLICT');
 });
 
+test('online channel owns a failure exit that offline channels must not use', () => {
+  // 渠道拒付/风控拦截 = failed，与用户取消（cancelled）分开记，否则失败率统计失真。
+  assert.equal(nextPaymentStatus('pending', 'failed', 'online'), 'failed');
+  assert.equal(nextPaymentStatus('authorized', 'failed', 'online'), 'failed');
+  assert.equal(nextPaymentStatus('pending', 'succeeded', 'online'), 'succeeded');
+  assert.equal(nextPaymentStatus('pending', 'cancelled', 'online'), 'cancelled');
+  // COD 与人工转账没有“渠道失败”这种结果。
+  assert.equal(code(() => nextPaymentStatus('pending', 'failed', 'cod')), 'PAYMENT_OUTCOME_NOT_ALLOWED');
+  assert.equal(code(() => nextPaymentStatus('pending', 'failed', 'manual')), 'PAYMENT_OUTCOME_NOT_ALLOWED');
+  // failed 是终态：不能再前进，也不能退回。
+  assert.equal(code(() => nextPaymentStatus('failed', 'succeeded', 'online')), 'PAYMENT_STATE_CONFLICT');
+  assert.equal(code(() => nextPaymentStatus('failed', 'cancelled', 'online')), 'PAYMENT_STATE_CONFLICT');
+});
+
+test('failed outcome requires a reason, same as rejection and return', () => {
+  const base = { outcome: 'failed', amountMinor: 23_000, occurredAt: '2026-11-16T09:00:00.000Z',
+    reference: null, reason: null, expectedVersion: 3 };
+  assert.equal(code(() => normalizeOutcome(base, new Date('2026-11-17T00:00:00.000Z'))), 'REASON_REQUIRED');
+  const withReason = normalizeOutcome({ ...base, reason: 'card declined' }, new Date('2026-11-17T00:00:00.000Z'));
+  assert.equal(withReason.outcome, 'failed');
+  assert.equal(withReason.reason, 'card declined');
+});
+
 test('order payment status is a projection of the ledger, not a separate truth', () => {
   assert.equal(orderPaymentStatusFor('collected'), 'collected');
   assert.equal(orderPaymentStatusFor('succeeded'), 'succeeded');
