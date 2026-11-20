@@ -95,4 +95,20 @@ deploy:
 - 客户上线参数表（CLIENT_LAUNCH_INPUTS）是面向人的填写视图；本规范是面向机器的落地格式。
 - 两者字段保持一致，避免"填了表又填一遍配置"。
 
+## 7. 落地状态（P3 已实现）
+
+> 状态：核心校验已落地为可运行代码（重做方案 P3）；部署初始化与批量升级仍属 P4。
+
+| 能力 | 落地物 | 说明 |
+|---|---|---|
+| 结构校验 + 闭集枚举 | `packages/domain/src/instance-manifest.ts` | 纯规则层，复用 `store.ts`（语言/市场/时区/功能开关）与 `theme.ts`（字体/区块）注册表，不另起枚举 |
+| 上线阻断检查 | 同上 `launchBlockerStatus` / `unsignedBlockers` / `canLaunch` | 10 项阻断与 `CLIENT_LAUNCH_INPUTS` 逐项对应；未签字项一律视为未确认 |
+| 单元测试 | `tests/instance-manifest.test.ts` | 11 例，覆盖正常解析、版本/语言/时区/颜色/字体/区块/开关/签字闭集与阻断 |
+| 校验 CLI | `scripts/validate-instance-manifest.mjs` | `pnpm instance:validate <file>`；`--require-launch-ready` 在未签字时以退出码 2 阻止发布 |
+| 参考配置 | `deploy/merchants/mrinhk/instance.example.yaml` | 以已上线 mrinhk 实例反向编写的第一份 manifest；签字项默认 false |
+
+**设计约定**：结构校验（格式对）与上线判定（可发布）分离——`validate` 默认只做结构校验返回 0；加 `--require-launch-ready` 才执行阻断判定。这保证"配置先落地、签字后上线"的流程不被混淆。
+
+**仍有待办（P4）**：标准部署包、一键起实例、批量升级脚本。Manifest 已定义 `deploy` 段供其消费，但初始化脚本尚未接入。
+
 > 本规范为产品设计参考，具体实施请结合公司合规与法务要求确认。

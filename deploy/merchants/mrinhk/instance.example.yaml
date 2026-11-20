@@ -1,0 +1,81 @@
+# EZSTARTCommerce 实例配置源（Instance Manifest）示例
+# 以已上线的 mrinhk.com 实例为原型编写，作为第一份参考配置。
+# 注意：signoffs 中的上线阻断项在此示例中默认为 false（未签字），
+#       表示"配置结构合法 ≠ 允许上线"。真实上线须逐项确认后改为 true。
+# 校验：node scripts/validate-instance-manifest.mjs deploy/merchants/mrinhk/instance.example.yaml
+
+schemaVersion: 1
+
+instance:
+  id: client-mrinhk-001
+  domain: mrinhk.com
+  market: HK
+  currency: HKD
+  timezone: Asia/Hong_Kong          # 真实部署在 ap-northeast-1，但经营时区按香港市场
+  locales: [zh-HK, zh-CN, en]
+  defaultLocale: zh-HK
+
+brand:
+  name: IN先生
+  brandLatin: Mr. IN
+  tagline: 心を込めて、凡事認真。
+  whatsapp: "85260474794"
+  whatsappGreeting: 你好，想向你查詢詳情
+  # logo / favicon 引用 media 库媒体 ID，部署时上传；示例留空
+  # logo: /media/logo.png
+  # favicon: /media/favicon.ico
+
+theme:
+  primaryColor: "#BC002D"
+  inkColor: "#1A1A1A"
+  paperColor: "#F7F5F0"
+  fontPair: editorial-jp
+  radius: 16
+
+storefront:
+  homeSections:
+    - type: hero
+      params: { variant: default }
+    - type: about
+      params: { showCards: true }
+    - type: product_grid
+      params: { sectionId: featured, limit: 6 }
+  navigation: [home, products, categories, collections, contact]
+
+business:
+  payment: [cod, approved_gateway]
+  shipping:
+    regions: [HK]
+    freeThreshold: 500
+  features:
+    guestCheckout: true
+    memberOtpLogin: true
+    codPayment: true
+    onlinePayment: true
+    ageVerification: false
+    analyticsEnabled: true
+
+compliance:
+  privacyPolicyUrl: https://mrinhk.com/pages/privacy
+  ageGateRequired: false
+  dataRetentionDays: 365
+  # 上线阻断项（逐项签字后才可生产发布）
+  signoffs:
+    marketProductReview: false
+    paymentAccount: false
+    shippingPricing: false
+    taxInvoicePolicy: false
+    privacyOwner: false
+    adminAccount: false
+    domainHttps: false
+    emailNotification: false
+    backupRestoreDrill: false
+    orderRefundDrill: false
+
+deploy:
+  cloud:
+    provider: aws-lightsail
+    region: ap-northeast-1
+  backup:
+    frequency: daily
+    retentionDays: 14

@@ -1,0 +1,154 @@
+# IN先生 实例部署（{{SITE_DOMAIN}} · 商户专属）
+# 服务器：AWS Lightsail 东京 35.79.20.20（Amazon Linux 2023，2 vCPU / 4GB）
+# 用法：cp .env.example .env（填好密钥）&& docker compose up -d --build
+# 注意：构建上下文为仓库根目录（../../../），共用 deploy/shared 的 Dockerfile。
+
+name: ezstart-{{INSTANCE_ID}}
+
+# api / migrate / worker 共用同一个镜像（Dockerfile.node）。
+# 关键：migrate 与 worker 必须复用 api 的镜像标签，不能各自 build —— 否则只重建 api 时
+# migrate 会静默沿用旧镜像，出现"迁移没跑，API 却要求新迁移"的启动拒绝。
+x-node-build: &node-build
+  context: ../../..
+  dockerfile: deploy/shared/Dockerfile.node
+
+services:
+  # ---------- 数据库（本地 Docker 部署，不暴露公网） ----------
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ezstart}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ezstart}
+    volumes:
+      # PostgreSQL 18+ 建议把卷挂在 /var/lib/postgresql（数据在其子目录内，方便 pg_upgrade）
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ezstart} -d ${POSTGRES_DB:-ezstart}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # 数据库不对公网暴露。如需临时本机调试，取消下一行注释（仅绑定本机回环）：
+    # ports: ["127.0.0.1:5432:5432"]
+
+  # ---------- 一次性：数据库迁移（Prisma migrate deploy） ----------
+  migrate:
+    image: ezstart-{{INSTANCE_ID}}-api
+    command: ["node", "node_modules/prisma/build/index.js", "migrate", "deploy", "--config", "packages/database/prisma.config.ts"]
+    restart: "no"
+    environment: &node-env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ezstart}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ezstart}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------- 核心 API ----------
+  api:
+    build: *node-build
+    image: ezstart-{{INSTANCE_ID}}-api
+    command: ["node", "dist/apps/api/src/main.js"]
+    restart: unless-stopped
+    environment:
+      <<: *node-env
+      NODE_ENV: production
+      PORT: "3001"
+      HOST: "0.0.0.0"
+      INSTANCE_ID: ${INSTANCE_ID:?请在 .env 设置 INSTANCE_ID}
+      APP_ORIGIN: https://${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      # 后台独立域名：写入来源校验与邀请/重设链接都用它，缺了后台登录会被 403
+      ADMIN_ORIGIN: https://admin.${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      IDENTITY_ENCRYPTION_KEY: ${IDENTITY_ENCRYPTION_KEY:?请在 .env 设置 IDENTITY_ENCRYPTION_KEY}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+      # 承运商签名回传密钥 JSON；留空时所有承运商回调返回 404（安全默认）
+      CARRIER_WEBHOOK_SECRETS: ${CARRIER_WEBHOOK_SECRETS:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # 容器内自检：DB 连不上时 ready 返回 503，compose 就不会把后台/前台挂上去
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --timeout=3 http://127.0.0.1:3001/api/v1/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # ---------- 通知 Worker（需要完整 SMTP 配置，配好后用 --profile smtp 启动） ----------
+  worker:
+    profiles: ["smtp"]
+    image: ezstart-{{INSTANCE_ID}}-api
+    command: ["node", "dist/apps/worker/src/main.js"]
+    restart: unless-stopped
+    environment:
+      <<: *node-env
+      NODE_ENV: production
+      APP_ORIGIN: https://${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      ADMIN_ORIGIN: https://admin.${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      INSTANCE_ID: ${INSTANCE_ID:?请在 .env 设置 INSTANCE_ID}
+      IDENTITY_ENCRYPTION_KEY: ${IDENTITY_ENCRYPTION_KEY:?请在 .env 设置 IDENTITY_ENCRYPTION_KEY}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # ---------- 管理后台 ----------
+  admin:
+    build:
+      context: ../../..
+      dockerfile: deploy/shared/Dockerfile.next
+      args:
+        APP_DIR: apps/admin
+        APP_NAME: "@ezstart/admin"
+        # 必须与下面 environment 里的 API_INTERNAL_ORIGIN 一致：该地址会被写进构建产物
+        API_INTERNAL_ORIGIN: http://api:3001
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_ORIGIN: http://api:3001
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ---------- IN先生 顾客前台 ----------
+  storefront:
+    build:
+      context: ../../..
+      dockerfile: deploy/shared/Dockerfile.next
+      args:
+        APP_DIR: apps/storefront-{{INSTANCE_ID}}
+        APP_NAME: "@ezstart/storefront-{{INSTANCE_ID}}"
+        API_INTERNAL_ORIGIN: http://api:3001
+    command: ["node", "../../node_modules/next/dist/bin/next", "start", "--hostname", "0.0.0.0", "--port", "3002"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_ORIGIN: http://api:3001
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ---------- 反向代理 + 自动 HTTPS（Let's Encrypt） ----------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - admin
+      - storefront
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

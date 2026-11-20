@@ -1,0 +1,23 @@
+# 实例版本清单（P4 批量升级输入）
+#
+# 用途：记录每个独立实例的当前版本与发布分组，供 upgrade-instances.mjs 生成升级计划。
+# 注意：这里不存任何客户业务数据或密钥，只存版本号，绝不做跨实例数据中台。
+# group 闭集：pilot（首批/自测）→ canary（小批）→ standard（全量）
+
+instances:
+  - id: mrinhk
+    group: pilot
+    coreVersion: 0.1.0
+    themeSchemaVersion: 1
+    manifestSchemaVersion: 1
+    themeMigrationReviewed: false
+    dir: deploy/merchants/mrinhk
+
+# 新增实例示例（复制上面一段并填写实际版本）：
+# - id: client-hk-001
+#   group: canary
+#   coreVersion: 0.1.0
+#   themeSchemaVersion: 1
+#   manifestSchemaVersion: 1
+#   themeMigrationReviewed: false
+#   dir: deploy/merchants/client-hk-001

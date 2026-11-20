@@ -66,4 +66,28 @@
 - 复用现有 `IMPLEMENTATION_PROGRESS` 的部署/升级/回滚要求与 `PRIVATE_DEPLOYMENT` 的隔离规则。
 - 工具链是"把已有规范脚本化"，不改变独立部署与数据隔离边界。
 
+## 8. 落地状态（P4 已实现）
+
+以下为已落地的可运行最小闭环，规则层在 `packages/domain`，IO 在 `scripts`，模板由 mrinhk 生产资产参数化而来。
+
+| 能力 | 入口 | 产物 |
+|---|---|---|
+| 标准部署包 | `pnpm instance:bundle <instance.yaml> [--out <dir>] [--require-launch-ready]` | 7 件制品（compose / Caddyfile / env 模板 / deploy.sh / DEPLOY.md / 归一化配置 / 包清单） |
+| 一键起实例 | `pnpm instance:init <instance.yaml> [--execute] [--scaffold]` | 生成包 + 注入 `.env`（chmod 600）；默认 dry-run，生产交付强制校验 10 项上线签字 |
+| 批量升级 | `pnpm fleet:upgrade <inventory.yaml> <version> [--execute]` | 按 pilot→canary→standard 输出计划；跨 major / 降级 / schema 未确认一律阻断 |
+
+关联文件：
+
+- 规则层：`packages/domain/src/deployment.ts`（闭集、版本兼容、分组计划、包完整性）
+- 模板：`deploy/templates/instance/*.tpl`（参数化自 mrinhk 已验证资产，LF 行尾）
+- 版本清单示例：`deploy/instances.yaml`
+- 测试：`tests/deployment.test.ts`（10 项，含 major 阻断、降级阻断、主题迁移确认、分组顺序）
+
+### 安全与边界
+
+- `.env` 密钥由 CLI 本地生成（密码 / UUID / 32 字节加密密钥），只登记键名不写值；已存在则拒绝覆盖。
+- 目标目录非空时默认拒绝生成，保护现有生产实例；仅显式 `--force` 才重建包（`.env` 仍受独立保护）。
+- `--execute` 才调用 docker；批量升级失败即停并提示 `deploy.sh --rollback`，数据库迁移只前进。
+- 所有判断在 domain 规则层，脚本只做 IO，避免"脚本说能升、运行时拒绝"的规则漂移。
+
 > 本规范为产品设计参考，具体实施请结合公司合规与法务要求确认。

@@ -25,7 +25,25 @@ deploy/
 - 商户间不通数据、不共享管理员账号；运维操作前必须确认目标商户目录。
 - 商户前台代码在 `apps/storefront-<merchant>`，按客户单独开发；核心（api/admin/worker）共用同一套镜像构建。
 
-## 新增一个商户的步骤
+## 交付工具链（P4，推荐新商户使用）
+
+已验证的 mrinhk 资产已参数化为模板，配合实例配置源可一条命令生成完整实例目录：
+
+```bash
+pnpm instance:validate deploy/merchants/<新商户>/instance.yaml --require-launch-ready
+pnpm instance:init     deploy/merchants/<新商户>/instance.yaml          # 默认演练，不启动容器
+pnpm instance:init     deploy/merchants/<新商户>/instance.yaml --execute  # 确认后真正起实例
+pnpm fleet:upgrade     deploy/instances.yaml 0.2.0                       # 批量升级演练
+```
+
+- 模板：`templates/instance/*.tpl`（由 mrinhk 的 compose / Caddyfile / deploy.sh / .env.example 参数化而来）。
+- 生成物包含 7 件制品；密钥由工具链本地生成并写入 `.env`（chmod 600），**不进 Git**。
+- 目标目录非空时默认拒绝覆盖；已有实例的 `.env` 永远不会被自动重写。
+- 规范见 [交付工具链规范](../docs/01-产品文档/DELIVERY_TOOLCHAIN_SPEC.md)。
+
+下面保留的"复制模板"流程是历史人工方式，适用于需要深度工程级定制（B/C 类）的场景；A 类配置级交付优先用上面的工具链。
+
+## 新增一个商户的步骤（人工方式，B/C 类定制适用）
 
 1. 复制模板：`cp -r merchants/mrinhk merchants/<新商户>`
 2. 修改该商户目录下：
