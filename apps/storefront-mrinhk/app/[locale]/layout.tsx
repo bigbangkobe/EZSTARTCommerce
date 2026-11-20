@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { site, whatsappLink } from '../../lib/site';
+import { site } from '../../lib/site';
 import {
   LOCALES, HTML_LANG, OG_LOCALE, altPaths, copyFor, isLocale, localePath, resolveLocale, type Locale,
 } from '../../lib/i18n';
 import { fetchPages } from '../../lib/content';
+import { fetchTheme, themeCssVariables } from '../../lib/theme';
 import CartLink from '../cart-link';
 import LocaleSwitcher from '../locale-switcher';
 import MemberLink from '../member-link';
@@ -23,16 +24,21 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   const { locale: raw } = await params;
   const locale = isLocale(raw) ? raw : 'zh-HK';
   const t = copyFor[locale];
+  // 主题配置覆盖品牌名；未配置时用 site.ts 兜底，行为与改造前一致。
+  const theme = await fetchTheme().catch(() => null);
+  const brandName = theme?.brand.name ?? site.brand;
+  const brandLatin = theme?.brand.brandLatin ?? site.brandLatin;
+  const brandFull = `${brandName} ${brandLatin}`.trim();
   const base = new URL(`https://${site.domain}`);
   return {
     metadataBase: base,
-    title: { default: t.seo.home.title, template: `%s | ${site.brand} ${site.brandLatin}` },
+    title: { default: t.seo.home.title, template: `%s | ${brandFull}` },
     description: t.seo.home.description,
-    applicationName: `${site.brand} ${site.brandLatin}`,
+    applicationName: brandFull,
     alternates: { canonical: localePath(locale), languages: altPaths('') },
     openGraph: {
       type: 'website',
-      siteName: `${site.brand} ${site.brandLatin}`,
+      siteName: brandFull,
       locale: OG_LOCALE[locale],
       title: t.seo.home.title,
       description: t.seo.home.description,
@@ -58,6 +64,14 @@ export default async function LocaleLayout({ children, params }: {
   // 而不是 Next 内置的裸 404。这里只为渲染外壳选一个语言。
   const locale: Locale = resolveLocale(raw);
   const t = copyFor[locale];
+  // 主题配置覆盖品牌/配色/WhatsApp；未配置时全部回退 site.ts 与默认 tokens。
+  const theme = await fetchTheme().catch(() => null);
+  const brandName = theme?.brand.name ?? site.brand;
+  const brandLatin = theme?.brand.brandLatin ?? site.brandLatin;
+  const whatsappNumber = theme?.brand.whatsappNumber ?? site.whatsappNumber;
+  const whatsappGreeting = theme?.brand.whatsappGreeting ?? site.whatsappGreeting;
+  const waLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappGreeting)}`;
+  const cssVars = theme ? themeCssVariables(theme) : null;
   // 已发布内容页由后台维护：页脚只列当前语言下真实存在的地址，撤下的页面自动消失。
   const pages = await fetchPages(locale).catch(() => []);
 
@@ -75,12 +89,12 @@ export default async function LocaleLayout({ children, params }: {
           href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='40' fill='%23BC002D'/%3E%3C/svg%3E"
         />
       </head>
-      <body>
+      <body style={cssVars ?? undefined}>
         <a className="skip-link" href="#main">{t.nav.skipToContent}</a>
         <header className="site-header">
           <Link className="brand" href={localePath(locale)} hrefLang={locale}>
             <span className="dot" />
-            {site.brand}
+            {brandName}
           </Link>
           <nav className="site-nav" aria-label={t.nav.home}>
             <Link href={localePath(locale, '/products')} hrefLang={locale}>{t.nav.products}</Link>
@@ -96,7 +110,7 @@ export default async function LocaleLayout({ children, params }: {
         <footer className="site-footer">
           <div className="seal">
             <span className="dot" />
-            {site.brand} · {site.domain}
+            {brandName} · {site.domain}
           </div>
           {pages.length > 0 && (
             <nav className="footer-nav" aria-label={t.nav.home}>
@@ -110,10 +124,10 @@ export default async function LocaleLayout({ children, params }: {
               ))}
             </nav>
           )}
-          <div>© 2026 {site.brandLatin}. {t.footer.rights}.</div>
+          <div>© 2026 {brandLatin}. {t.footer.rights}.</div>
         </footer>
         <a
-          href={whatsappLink}
+          href={waLink}
           target="_blank"
           rel="noopener noreferrer"
           aria-label={t.common.whatsapp}
@@ -121,7 +135,7 @@ export default async function LocaleLayout({ children, params }: {
           className="btn btn-primary"
         >
           <span style={{ display: 'inline-flex', width: 22, height: 22 }}>{WHATSAPP_ICON}</span>
-          {site.whatsappNumber}
+          {whatsappNumber}
         </a>
       </body>
     </html>

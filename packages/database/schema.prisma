@@ -1658,3 +1658,37 @@ model ContentRelease {
   seq       Int      @default(0)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }
+
+/// 主题配置（配置驱动前台）。单行 id=1：draftConfig 是后台草稿，
+/// publishedSnapshot 是前台唯一读取的已发布快照——保存草稿永远不改变线上外观。
+/// 仿 MerchandisingLayout 的草稿/快照/版本模式，保证发布可回滚、配置不是单点故障。
+model ThemeConfig {
+  id                String         @id @default(uuid()) @db.Uuid
+  /// 固定单行：所有读取都按 id=1，保证一个实例一份主题。
+  singletonKey      String         @unique @default("main")
+  status            String         @default("draft")
+  draftConfig       Json
+  publishedSnapshot Json?
+  version           Int            @default(1)
+  publishedAt       DateTime?      @db.Timestamptz(3)
+  publishedBy       String?        @db.Uuid
+  createdBy         String?        @db.Uuid
+  updatedBy         String?        @db.Uuid
+  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(3)
+  versions          ThemeVersion[]
+}
+
+/// 主题发布历史：snapshot 不可变，按 version 递增；线上只认 theme.publishedSnapshot。
+model ThemeVersion {
+  id          String      @id @default(uuid()) @db.Uuid
+  themeId     String      @db.Uuid
+  theme       ThemeConfig @relation(fields: [themeId], references: [id], onDelete: Cascade)
+  version     Int
+  snapshot    Json
+  note        String?
+  publishedAt DateTime    @db.Timestamptz(3)
+  publishedBy String?     @db.Uuid
+  @@unique([themeId, version])
+  @@index([themeId, publishedAt])
+}

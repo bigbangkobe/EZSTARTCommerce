@@ -173,7 +173,7 @@ export function MerchandisingConsole() {
   return <main>
     <h1>页面陈列</h1>
     <nav><a href="/admin/content">内容页</a><a href="/admin/catalog">商品</a><a href="/admin/media">媒体库</a>
-      <a href="/admin/settings">店铺设置</a></nav>
+      <a href="/admin/theme">主题</a><a href="/admin/settings">店铺设置</a></nav>
     <p><small>陈列决定页面展示哪些商品、按什么顺序。首页、分类页与专题页各有一份版面：分类版面只能选本分类商品，专题版面只能选本专题商品，动态区块的候选也同样受限。保存只改草稿，发布后才对外生效，撤下会回到主题默认布局。</small></p>
     {!ready && <p>加载中…</p>}
     {ready && !permissions.includes('content.read') && <section><h2>没有内容读取权限</h2><p>请联系店主分配内容权限。</p></section>}

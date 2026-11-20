@@ -1099,5 +1099,43 @@ class ContractTests(unittest.TestCase):
                                {"data": dict(page, collection=dict(page["collection"], enabled=True)),
                                 "meta": {"requestId": "req-test"}}))
 
+    def test_theme_splits_draft_from_live_and_keeps_the_public_read_open(self):
+        paths = SPEC["paths"]
+        draft = paths["/admin/theme"]
+        self.assertEqual("content.read", draft["get"]["x-permission"])
+        self.assertEqual([{"AdminSession": []}], draft["get"]["security"])
+        self.assertEqual("content.write", draft["put"]["x-permission"])
+        for path in ("/admin/theme/publish", "/admin/theme/unpublish", "/admin/theme/rollback"):
+            operation = paths[path]["post"]
+            self.assertEqual("content.publish", operation["x-permission"], path)
+            # 发布、撤下、回滚都会改变线上外观：必须带 CSRF，且只认有发布权限的角色。
+            self.assertEqual([{"AdminSession": [], "CsrfToken": []}], operation["security"], path)
+        public = paths["/storefront/theme"]["get"]
+        self.assertNotIn("security", public)
+        # 主题按实例下发、不随语言变化，公开读因此不接受 locale 参数。
+        self.assertNotIn("parameters", public)
+
+        config = {"brand": {"name": "IN先生", "whatsappNumber": "85260474794"},
+                  "tokens": {"primaryColor": "#bc002d", "inkColor": "#1a1a1a", "paperColor": "#f7f5f0",
+                             "fontPair": "editorial-jp", "radius": 16},
+                  "homeSections": [{"type": "hero"}, {"type": "product_grid", "params": {"limit": 6}}]}
+        self.assertEqual([], errors("ThemeConfigInput", config))
+        # 区块类型是闭集：新增类型必须同时改契约与领域注册表，否则前台会渲染出空白区块。
+        self.assertTrue(errors("ThemeConfigInput", dict(config, homeSections=[{"type": "custom_html"}])))
+        # 颜色只接受 6 位十六进制，防止把任意 CSS 注入前台。
+        bad = copy.deepcopy(config)
+        bad["tokens"]["primaryColor"] = "red; background:url(x)"
+        self.assertTrue(errors("ThemeConfigInput", bad))
+        self.assertTrue(errors("ThemeConfigInput", dict(config, extra=True)))
+
+        doc = {"status": "draft", "version": 1, "config": None, "published": None,
+               "publishedAt": None, "versions": [], "updatedAt": None}
+        self.assertEqual([], errors("ThemeDocView", doc))
+        self.assertTrue(errors("ThemeDocView", dict(doc, draftOnly=True)))
+        published = dict(doc, status="published", version=3, config=config,
+                         published={"version": 3, "publishedAt": NOW}, publishedAt=NOW)
+        self.assertEqual([], errors("ThemeDocView", published))
+        self.assertEqual([], errors("PublicThemeView", {"version": 3, "config": config}))
+        self.assertTrue(errors("PublicThemeView", {"version": 3}))
 if __name__ == "__main__":
     unittest.main()

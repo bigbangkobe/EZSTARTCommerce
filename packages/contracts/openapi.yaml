@@ -1425,6 +1425,106 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
+  /admin/theme:
+    get:
+      tags: [Content]
+      operationId: getThemeDraft
+      summary: Get the storefront theme draft, live version and publish history
+      security: [{ AdminSession: [] }]
+      x-permission: content.read
+      responses:
+        '200': { $ref: '#/components/responses/ThemeSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+    put:
+      tags: [Content]
+      operationId: saveThemeDraft
+      summary: Replace the storefront theme draft (does not change the live snapshot)
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThemeWriteRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ThemeSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/theme/publish:
+    post:
+      tags: [Content]
+      operationId: publishTheme
+      summary: Publish the theme draft as the live snapshot
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.publish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThemePublishRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ThemeSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/theme/unpublish:
+    post:
+      tags: [Content]
+      operationId: unpublishTheme
+      summary: Withdraw the live theme snapshot and keep the draft
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.publish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThemeWithdrawRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ThemeSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/theme/rollback:
+    post:
+      tags: [Content]
+      operationId: rollbackTheme
+      summary: Roll back the live theme to a previous published version
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.publish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThemeRollbackRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ThemeSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/theme:
+    get:
+      tags: [Storefront]
+      operationId: getStorefrontTheme
+      summary: Get the published storefront theme snapshot (404 when none published)
+      responses:
+        '200': { $ref: '#/components/responses/PublicThemeSuccess' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+
   /admin/import-jobs:
     post:
       tags: [Imports]
@@ -4705,6 +4805,26 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/PublicCollectionListEnvelope' }
+    ThemeSuccess:
+      description: Theme draft, live version and publish history
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ThemeDocEnvelope' }
+    PublicThemeSuccess:
+      description: Published theme snapshot the storefront renders; 404 when nothing is published
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: public, max-age=30
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicThemeEnvelope' }
     BrandListSuccess:
       description: Brand list
       headers:
@@ -7075,6 +7195,149 @@ components:
       properties:
         expectedVersion: { type: integer, minimum: 1 }
         reason: { type: string, minLength: 1, maxLength: 500 }
+    ThemeSectionInput:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [hero, about, product_grid, rich_text, faq, content_card] }
+        params: { type: object, maxProperties: 20, additionalProperties: { type: [string, number, boolean] } }
+    ThemeConfigInput:
+      type: object
+      additionalProperties: false
+      required: [brand, tokens, homeSections]
+      properties:
+        brand:
+          type: object
+          additionalProperties: false
+          required: [name]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 60 }
+            brandLatin: { type: string, maxLength: 60 }
+            tagline: { type: string, maxLength: 200 }
+            logoMediaId: { type: [string, 'null'], format: uuid }
+            faviconMediaId: { type: [string, 'null'], format: uuid }
+            whatsappNumber: { type: string, maxLength: 30 }
+            whatsappGreeting: { type: string, maxLength: 200 }
+        tokens:
+          type: object
+          additionalProperties: false
+          required: [primaryColor, inkColor, paperColor, fontPair, radius]
+          properties:
+            primaryColor: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+            inkColor: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+            paperColor: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+            fontPair: { type: string, enum: [editorial-jp, modern-sans, classic-serif] }
+            radius: { type: number, minimum: 0, maximum: 64 }
+        navigation: { type: array, maxItems: 12, items: { type: string, pattern: '^[a-z][a-z0-9-]{0,31}$' } }
+        homeSections: { type: array, maxItems: 12, items: { $ref: '#/components/schemas/ThemeSectionInput' } }
+    ThemeWriteRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, config]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        config: { $ref: '#/components/schemas/ThemeConfigInput' }
+    ThemePublishRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        note: { type: [string, 'null'], maxLength: 500 }
+    ThemeWithdrawRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    ThemeRollbackRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, version]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        version: { type: integer, minimum: 1 }
+    ThemeConfigView:
+      type: object
+      additionalProperties: false
+      required: [brand, tokens, homeSections]
+      description: Theme configuration as stored by the server (draft or published)
+      properties:
+        brand:
+          type: object
+          additionalProperties: false
+          required: [name]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 60 }
+            brandLatin: { type: string, maxLength: 60 }
+            tagline: { type: string, maxLength: 200 }
+            logoMediaId: { type: [string, 'null'], format: uuid }
+            faviconMediaId: { type: [string, 'null'], format: uuid }
+            whatsappNumber: { type: string, maxLength: 30 }
+            whatsappGreeting: { type: string, maxLength: 200 }
+        tokens:
+          type: object
+          additionalProperties: false
+          required: [primaryColor, inkColor, paperColor, fontPair, radius]
+          properties:
+            primaryColor: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+            inkColor: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+            paperColor: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+            fontPair: { type: string, enum: [editorial-jp, modern-sans, classic-serif] }
+            radius: { type: number, minimum: 0, maximum: 64 }
+        navigation: { type: array, maxItems: 12, items: { type: string, pattern: '^[a-z][a-z0-9-]{0,31}$' } }
+        homeSections: { type: array, maxItems: 12, items: { $ref: '#/components/schemas/ThemeSectionInput' } }
+    ThemeVersionView:
+      type: object
+      additionalProperties: false
+      required: [version, note, publishedAt]
+      properties:
+        version: { type: integer, minimum: 1 }
+        note: { type: [string, 'null'], maxLength: 500 }
+        publishedAt: { type: string, format: date-time }
+    ThemeDocView:
+      type: object
+      additionalProperties: false
+      required: [status, version, config, published, publishedAt, versions, updatedAt]
+      properties:
+        status: { type: string, enum: [draft, published] }
+        version: { type: integer, minimum: 1 }
+        config: { anyOf: [{ $ref: '#/components/schemas/ThemeConfigView' }, { type: 'null' }] }
+        published:
+          anyOf:
+            - type: object
+              additionalProperties: false
+              required: [version]
+              properties:
+                version: { type: integer, minimum: 1 }
+                publishedAt: { type: [string, 'null'], format: date-time }
+            - type: 'null'
+        publishedAt: { type: [string, 'null'], format: date-time }
+        versions: { type: array, maxItems: 20, items: { $ref: '#/components/schemas/ThemeVersionView' } }
+        updatedAt: { type: [string, 'null'], format: date-time }
+    ThemeDocEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/ThemeDocView' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicThemeView:
+      type: object
+      additionalProperties: false
+      required: [version, config]
+      properties:
+        version: { type: integer, minimum: 1 }
+        config: { $ref: '#/components/schemas/ThemeConfigView' }
+    PublicThemeEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PublicThemeView' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     ImportCreateRequest:
       type: object
       additionalProperties: false

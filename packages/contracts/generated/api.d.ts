@@ -927,6 +927,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/theme": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the storefront theme draft, live version and publish history */
+        get: operations["getThemeDraft"];
+        /** Replace the storefront theme draft (does not change the live snapshot) */
+        put: operations["saveThemeDraft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/theme/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish the theme draft as the live snapshot */
+        post: operations["publishTheme"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/theme/unpublish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw the live theme snapshot and keep the draft */
+        post: operations["unpublishTheme"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/theme/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Roll back the live theme to a previous published version */
+        post: operations["rollbackTheme"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storefront/theme": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the published storefront theme snapshot (404 when none published) */
+        get: operations["getStorefrontTheme"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/import-jobs": {
         parameters: {
             query?: never;
@@ -4273,6 +4359,110 @@ export interface components {
             expectedVersion: number;
             reason: string;
         };
+        ThemeSectionInput: {
+            /** @enum {string} */
+            type: "hero" | "about" | "product_grid" | "rich_text" | "faq" | "content_card";
+            params?: {
+                [key: string]: string | number | boolean;
+            };
+        };
+        ThemeConfigInput: {
+            brand: {
+                name: string;
+                brandLatin?: string;
+                tagline?: string;
+                /** Format: uuid */
+                logoMediaId?: string | null;
+                /** Format: uuid */
+                faviconMediaId?: string | null;
+                whatsappNumber?: string;
+                whatsappGreeting?: string;
+            };
+            tokens: {
+                primaryColor: string;
+                inkColor: string;
+                paperColor: string;
+                /** @enum {string} */
+                fontPair: "editorial-jp" | "modern-sans" | "classic-serif";
+                radius: number;
+            };
+            navigation?: string[];
+            homeSections: components["schemas"]["ThemeSectionInput"][];
+        };
+        ThemeWriteRequest: {
+            expectedVersion: number;
+            config: components["schemas"]["ThemeConfigInput"];
+        };
+        ThemePublishRequest: {
+            expectedVersion: number;
+            note?: string | null;
+        };
+        ThemeWithdrawRequest: {
+            expectedVersion: number;
+            reason: string;
+        };
+        ThemeRollbackRequest: {
+            expectedVersion: number;
+            version: number;
+        };
+        /** @description Theme configuration as stored by the server (draft or published) */
+        ThemeConfigView: {
+            brand: {
+                name: string;
+                brandLatin?: string;
+                tagline?: string;
+                /** Format: uuid */
+                logoMediaId?: string | null;
+                /** Format: uuid */
+                faviconMediaId?: string | null;
+                whatsappNumber?: string;
+                whatsappGreeting?: string;
+            };
+            tokens: {
+                primaryColor: string;
+                inkColor: string;
+                paperColor: string;
+                /** @enum {string} */
+                fontPair: "editorial-jp" | "modern-sans" | "classic-serif";
+                radius: number;
+            };
+            navigation?: string[];
+            homeSections: components["schemas"]["ThemeSectionInput"][];
+        };
+        ThemeVersionView: {
+            version: number;
+            note: string | null;
+            /** Format: date-time */
+            publishedAt: string;
+        };
+        ThemeDocView: {
+            /** @enum {string} */
+            status: "draft" | "published";
+            version: number;
+            config: components["schemas"]["ThemeConfigView"] | null;
+            published: {
+                version: number;
+                /** Format: date-time */
+                publishedAt?: string | null;
+            } | null;
+            /** Format: date-time */
+            publishedAt: string | null;
+            versions: components["schemas"]["ThemeVersionView"][];
+            /** Format: date-time */
+            updatedAt: string | null;
+        };
+        ThemeDocEnvelope: {
+            data: components["schemas"]["ThemeDocView"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        PublicThemeView: {
+            version: number;
+            config: components["schemas"]["ThemeConfigView"];
+        };
+        PublicThemeEnvelope: {
+            data: components["schemas"]["PublicThemeView"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         ImportCreateRequest: {
             fileObjectKey: string;
             fileSha256: string;
@@ -6510,6 +6700,26 @@ export interface components {
                 "application/json": components["schemas"]["PublicCollectionListEnvelope"];
             };
         };
+        /** @description Theme draft, live version and publish history */
+        ThemeSuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ThemeDocEnvelope"];
+            };
+        };
+        /** @description Published theme snapshot the storefront renders; 404 when nothing is published */
+        PublicThemeSuccess: {
+            headers: {
+                "Cache-Control"?: "public, max-age=30";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicThemeEnvelope"];
+            };
+        };
         /** @description Brand list */
         BrandListSuccess: {
             headers: {
@@ -8217,6 +8427,122 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getThemeDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["ThemeSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    saveThemeDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemeWriteRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ThemeSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    publishTheme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemePublishRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ThemeSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    unpublishTheme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemeWithdrawRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ThemeSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    rollbackTheme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemeRollbackRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ThemeSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getStorefrontTheme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicThemeSuccess"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["UnexpectedError"];
         };
     };

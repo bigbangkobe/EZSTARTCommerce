@@ -78,6 +78,16 @@ export class StorefrontController extends ManagementHttp {
   }
 
   /**
+   * 已发布主题：未发布时 404，前台回退内置默认主题。
+   * 缓存 30 秒与陈列同档：主题变更最多半分钟生效。
+   */
+  @Get('theme')
+  async theme(@Req() request: ApiRequest, @Res() response: ServerResponse) {
+    response.setHeader('Cache-Control', 'public, max-age=30');
+    this.send(response, request, 200, await this.front().theme());
+  }
+
+  /**
    * 首页陈列：未发布时 404，前台据此退回主题默认布局（配置没做好不能把首页打空）。
    * 缓存 30 秒与重定向清单同档：陈列变更最多半分钟生效，但商品资格失效靠重新读取收敛。
    */

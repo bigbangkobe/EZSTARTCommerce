@@ -8,6 +8,7 @@ import {
   type MerchandisingSection,
 } from '../../../../packages/domain/src/merchandising.js';
 import { collectionListable } from '../../../../packages/domain/src/collections.js';
+import { themeFromSnapshot } from '../../../../packages/domain/src/theme.js';
 import {
   fulfilledSales30d, selectProducts, sellableByIds, sellablePool, sellableWhere,
   type SellableScope,
@@ -309,6 +310,22 @@ export class StorefrontService {
         products: selection.rows.map(row => this.publicView(row, locale, fallback)) });
     }
     return output;
+  }
+
+  /**
+   * 已发布主题快照：前台唯一读取的主题来源。
+   * 未发布/无快照时返回 404，前台据此回退到内置默认主题——配置缺失绝不把页面打空。
+   * 主题是品牌外观，与商品可售市场无关，因此不做市场判断。
+   */
+  async theme() {
+    return this.run(async tx => {
+      const row = await tx.themeConfig.findUnique({ where: { singletonKey: 'main' } });
+      if (!row || row.status !== 'published' || !row.publishedSnapshot) throw new AuthError(404, 'NOT_FOUND');
+      const snapshot = row.publishedSnapshot as unknown as { version?: number };
+      // 二次校验：即便快照因历史原因损坏，也回退默认主题，不把坏配置送到前台。
+      const config = themeFromSnapshot(row.publishedSnapshot);
+      return { version: snapshot.version ?? row.version, config };
+    });
   }
 
   /** 公开的陈列接口只服务首页；分类版面随分类页一起下发，不额外开放按 id 读取。 */
