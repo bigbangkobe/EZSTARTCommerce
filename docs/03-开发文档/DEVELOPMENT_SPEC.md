@@ -332,7 +332,7 @@ packages/
 |---|---|---|
 | M00 | 后台登录、员工生命周期、权限、MFA、审计、会话撤销 | [M00](../01-产品文档/modules/M00_ADMIN_ACCESS.md)；本规格第 7 节 |
 | M01 | 店铺初始化、三语、市场开关、币种/时区、配置版本 | [M01](../01-产品文档/modules/M01_STORE_LOCALE.md)；第 2 节 |
-| M02 | 响应式独立前台、公开 API、预览、SEO/URL 输出 | [M02](../01-产品文档/modules/M02_STOREFRONT.md)、`design/STOREFRONT.md` |
+| M02 | 响应式独立前台、公开 API、预览、SEO/URL 输出 | [M02](../01-产品文档/modules/M02_STOREFRONT.md)、[`docs/02-设计文档/STOREFRONT.md`](../02-设计文档/STOREFRONT.md) |
 | M03 | 商品/变体/SKU/分类/品牌/多语言/可售校验 | [M03](../01-产品文档/modules/M03_CATALOG.md)；第 4 节 |
 | M04 | CMS/首页陈列草稿、预览、发布、定时、回滚、重定向 | [M04](../01-产品文档/modules/M04_CONTENT_CMS.md)；第 8.1–8.2 节 |
 | M05 | 商品批量导入预览、行级错误、部分/原子执行和受控导出 | [M05](../01-产品文档/modules/M05_IMPORT_EXPORT.md)；第 8.3 节 |
