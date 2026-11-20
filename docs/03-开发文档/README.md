@@ -8,7 +8,9 @@
 |---|---|
 | [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md) | 开发执行规格：技术栈、默认规则、接口/数据约定、金额与状态机、权限、异常恢复、生产门槛（跨模块工程契约） |
 | [API_SPEC.md](API_SPEC.md) | API 接口契约：路由、DTO、权限、幂等、错误响应、交易规则；OpenAPI 初稿见 `packages/contracts/openapi.yaml` |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 架构基线：模块边界、技术建议、外部集成、升级方式 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 技术架构 v2.0：AWS 独立部署、应用/数据/安全/可观测性、烟草合规与演进路线 |
+| [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) | mrinhk 上线开发方案与排期 v1.0：**已定档方案 C（7 周）**、WBS、7 个门禁、依赖与验收口径 |
+| [PAYMENT_ADAPTER_SPEC.md](PAYMENT_ADAPTER_SPEC.md) | 支付适配器与后台可配置规格：适配器契约、Provider Registry、SecretResolver、回调幂等、客户自助配置边界 |
 | [DATA_MODEL.md](DATA_MODEL.md) | 数据模型方案：核心实体、关系、状态模型、治理要求 |
 | [ADMIN_IDENTITY_LIFECYCLE.md](ADMIN_IDENTITY_LIFECYCLE.md) | 后台身份生命周期契约：初始化、邀请、MFA、会话 |
 | [IDENTITY_SECURITY_POLICY.md](IDENTITY_SECURITY_POLICY.md) | 身份安全参数 identity-v1 |

@@ -14,7 +14,7 @@
 | [INSTANCE_CONFIG_SPEC.md](INSTANCE_CONFIG_SPEC.md) | 实例配置规范：一份配置驱动部署/主题/业务的机器可读格式 |
 | [FRONTEND_CONFIG_ENGINE_SPEC.md](FRONTEND_CONFIG_ENGINE_SPEC.md) | 前台配置引擎规格：ThemeConfig + 区块注册表 + 发布/回滚 |
 | [DELIVERY_TOOLCHAIN_SPEC.md](DELIVERY_TOOLCHAIN_SPEC.md) | 交付工具链规范：标准部署包 + 一键起实例 + 批量升级 |
-| [COMMERCIAL_MODEL.md](COMMERCIAL_MODEL.md) | 商业分层与报价模型：A/B/C 分层与收入结构 |
+| [COMMERCIAL_MODEL.md](COMMERCIAL_MODEL.md) | 商业分层与报价模型 v1.0（定稿）：计价项与口径、报价单模板、折扣审批与留痕、关键度量 |
 | [CLIENT_LAUNCH_INPUTS.md](CLIENT_LAUNCH_INPUTS.md) | 客户上线参数表（升级为实例配置源）：逐店需确认的输入 |
 | [DECISIONS.md](DECISIONS.md) | 首店输入与决策记录 |
 | [REQUIREMENT_RESOLUTION.md](REQUIREMENT_RESOLUTION.md) | 需求处理决议 |

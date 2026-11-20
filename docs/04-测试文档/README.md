@@ -8,6 +8,7 @@
 |---|---|
 | [TEST_STRATEGY.md](TEST_STRATEGY.md) | 测试策略与质量门禁：单元/集成/API/浏览器 E2E/安全/性能/恢复测试分层、发布门禁与证据要求 |
 | [TEST_CASES.md](TEST_CASES.md) | 测试用例矩阵：编号的单元、API、前后台 UI、全链路、安全和非功能场景 |
+| [TEST_CASES_LAUNCH.md](TEST_CASES_LAUNCH.md) | **本期上线门禁用例**（78 条）：支付适配器、密钥配置、回调幂等、COD 对账、烟草合规、部署运维、安全性能；每条用例映射到 G2–G6 门禁 |
 | [PRODUCTION_READINESS_ACCEPTANCE.md](PRODUCTION_READINESS_ACCEPTANCE.md) | 生产就绪与端到端验收清单：售后、支付对账、履约库存、后台安全、隐私、SEO/URL、市场规则、运维恢复、商品陈列 |
 
 ## 关联
