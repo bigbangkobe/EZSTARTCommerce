@@ -780,3 +780,33 @@
 - 首页 `/zh-HK` → **200**，页脚**没有**「所有內容」入口：页脚导航以 `pages.length > 0` 为前提，没有内容页时不渲染空导航。
 
 一个已知的空档：没有任何内容页时，索引页本身也没有任何站内入口（只能直接输地址）。这是刻意的——没有内容时页脚多一个「所有內容」只是把访客送到一句「暂无内容」。等运营发布第一篇内容页，页脚入口、sitemap 收录与可索引状态会一起自动生效。
+
+## 2026-11-20：配置驱动前台 P1–P4（主题配置 / 实例清单 / 交付工具链）
+
+范围：把「换一个客户就要改前台代码」变成「填一份配置」。四段各自的落地物与边界如下。
+
+**P1 主题配置（第 35 条迁移 `202611200300_theme_config`）**
+
+- `ThemeConfig` 单行（`singletonKey='main'`）+ `ThemeVersion` 版本历史。草稿 `draftConfig` 与线上 `publishedSnapshot` 分离，CHECK `theme_published_consistent` 保证 `status='published'` 必须同时有快照与发布时间——不会出现「状态说已发布、前台读到空」的中间态。
+- 域规则 `packages/domain/src/theme.ts`：区块类型注册表闭集、颜色只接受 `#RRGGBB`、字体只接受预设枚举、区块参数只允许扁平标量、品牌文案限长。`themeFromSnapshot` 遇到任何损坏结构回退 `DEFAULT_THEME`，不把坏配置送到前台。
+- 后台 `GET/PUT /admin/theme` + `POST /admin/theme/{publish,unpublish,rollback}`：读走 `content.read`，写 `content.write`，发布/撤下/回滚 `content.publish`；advisory lock + `expectedVersion` 防并发覆盖；每次发布写一条不可变 `ThemeVersion`，回滚是把旧快照重新发布成新版本（历史不改写）。
+
+**P2 前台渲染**
+
+- `GET /storefront/theme` 只返回已发布快照（未发布 404，缓存 30 秒）。`lib/theme.ts` 任何异常返回 null，由调用方回退 `site.ts`。
+- `layout.tsx` 把 tokens 注入为 body 上的 CSS 变量（`--red/--ink/--paper/--radius`），品牌名、品牌拉丁名、WhatsApp 号码与问候语改从主题读；`globals.css` 里 5 处写死的 `rgba(188,0,45,…)` 改为 `color-mix(in srgb, var(--red) …)`，否则改主色只换按钮底色、阴影仍是红的。
+- `page.tsx` 由 `homeSections` 遍历渲染（hero / about / product_grid），未配置时用与改造前完全一致的默认顺序；陈列版面仍优先于 `product_grid`，改主题不会把已发布的陈列顶掉。
+- **未完成（已在文档标注）**：`rich_text`/`faq`/`content_card` 三类区块当前安全跳过，等 CMS 内容绑定（P2 后半）；`fontPair` 只存不生效（前台仍是同一套字体）；`logoMediaId`/`faviconMediaId` 字段已留但未接媒体库；`SITE_MARKET` 与货币符号仍硬编码。
+
+**P3 实例配置源**
+
+- `packages/domain/src/instance-manifest.ts`：一份 `instance.yaml` 覆盖实例身份、品牌、主题、前台编排、业务规则、合规签字与部署参数。枚举全部复用 `store.ts`（语言/市场/时区/功能开关）与 `theme.ts`（字体/区块），不另起一套避免漂移。
+- `normalizeInstanceManifest` 严格拒绝未登记字段与非法值；`launchBlockerStatus`/`unsignedBlockers`/`canLaunch` 把「格式合法」与「可以上线」拆开——10 项阻断（市场审查、支付账户、配送计费、税费口径、隐私责任人、管理员 MFA、域名 HTTPS、邮件、备份演练、订单退款演练）未签字一律视为未确认。
+- `scripts/validate-instance-manifest.mjs`：结构校验退出 0，加 `--require-launch-ready` 时未签字退出 2（CI 与人工流程同一套判定）。参考配置 `deploy/merchants/mrinhk/instance.example.yaml` 由已上线实例反向编写。
+
+**P4 交付工具链**
+
+- `packages/domain/src/deployment.ts`：组件/发布分组/包文件/密钥变量四组闭集；`checkUpgradeCompatibility` 只放行「同 major 前进 + schema 受支持 + 主题迁移已评审」，跨 major、降级、未评审的主题 schema 变更都给理由并阻断。
+- `scripts/lib/instance-bundle.mjs` + `build-instance-bundle.mjs`：从 `deploy/templates/instance/*.tpl` 生成 7 件制品（compose/Caddyfile/deploy.sh/.env.example/DEPLOY.md/instance.yaml/bundle-manifest.json），目标目录非空默认拒绝覆盖。`init-instance.mjs` 默认 dry-run，`--execute` 才起容器；`upgrade-instances.mjs` 按 pilot→canary→standard 生成升级计划。密钥由工具本地生成写入 `.env`（chmod 600），不进 Git、不落 manifest。
+
+验证：契约 **54 项**（新增 1 项覆盖主题权限/CSRF、区块闭集、颜色白名单、草稿可空与公开视图必填）、`contracts:check` 生成物一致、Prisma schema 有效；领域单测 **27 项**（theme 6 + instance-manifest 11 + deployment 10）；全量 `node --test --test-concurrency=4` **359 项全绿**；根 tsc、后台 tsc、前台 tsc 均通过；`instance:validate` 对示例 manifest 输出「结构校验通过 / 阻断 0-10 未签字 / 未就绪」，退出码 0；`instance:bundle` 对示例 manifest 生成 7 件制品（配置哈希 `780d0344…`）。

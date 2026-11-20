@@ -115,3 +115,22 @@
 - 交易金额仍由服务端裁定，配置无法绕过价格/库存/优惠规则。
 
 > 本规格为产品设计参考，具体实施请结合公司合规与法务要求确认。
+
+## 9. 落地状态（P1 已实现，P2 部分实现）
+
+> 状态：主题配置链路（草稿 → 发布 → 前台渲染）已跑通；内容型区块与字体切换尚未落地。
+
+| 能力 | 落地物 | 状态 |
+|---|---|---|
+| 主题数据模型 | `ThemeConfig`（单行）+ `ThemeVersion`（不可变历史），第 35 条迁移 | ✅ |
+| 域规则 | `packages/domain/src/theme.ts`：区块注册表闭集、颜色白名单、字体预设、参数扁平化、坏快照回退默认 | ✅ |
+| 后台接口 | `GET/PUT /admin/theme`、`POST /admin/theme/{publish,unpublish,rollback}`，版本锁 + advisory lock + 审计 | ✅ |
+| 后台界面 | `/admin/theme`：品牌/视觉 tokens/首页区块编排/发布历史/回滚 | ✅ |
+| 前台接口 | `GET /storefront/theme`：只返回已发布快照，未发布 404，缓存 30 秒 | ✅ |
+| 前台渲染 | `layout.tsx` 注入 CSS 变量（主色/文字色/背景色/圆角）、品牌名与 WhatsApp 取自主题；`page.tsx` 按 `homeSections` 渲染 | ✅ |
+| 内容型区块 | `rich_text` / `faq` / `content_card` | ⏳ 当前安全跳过，等 CMS 内容绑定 |
+| 字体切换 | `fontPair` 已存库并校验 | ⏳ 前台仍用同一套字体 |
+| Logo / favicon | `logoMediaId` / `faviconMediaId` 字段已留 | ⏳ 未接媒体库渲染 |
+| 市场与货币收敛 | `SITE_MARKET`、货币符号 | ⏳ 仍硬编码，待 `/storefront/config` 接入 |
+
+**设计约定**：主题永远不是单点故障。接口不可达、未发布、快照损坏三种情况，前台都回退到 `site.ts` + 内置默认令牌，外观与改造前一致；后台保存草稿不会改变线上，发布才切换快照，撤下即回到默认。
