@@ -6,6 +6,11 @@ dist/
 .env
 .env.*
 !.env.example
+# 凭证类文件一律不入库（SSH 密钥、证书私钥、支付密钥导出）
+*.pem
+*.key
+*.p12
+*.pfx
 coverage/
 packages/database/src/generated/
 # 本地媒体驱动的默认落盘目录（生产走对象存储，不入库）
@@ -18,3 +23,7 @@ test-results/
 
 # 本地工作区记忆与代理数据
 .workbuddy/
+
+# 从零起实例的演练产物：含自动生成的密钥与实例专属配置，用完应删，绝不入库
+deploy/merchants/scratch-*/
+deploy/instances/*/
