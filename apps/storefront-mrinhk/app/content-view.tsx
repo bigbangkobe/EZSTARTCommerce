@@ -64,7 +64,7 @@ function BlockView({ block, sectionKey, locale }: { block: ContentBlock; section
   return null;
 }
 
-export function ContentView({ page, locale, sectionPrefix, viewport, browseHref }: {
+export function ContentView({ page, locale, sectionPrefix, viewport, browseHref, indexHref }: {
   page: Pick<ContentPage, 'pageKey' | 'title' | 'blocks'>;
   locale: Locale;
   /** 埋点用的区块前缀；预览页传 null（预览不写分析事件）。 */
@@ -72,6 +72,8 @@ export function ContentView({ page, locale, sectionPrefix, viewport, browseHref 
   viewport?: 'mobile' | 'desktop';
   /** 已发布页底部的「浏览商品」入口；预览页不显示（预览不是导购场景）。 */
   browseHref?: string;
+  /** 内容索引入口：正文看完后除了买商品，也常想找同一类别的另一篇。 */
+  indexHref?: string;
 }) {
   const body = (
     <>
@@ -81,9 +83,11 @@ export function ContentView({ page, locale, sectionPrefix, viewport, browseHref 
         <BlockView key={block.id} block={block} locale={locale}
           sectionKey={sectionPrefix ? `${sectionPrefix}.${block.id}` : `preview.${page.pageKey}.${block.id}`} />
       ))}
-      {browseHref && (
+      {(browseHref || indexHref) && (
         <p className="content-meta">
-          <Link href={browseHref}>{copyFor[locale].common.browseProducts}</Link>
+          {browseHref && <Link href={browseHref}>{copyFor[locale].common.browseProducts}</Link>}
+          {browseHref && indexHref && ' · '}
+          {indexHref && <Link href={indexHref}>{copyFor[locale].pagesIndex.back}</Link>}
         </p>
       )}
       <p className="content-meta">

@@ -100,6 +100,9 @@ export default async function LocaleLayout({ children, params }: {
           </div>
           {pages.length > 0 && (
             <nav className="footer-nav" aria-label={t.nav.home}>
+              {/* 索引入口放第一位：页脚只列最近六页，内容一多就有页面进不来，
+                  索引页保证「任何一页」都有路径可达（也方便搜索引擎发现深页）。 */}
+              <Link href={localePath(locale, '/pages')} hrefLang={locale}>{t.pagesIndex.back}</Link>
               {pages.slice(0, 6).map(page => (
                 <Link key={page.pageKey} href={localePath(locale, `/pages/${page.slug}`)} hrefLang={locale}>
                   {page.title}

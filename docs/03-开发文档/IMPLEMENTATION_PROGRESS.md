@@ -755,3 +755,16 @@
 - `https://mrinhk.com/api/v1/admin/redirects` 无会话 → **401**；
 - `https://admin.mrinhk.com/admin/catalog` → **200**（分类编辑与 301 提示随商品页面一起上线）；
 - `https://mrinhk.com/zh-HK/categories` → **200**。
+
+## 2026-11-20：M04 第七批 前台内容索引页
+
+范围：内容页此前只有页脚最近六条这一个入口，第七篇之后就没有任何路径可达。本批加一个索引页，同时补齐「空索引不该进搜索引擎」与「深页也要能被发现」两件事。
+
+- 新页面 `apps/storefront-mrinhk/app/[locale]/pages/page.tsx`：只取 `indexable` 的已发布页，按 `announcement → article → faq → policy → standard` 固定分组（未知类型并入 `standard`，不丢页）。摘要从已发布快照的区块里取第一个有文字的（`rich_text` 段落合并 / `faq_list` 首问 / `contact_card` 正文 / `notice` 文本），超过 120 字加省略号；取不到就只显示标题。详情接口 404 的条目直接不列出，避免死链。上限 40 条。
+- 摘要拼接 `joinParagraphs`：按「前段结尾 / 后段开头是否 CJK」决定是否补空格——中文段落之间插空格会读成断句。
+- 空态即 `noindex`：`generateMetadata` 在无可索引内容时返回 `robots: { index: false, follow: true }`，但页面自身仍 200，已分享的入口不会变 404。
+- 入口三处：页脚导航首位「所有内容」（此前只列最近六条，深页永远进不来）、内容详情页尾部与「浏览商品」并列的回链、站点地图。
+- 站点地图：只在**确实存在**可索引内容页时才收录 `/pages` 三语地址（`contentPages.size > 0` 判断），空索引不收录。
+- 文案：三语 `pagesIndex.*` 与 `seo.pages`；`ContentIndexPage` 埋点 `pageKey=pages.index`，分组区块带 `data-ez-section=pages.index.<type>`。
+
+验证：前台 `tsc` 与 `next build` 通过（`/[locale]/pages` 三种语言均为 SSG，revalidate 30s）；用桩接口起前台逐项核对——分组顺序、`indexable:false` 不出现、120 字截断、中文段落无多余空格、FAQ 取首问、无区块页面只显示标题、`en` 空态 `noindex`、canonical 与 zh-HK/zh-CN/en/x-default 四个 hreflang、详情页「所有内容」回链、`sitemap.xml` 收录三条 `/pages`。生产内容页当前为 0 条（`/storefront/pages?locale=zh-HK` 返回空），因此线上索引页处于空态、`noindex`，待运营发布内容后自动转为可索引。

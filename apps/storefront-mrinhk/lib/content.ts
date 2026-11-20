@@ -133,3 +133,57 @@ export async function fetchRedirect(path: string): Promise<{ toPath: string; sta
     return null;
   }
 }
+
+/** 摘要长度上限：够读出一句完整意思，又不至于把索引页变成正文列表。 */
+const EXCERPT_MAX = 120;
+
+/**
+ * 段落拼接：中文段落之间不加空格（「過程， 時間」读起来是断的），拉丁文之间要留空格。
+ * 用「前一段结尾 / 后一段开头是否 CJK」判断，混合语言（中文正文夹 WhatsApp）也能得到正常结果。
+ */
+function joinParagraphs(parts: readonly string[]): string {
+  const cjk = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
+  return parts.reduce((merged, part) => {
+    if (!merged) return part;
+    const glue = cjk.test(merged.slice(-1)) || cjk.test(part.slice(0, 1)) ? '' : ' ';
+    return `${merged}${glue}${part}`;
+  }, '');
+}
+
+/**
+ * 从已发布区块里取一段摘要（索引页用）。
+ *
+ * 只读第一个有文字的区块，按「正文 → FAQ 首问 → 联络卡正文 → 提示」的顺序取：
+ * 索引页是入口，不是正文，几条并列的摘要是让访客判断「要不要点进去」，
+ * 因此不拼多个区块，也不改写成营销话术——正文说什么就摘什么。
+ *
+ * 区块 config 在服务端发布时已按类型白名单校验过，这里仍逐字段做类型判断：
+ * 快照是历史数据，旧版本可能缺字段，读不到文字就安静返回 null。
+ */
+export function pageExcerpt(blocks: readonly ContentBlock[]): string | null {
+  const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value : null);
+  let raw: string | null = null;
+  for (const block of blocks) {
+    const config = block.config;
+    if (block.type === 'rich_text') {
+      const paragraphs = Array.isArray(config['paragraphs']) ? (config['paragraphs'] as unknown[]) : [];
+      const joined = joinParagraphs(paragraphs.map(paragraph => text(paragraph))
+        .filter((item): item is string => item !== null));
+      raw = text(joined) ?? text(config['heading']);
+    } else if (block.type === 'faq_list') {
+      const items = Array.isArray(config['items']) ? (config['items'] as unknown[]) : [];
+      const first = items[0] as Record<string, unknown> | undefined;
+      raw = text(first?.['question']);
+    } else if (block.type === 'contact_card') {
+      raw = text(config['body']) ?? text(config['heading']);
+    } else if (block.type === 'notice') {
+      raw = text(config['text']);
+    }
+    if (raw) break;
+  }
+  if (!raw) return null;
+  // 正文里的换行与连续空白在列表里没有意义（HTML 会折叠），先压平再按长度截断。
+  const flat = raw.replace(/\s+/g, ' ').trim();
+  if (!flat) return null;
+  return flat.length > EXCERPT_MAX ? `${flat.slice(0, EXCERPT_MAX).trimEnd()}…` : flat;
+}

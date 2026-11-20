@@ -56,7 +56,7 @@ export default async function ContentPageView({ params }: { params: Promise<{ lo
     <>
       <SectionTracker pageKey={`page.${page.pageKey}`} publishVersionId={page.contentRelease} locale={locale} />
       <ContentView page={page} locale={locale} sectionPrefix={`page.${page.pageKey}`}
-        browseHref={localePath(locale, '/products')} />
+        browseHref={localePath(locale, '/products')} indexHref={localePath(locale, '/pages')} />
     </>
   );
 }

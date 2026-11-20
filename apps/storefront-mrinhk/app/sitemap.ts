@@ -137,6 +137,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       contentPages.set(page.pageKey, map);
     }
   }
+  // 内容索引：只有确实存在可索引内容页时才收录。空索引页是薄页面，
+  // 让搜索引擎去抓一个「暂无内容」的列表没有任何意义，也会稀释站点权重。
+  if (contentPages.size > 0) {
+    for (const locale of LOCALES) {
+      entries.push({ url: `${base}${localePath(locale, '/pages')}`, lastModified: now,
+        changeFrequency: 'weekly', priority: 0.5, alternates: { languages: absoluteAlternates('/pages') } });
+    }
+  }
+
   for (const slugs of contentPages.values()) {
     const languages: Record<string, string> = {};
     for (const locale of LOCALES) {
