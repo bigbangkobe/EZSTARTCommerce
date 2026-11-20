@@ -124,6 +124,10 @@ test('credential references are URIs, never raw keys', () => {
 
 test('publicConfig only accepts allowlisted, short, control-character-free strings', () => {
   assert.deepEqual(normalizePublicConfig({ accountSummary: ' Bank: 0123 ' }), { accountSummary: 'Bank: 0123' });
+  // checkoutBase 是收银台域名，适配器要读它；不放行等于收银台地址只能写死在代码里。
+  assert.deepEqual(normalizePublicConfig({ checkoutBase: 'https://sandbox.example.test/mock-pay' }),
+    { checkoutBase: 'https://sandbox.example.test/mock-pay' });
+  // 密钥形状的键不管哪个渠道都不许进 publicConfig。
   assert.equal(code(() => normalizePublicConfig({ apiKey: 'x' })), 'PUBLIC_CONFIG_KEY_NOT_ALLOWED');
   assert.equal(code(() => normalizePublicConfig({ accountSummary: 12 })), 'VALIDATION_ERROR');
   assert.equal(code(() => normalizePublicConfig({ accountSummary: '' })), 'VALIDATION_ERROR');

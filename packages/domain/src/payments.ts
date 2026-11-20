@@ -202,8 +202,13 @@ export interface MethodPatchInput {
   secretRef: string | null;
 }
 
-/** publicConfig 只接受显式白名单字段：这里放什么都不允许出现密钥形状的值。 */
-const PUBLIC_CONFIG_KEYS = ['accountSummary', 'instructions', 'defaultCurrency', 'providerAccountRef'] as const;
+/**
+ * publicConfig 只接受显式白名单字段：这里放什么都不允许出现密钥形状的值。
+ * `checkoutBase` 是收银台域名，会出现在跳转地址里，属公开信息——适配器要读它，
+ * 不让配就等于把收银台地址写死在代码里。
+ */
+const PUBLIC_CONFIG_KEYS = ['accountSummary', 'instructions', 'defaultCurrency', 'providerAccountRef',
+  'checkoutBase'] as const;
 const SECRET_REF = /^[a-z][a-z0-9+.-]*:\/\/[A-Za-z0-9._:/-]{1,200}$/;
 
 export function normalizeMethodPatch(input: { providerCode?: unknown; environment?: unknown; enabled?: unknown;
