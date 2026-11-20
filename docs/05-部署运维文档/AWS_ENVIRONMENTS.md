@@ -166,6 +166,32 @@ curl -s -o /dev/null -w "%{http_code}\n" https://admin.mrinhk.com
 
 预期：`200` / `307` / `307`。
 
+### 6.3.1 备份恢复演练（2026-11-20 实测，可复现）
+
+```bash
+# 1) 生产库备份（容器内执行，不落主机明文）
+docker exec ezstart-mrinhk-postgres-1 pg_dump -U ezstart -d ezstart -Fc -f /tmp/drill.dump
+docker cp ezstart-mrinhk-postgres-1:/tmp/drill.dump /tmp/drill.dump
+
+# 2) 恢复到 staging 的独立演练库（不与 staging 业务库混）
+docker exec ezstart-staging-postgres-1 psql -U ezstart -d postgres \
+  -c 'drop database if exists restore_drill' -c 'create database restore_drill'
+docker cp /tmp/drill.dump ezstart-staging-postgres-1:/tmp/drill.dump
+docker exec ezstart-staging-postgres-1 pg_restore -U ezstart -d restore_drill --no-owner --no-privileges /tmp/drill.dump
+
+# 3) 比对行数与结构
+docker exec ezstart-staging-postgres-1 psql -U ezstart -d restore_drill -tAc \
+  'select (select count(*) from "ShopOrder"), (select count(*) from "Product"), (select count(*) from "_prisma_migrations")'
+
+# 4) 在副本上试跑新迁移（升级演练）
+docker run --rm --network ezstart-staging_default \
+  -e DATABASE_URL='postgresql://ezstart:<pw>@ezstart-staging-postgres-1:5432/restore_drill' \
+  ezstart-staging-api node node_modules/prisma/build/index.js migrate deploy \
+  --config packages/database/prisma.config.ts
+```
+
+实测：318 KB / 备份 <1s / 恢复 2s / 95 表一致 / 新迁移应用成功（35 → 36）。
+
 ### 6.4 备份
 
 ```bash
