@@ -9,6 +9,7 @@ import {
 } from '../../../../packages/domain/src/aftersales.js';
 import { maskContact, type ContactSnapshot } from '../../../../packages/domain/src/orders.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
+import type { PaymentsService, ProviderRefundOutcome } from '../payments/service.js';
 import { releaseOrderReservations } from '../orders/reservations.js';
 import { releaseCouponInTx, restoreCouponQuotaInTx } from '../promotions/redeem.js';
 import { restoreOrderPointsInTx } from '../members/loyalty-service.js';
@@ -56,7 +57,8 @@ const REFUND_STATUSES = ['requested', 'approved', 'processing', 'refunded', 'fai
  * 4. 只有质检为 `sellable` 的数量才加回可售库存，其余处置只留流水。
  */
 export class AfterSalesService {
-  constructor(private readonly identity: IdentityService) {}
+  constructor(private readonly identity: IdentityService,
+    private readonly payments: PaymentsService | null = null) {}
   private get db() { return this.identity.db; }
 
   private rule<T>(fn: () => T): T {
@@ -195,7 +197,8 @@ export class AfterSalesService {
     return row;
   }
 
-  private async refundDetail(tx: Tx, id: string): Promise<RefundRow> {
+  /** 只依赖 `refund` 委托，事务内与事务外都能用（线上退款需要分两次事务）。 */
+  private async refundDetail(tx: { refund: Tx['refund'] }, id: string): Promise<RefundRow> {
     const row = await tx.refund.findUnique({ where: { id },
       include: { events: { orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }] }, payment: true, order: true } });
     if (!row) throw new AuthError(404, 'NOT_FOUND');
@@ -859,14 +862,20 @@ export class AfterSalesService {
   }
 
   /**
-   * 执行退款。首期只有线下渠道（COD、人工转账）：执行等于登记一笔真实发生的线下退款，
-   * 必须有凭据号与时间；线上渠道没有适配器时明确返回 503，而不是假装退款成功。
+   * 执行退款。按渠道分两条路：
+   * - 线下（COD、人工转账）：执行等于登记一笔真实发生的线下退款，必须有凭据号与时间。
+   * - 线上：先落 processing 再调渠道，拿到结论后收敛；渠道无适配器时明确 503，不假装成功。
    */
   async executeRefund(supplied: string, csrf: string | null, id: string, idempotencyKey: string | undefined,
     body: { reason?: unknown; reference?: unknown; occurredAt?: unknown }, ctx: RequestContext) {
     const key = this.key(idempotencyKey);
     const reason = this.rule(() => normalizeReason(body.reason));
     const reference = this.rule(() => optionalText(body.reference, 200));
+    const head = await this.db.refund.findUnique({ where: { id }, select: { channel: true } });
+    if (!head) throw new AuthError(404, 'NOT_FOUND');
+    if (head.channel === 'online') {
+      return this.executeOnlineRefund(supplied, csrf, id, key, { reason, reference }, ctx);
+    }
     return this.guarded(() => this.identity.withPermission(supplied, csrf, 'refund.execute', async (tx, actor, _s, now) => {
       const current = await this.refundDetail(tx, id);
       await this.lock(tx, `order:${current.orderId}`);
@@ -879,7 +888,6 @@ export class AfterSalesService {
       }
       const row = await this.refundDetail(tx, id);
       const next = this.rule(() => nextRefundStatus(row.status, 'execute' as RefundAction));
-      if (row.channel === 'online') throw new AuthError(503, 'PAYMENT_ADAPTER_UNAVAILABLE');
       if (!reference) throw new AuthError(422, 'REFUND_REFERENCE_REQUIRED');
       await tx.refund.update({ where: { id }, data: { status: next, executedAt: occurredAt, executedBy: actor.id,
         reference, externalRefundId: reference, version: { increment: 1 } } });
@@ -890,31 +898,137 @@ export class AfterSalesService {
         requestDigest: digest, objectId: id } });
       await this.identity.recordAudit(tx, ctx, actor.id, 'refunds.executed', id, 'success',
         `${row.amountMinor} ${row.currency}; ${reference}`);
-
-      // 整单退完且券配置为“退款返额度”时，新建一条返还记录（不改原核销记录）。
-      if (next === 'refunded') {
-        const settled = await tx.refund.aggregate({ where: { orderId: row.orderId, status: 'refunded',
-          id: { not: id } }, _sum: { amountMinor: true } });
-        const order = await tx.shopOrder.findUnique({ where: { id: row.orderId } });
-        if (order && (settled._sum.amountMinor ?? 0) + row.amountMinor >= order.totalMinor) {
-          await restoreCouponQuotaInTx(tx, order.id, id, 'full_refund', now);
-          await restoreOrderPointsInTx(tx, order.id, now, 'full_refund');
-        }
-      }
-
-      if (row.caseId) {
-        const caseRow = await this.detail(tx, row.caseId);
-        const refunded = caseRow.refunds.reduce((sum, refund) => sum + (refund.status === 'refunded' ? refund.amountMinor : 0), 0);
-        if ((caseRow.approvedRefundMinor ?? 0) > 0 && refunded >= (caseRow.approvedRefundMinor ?? 0)) {
-          this.rule(() => assertCaseAction(caseRow.status, 'refund_settled'));
-          await tx.afterSalesCase.update({ where: { id: caseRow.id }, data: { status: 'refunded',
-            version: { increment: 1 } } });
-          await this.recordEvent(tx, caseRow.id, 'refunded', caseRow.status, 'refunded', reference, actor.id,
-            `case:${caseRow.id}:refunded:${id}`);
-        }
-      }
+      await this.applyRefundSettlement(tx, row, reference, actor.id, now);
       return this.refundView(await this.refundDetail(tx, id), (await this.refundDetail(tx, id)).events);
     }, true));
+  }
+
+  /**
+   * 线上退款：两次事务夹一次渠道调用。
+   *
+   * 为什么不能一个事务做完：渠道调用是外部 IO，可能是秒级甚至超时；把它包进事务会长时间占锁。
+   * 更关键的是——渠道成功而本地回滚会造成"钱退了但系统不知道"，比短暂的不一致危险得多。
+   * 所以先提交 `processing`，再调渠道，最后按结论收敛；中间的崩溃窗口由对账任务按渠道单号回查。
+   */
+  private async executeOnlineRefund(supplied: string, csrf: string | null, id: string, key: string,
+    input: { reason: string; reference: string | null }, ctx: RequestContext) {
+    const payments = this.paymentService();
+
+    const started = await this.guarded(() => this.identity.withPermission(supplied, csrf, 'refund.execute',
+      async (tx, actor, _s, now) => {
+        const current = await this.refundDetail(tx, id);
+        await this.lock(tx, `order:${current.orderId}`);
+        await this.lock(tx, `refund:${id}`);
+        await this.lock(tx, `order-action:${key}`);
+        const digest = this.digest('refund.execute', id, { reason: input.reason, reference: input.reference });
+        if (await this.replay(tx, key, 'refund.execute', current.orderId, digest)) return { replay: true as const };
+        const next = this.rule(() => nextRefundStatus(current.status, 'start'));
+        await tx.refund.update({ where: { id }, data: { status: next, executedBy: actor.id,
+          version: { increment: 1 } } });
+        await tx.refundEvent.create({ data: { refundId: id, type: 'dispatched', fromStatus: current.status,
+          toStatus: next, source: 'admin', actorId: actor.id, dedupeKey: `refund:${id}:dispatched:${key}`,
+          payload: { channel: 'online', amountMinor: current.amountMinor,
+            providerCode: current.providerCode }, occurredAt: now } });
+        await tx.orderAction.create({ data: { idempotencyKey: key, orderId: current.orderId,
+          action: 'refund.execute', requestDigest: digest, objectId: id } });
+        await this.identity.recordAudit(tx, ctx, actor.id, 'refunds.executed', id, 'success',
+          `online dispatched ${current.amountMinor} ${current.currency}`);
+        return { replay: false as const };
+      }, true));
+
+    if (started.replay) return this.refundSnapshot(id);
+
+    // 渠道调用在事务之外。三类结果必须区分干净：
+    // 明确结论（成功/失败）按状态机收敛；明确拒绝（适配器规则错误）落 failed；
+    // 网络异常/超时一律 unknown——不能因为"没拿到回包"就判定钱没退出去。
+    let result: ProviderRefundOutcome | null = null;
+    let rejectedCode: string | null = null;
+    let indeterminate = false;
+    try {
+      result = await payments.executeOnlineRefund(id);
+    } catch (error) {
+      if (error instanceof AuthError) rejectedCode = error.code;
+      else indeterminate = true;
+    }
+
+    return this.guarded(() => this.identity.withPermission(supplied, null, 'refund.execute',
+      async (tx, actor, _s, now) => {
+        const row = await this.refundDetail(tx, id);
+        await this.lock(tx, `refund:${id}`);
+
+        let action: RefundAction | null = null;
+        if (result?.status === 'succeeded') action = 'execute';
+        else if (result?.status === 'failed' || rejectedCode) action = 'fail';
+        else if (indeterminate) action = 'mark_unknown';
+
+        if (!action) {
+          // 渠道返回 pending：保持 processing，等对账按渠道单号收敛。
+          await tx.refund.update({ where: { id }, data: {
+            externalRefundId: result?.providerRefundId ?? row.externalRefundId,
+            ...(input.reference ? { reference: input.reference } : {}), version: { increment: 1 } } });
+          await tx.refundEvent.create({ data: { refundId: id, type: 'provider_pending', fromStatus: row.status,
+            toStatus: row.status, source: 'provider', dedupeKey: `refund:${id}:pending:${key}`,
+            payload: { providerRefundId: result?.providerRefundId ?? null,
+              rawStatus: result?.rawStatus ?? null }, occurredAt: now } });
+          return this.refundView(await this.refundDetail(tx, id), (await this.refundDetail(tx, id)).events);
+        }
+
+        const next = this.rule(() => nextRefundStatus(row.status, action));
+        const executedAt = action === 'execute' ? now : null;
+        await tx.refund.update({ where: { id }, data: { status: next, executedAt, executedBy: actor.id,
+          externalRefundId: result?.providerRefundId ?? row.externalRefundId,
+          reference: input.reference ?? result?.providerRefundId ?? row.reference,
+          failureCode: next === 'failed' ? (rejectedCode ?? 'provider_declined') : null,
+          failureMessage: next === 'failed' ? (rejectedCode ?? `provider:${result?.rawStatus ?? 'failed'}`) : null,
+          version: { increment: 1 } } });
+        await tx.refundEvent.create({ data: { refundId: id, type: next, fromStatus: row.status, toStatus: next,
+          source: next === 'unknown' ? 'provider' : 'admin', actorId: actor.id,
+          dedupeKey: `refund:${id}:${next}:${key}`,
+          payload: { providerRefundId: result?.providerRefundId ?? null, rawStatus: result?.rawStatus ?? null,
+            reason: input.reason, ...(rejectedCode ? { failureCode: rejectedCode } : {}) }, occurredAt: now } });
+        await this.identity.recordAudit(tx, ctx, actor.id, 'refunds.executed', id,
+          next === 'failed' ? 'failure' : next === 'unknown' ? 'unknown' : 'success',
+          `${next} ${row.amountMinor} ${row.currency}${rejectedCode ? `; ${rejectedCode}` : ''}`);
+
+        if (next === 'refunded') await this.applyRefundSettlement(tx, row, row.reference, actor.id, now);
+        return this.refundView(await this.refundDetail(tx, id), (await this.refundDetail(tx, id)).events);
+      }));
+  }
+
+  /**
+   * 退款落定（refunded）后的连带影响，两条退款路径共用。
+   * 只在「整单退完」时返券返积分：部分退款返还额度会让用户拿回不该拿的券。
+   */
+  private async applyRefundSettlement(tx: Tx, row: RefundRow, reference: string | null, actorId: string | null,
+    now: Date) {
+    const settled = await tx.refund.aggregate({ where: { orderId: row.orderId, status: 'refunded',
+      id: { not: row.id } }, _sum: { amountMinor: true } });
+    const order = await tx.shopOrder.findUnique({ where: { id: row.orderId } });
+    if (order && (settled._sum.amountMinor ?? 0) + row.amountMinor >= order.totalMinor) {
+      await restoreCouponQuotaInTx(tx, order.id, row.id, 'full_refund', now);
+      await restoreOrderPointsInTx(tx, order.id, now, 'full_refund');
+    }
+
+    if (!row.caseId) return;
+    const caseRow = await this.detail(tx, row.caseId);
+    const refunded = caseRow.refunds.reduce((sum, refund) => sum + (refund.status === 'refunded' ? refund.amountMinor : 0), 0);
+    if ((caseRow.approvedRefundMinor ?? 0) > 0 && refunded >= (caseRow.approvedRefundMinor ?? 0)) {
+      this.rule(() => assertCaseAction(caseRow.status, 'refund_settled'));
+      await tx.afterSalesCase.update({ where: { id: caseRow.id }, data: { status: 'refunded',
+        version: { increment: 1 } } });
+      await this.recordEvent(tx, caseRow.id, 'refunded', caseRow.status, 'refunded', reference, actorId,
+        `case:${caseRow.id}:refunded:${row.id}`);
+    }
+  }
+
+  private paymentService(): PaymentsService {
+    if (!this.payments) throw new AuthError(503, 'PAYMENT_ADAPTER_UNAVAILABLE');
+    return this.payments;
+  }
+
+  private async refundSnapshot(id: string) {
+    const row = await this.refundDetail(this.db, id);
+    return this.refundView(row, row.events);
   }
 }
 

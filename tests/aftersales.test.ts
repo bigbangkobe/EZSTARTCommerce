@@ -4,7 +4,7 @@ import {
   AfterSalesRuleError, allocateLineAmount, approvedAmount, assertCancelCaseOrder, assertCaseAction,
   assertCaseRefundable, assertInspectionQuantity, assertRefundablePayment, assertRefundWithinBalance,
   caseNumber, normalizeCaseLines, normalizeReason, nextRefundStatus, refundableBalance, refundNumber,
-  restocksStock, statusAfterAction,
+  refundTransitionFromProvider, restocksStock, statusAfterAction,
 } from '../packages/domain/src/aftersales.js';
 
 const code = (fn: () => unknown) => {
@@ -96,6 +96,33 @@ test('refund state machine only moves forward and never guesses for unknown', ()
   // 渠道没给结论时，后台不能把它改成成功或失败。
   assert.equal(code(() => nextRefundStatus('unknown', 'execute')), 'REFUND_STATUS_UNKNOWN_REQUIRES_PROVIDER');
   assert.equal(code(() => nextRefundStatus('unknown', 'approve')), 'REFUND_STATUS_UNKNOWN_REQUIRES_PROVIDER');
+});
+
+test('online refunds reserve a processing state before calling the provider', () => {
+  // 先落 processing 再调渠道：崩溃后能靠这个状态判断"钱可能已经退出去了"。
+  assert.equal(nextRefundStatus('approved', 'start'), 'processing');
+  assert.equal(nextRefundStatus('processing', 'execute'), 'refunded');
+  assert.equal(nextRefundStatus('processing', 'fail'), 'failed');
+  assert.equal(nextRefundStatus('processing', 'mark_unknown'), 'unknown');
+  // 线下渠道不该走 processing；已终态不能再发起。
+  assert.equal(code(() => nextRefundStatus('refunded', 'start')), 'REFUND_STATE_CONFLICT');
+  assert.equal(code(() => nextRefundStatus('cancelled', 'start')), 'REFUND_STATE_CONFLICT');
+});
+
+test('unknown refunds converge only with an explicit provider conclusion', () => {
+  assert.equal(nextRefundStatus('unknown', 'resolve', 'refunded'), 'refunded');
+  assert.equal(nextRefundStatus('unknown', 'resolve', 'failed'), 'failed');
+  // resolve 是服务端专用出口：不给目标状态就拒绝，不让调用方"猜一个"。
+  assert.equal(code(() => nextRefundStatus('unknown', 'resolve')), 'REFUND_STATE_CONFLICT');
+  assert.equal(code(() => nextRefundStatus('unknown', 'resolve', 'unknown')), 'REFUND_STATE_CONFLICT');
+  assert.equal(code(() => nextRefundStatus('processing', 'resolve', 'refunded')), 'REFUND_STATE_CONFLICT');
+});
+
+test('provider refund status maps to a transition, pending never counts as success', () => {
+  assert.deepEqual(refundTransitionFromProvider('succeeded'), { action: 'execute' });
+  assert.deepEqual(refundTransitionFromProvider('failed'), { action: 'fail' });
+  // pending 不推进状态：没结论就是没结论。
+  assert.equal(refundTransitionFromProvider('pending'), null);
 });
 
 test('approved amounts are capped by allocation and order total, never by the request alone', () => {

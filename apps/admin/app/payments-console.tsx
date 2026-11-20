@@ -5,7 +5,7 @@ type Session = { permissionCodes: string[]; csrfToken: string };
 type Method = { id: string; providerCode: string; environment: string; displayName: string; enabled: boolean;
   approvalStatus: string; approvalReference: string | null; approvedAt: string | null;
   publicConfig: Record<string, string>; secretConfigured: boolean; secretFingerprint: string | null;
-  connectionStatus: string; version: number };
+  connectionStatus: string; lastCheckedAt: string | null; version: number };
 type Payment = { id: string; publicPaymentNumber: string; orderId: string; publicOrderNumber: string;
   providerCode: string; environment: string; channel: string; status: string; amountMinor: number; currency: string;
   providerTransactionId: string | null; paidAt: string | null; returnedAt: string | null; reference: string | null;
@@ -14,6 +14,7 @@ type Payment = { id: string; publicPaymentNumber: string; orderId: string; publi
     occurredAt: string }[] };
 
 const STATUSES = ['pending', 'collected', 'succeeded', 'rejected', 'returned', 'cancelled', 'failed', 'unknown', 'authorized'];
+const CONNECTION_LABEL: Record<string, string> = { unverified: '未验证', ok: '连接正常', failed: '连接失败' };
 const STATUS_LABEL: Record<string, string> = { pending: '待收', collected: '已收', succeeded: '已到账', rejected: '拒收',
   returned: '已退回', cancelled: '已取消', failed: '失败', unknown: '未知（待渠道确认）', authorized: '已授权' };
 
@@ -94,6 +95,15 @@ export function PaymentsConsole() {
     finally { setBusy(false); }
   }
 
+  /** 测试连接只验证凭据，不发起真实支付；结果会写回连接状态，前台据此决定是否展示。 */
+  function testConnection(method: Method) {
+    void run(async () => {
+      const result = await request<{ connectionStatus: string; detail: string }>(
+        `payment-methods/${method.providerCode}/connection-test?environment=${method.environment}`);
+      return `${method.providerCode}：${CONNECTION_LABEL[result.connectionStatus] ?? result.connectionStatus}（${result.detail}）`;
+    });
+  }
+
   function saveMethod(method: Method, event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -122,12 +132,17 @@ export function PaymentsConsole() {
 
     {canConfigure && <section>
       <h2>支付方式</h2>
-      <p><small>启用必须有批准依据；凭证只接受 secret:// 或 env:// 引用，保存后不会再次显示，只显示是否已配置与指纹。</small></p>
+      <p><small>启用必须有批准依据；凭证只接受 secret:// 或 env:// 引用，保存后不会再次显示，只显示是否已配置与指纹。线上渠道要先“测试连接”通过，前台才会展示。</small></p>
       {methods.length === 0 ? <p>暂无已接入的支付方式。</p> : <ul>{methods.map(method => <li key={method.id}>
         <strong>{method.providerCode}</strong> · {method.environment} · {method.enabled ? '已启用' : '已停用'}
         {' · '}批准 {method.approvalStatus === 'approved' ? `已批准（${method.approvalReference ?? '—'}）` : '未批准'}
         {' · '}凭证 {method.secretConfigured ? `已配置（${method.secretFingerprint}）` : '未配置'}
+        {' · '}连接 {CONNECTION_LABEL[method.connectionStatus] ?? method.connectionStatus}
+        {method.lastCheckedAt ? `（校于 ${shortDate(method.lastCheckedAt)}）` : ''}
         {' · '}版本 {method.version}
+        {method.enabled && method.connectionStatus !== 'ok' && method.providerCode !== 'cod' && method.providerCode !== 'manual_bank_transfer'
+          && <p className="error"><small>已启用但连接未通过：前台不会展示这个支付方式。先保存凭证，再点“测试连接”。</small></p>}
+        <button type="button" className="secondary" disabled={busy} onClick={() => testConnection(method)}>测试连接</button>
         <form onSubmit={event => saveMethod(method, event)}>
           <label>显示名称<input name="displayName" maxLength={80} defaultValue={method.displayName} /></label>
           <label>批准依据<small>例如业主审批单号；启用时必填</small>

@@ -112,9 +112,24 @@ test('mock: refund respects captured amount and currency', async () => {
   const partial = await adapter.refund(ctx(), base);
   assert.equal(partial.status, 'succeeded');
   assert.equal(partial.amountMinor, 5000);
-  // 第二次退剩余额度可以，累计超额不行
-  assert.equal(await asyncCode(() => adapter.refund(ctx(), { ...base, amountMinor: 7001 })), 'REFUND_EXCEEDS_CAPTURED');
-  assert.equal((await adapter.refund(ctx(), { ...base, amountMinor: 7000 })).status, 'succeeded');
+
+  // 同一退款单号重试必须拿回同一笔，而不是再退一次。
+  const replay = await adapter.refund(ctx(), base);
+  assert.equal(replay.providerRefundId, partial.providerRefundId);
+  assert.equal(replay.status, 'succeeded');
+
+  // 换单号退剩余额度可以，累计超额不行
+  const second = { ...base, refundNumber: 'RF-20261120-000002' };
+  assert.equal(await asyncCode(() => adapter.refund(ctx(), { ...second, amountMinor: 7001 })), 'REFUND_EXCEEDS_CAPTURED');
+  const rest = await adapter.refund(ctx(), { ...second, amountMinor: 7000 });
+  assert.equal(rest.status, 'succeeded');
+  assert.notEqual(rest.providerRefundId, partial.providerRefundId);
+
+  // 回查能拿到结论；不存在的渠道退款单号返回 pending，不猜成功也不猜失败。
+  const queried = await adapter.queryRefund(ctx(), rest.providerRefundId);
+  assert.equal(queried.status, 'succeeded');
+  assert.equal(queried.amountMinor, 7000);
+  assert.equal((await adapter.queryRefund(ctx(), 'mockr_unknown')).status, 'pending');
 });
 
 test('mock: testConnection reports missing credentials without leaking values', async () => {

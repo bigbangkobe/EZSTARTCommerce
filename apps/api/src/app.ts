@@ -44,6 +44,7 @@ import { PaymentsService, type OnlinePaymentDeps } from './payments/service.js';
 import { adapterFor } from './payments/adapters/registry.js';
 import { createSecretResolver } from './payments/adapters/secret-resolver.js';
 import { PaymentWebhookController } from './payment-webhooks/controller.js';
+import { InternalJobsController } from './payments/jobs-controller.js';
 import { OrdersService } from './orders/service.js';
 import { ContentController } from './content/controller.js';
 import { ContentService } from './content/service.js';
@@ -132,7 +133,7 @@ export async function createApp(identity: IdentityService | null = null, options
   const checkout = identity && cart && shipping && payments && promotions
     ? new CheckoutService(identity, cart, shipping, payments, promotions) : null;
   const orders = identity && shipping ? new OrdersService(identity, shipping) : null;
-  const afterSales = identity ? new AfterSalesService(identity) : null;
+  const afterSales = identity ? new AfterSalesService(identity, payments) : null;
   const inventory = identity ? new InventoryService(identity) : null;
   const members = identity ? new MembersService(identity) : null;
   const loyalty = identity ? new LoyaltyService(identity) : null;
@@ -151,7 +152,8 @@ export async function createApp(identity: IdentityService | null = null, options
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
     OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController, PrivacyController,
     MailTestController, ReportsController, AnalyticsController, CarrierWebhookController, ContentController,
-    MerchandisingController, ThemeController, CollectionsController, PaymentWebhookController],
+    MerchandisingController, ThemeController, CollectionsController, PaymentWebhookController,
+    InternalJobsController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },

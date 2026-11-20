@@ -273,10 +273,42 @@ export function assertCreatePaymentInput(
   };
 }
 
+/**
+ * 退款入参校验。三条硬约束：
+ * 1. `refundNumber` 是渠道侧幂等键，必须是内部退款单号——用随机值重试就会退两次钱。
+ * 2. 金额只认正整数分，且必须由调用方从台账读取，不接受任何外部传入。
+ * 3. 必须有渠道交易号：没有它就没法定位要退哪一笔，宁可 422 也不能"试试看"。
+ */
+export function assertRefundInput(input: Partial<RefundInput>): RefundInput {
+  const { refundNumber, providerTransactionId, amountMinor, currency, reason } = input;
+
+  if (typeof refundNumber !== 'string' || !refundNumber.trim().length || refundNumber.length > 64) {
+    fail('REFUND_NUMBER_INVALID', 'refundNumber');
+  }
+  if (typeof providerTransactionId !== 'string' || !providerTransactionId.trim().length
+    || providerTransactionId.length > 128) {
+    fail('PROVIDER_TRANSACTION_REQUIRED', 'providerTransactionId');
+  }
+  if (typeof amountMinor !== 'number' || !Number.isSafeInteger(amountMinor) || amountMinor < 1) {
+    fail('AMOUNT_INVALID', 'amountMinor');
+  }
+  if (typeof currency !== 'string' || !CURRENCY.test(currency)) fail('CURRENCY_INVALID', 'currency');
+
+  const text = typeof reason === 'string' ? reason.trim() : null;
+  if (text !== null && text.length > 500) fail('REFUND_REASON_TOO_LONG', 'reason');
+
+  return {
+    refundNumber: refundNumber.trim(),
+    providerTransactionId: providerTransactionId.trim(),
+    amountMinor,
+    currency,
+    reason: text && text.length ? text : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // metadata 防泄漏
 // ---------------------------------------------------------------------------
-
 /** 常见密钥形状：Stripe、AWS Access Key、PEM 私钥头、Bearer Token。 */
 const SECRET_SHAPES: readonly RegExp[] = [
   /sk_(live|test)_[A-Za-z0-9]{8,}/,
@@ -384,6 +416,11 @@ export interface PaymentAdapter {
   createPayment(ctx: AdapterContext, input: CreatePaymentInput): Promise<CreatePaymentResult>;
   queryPayment(ctx: AdapterContext, providerTransactionId: string): Promise<QueryPaymentResult>;
   refund(ctx: AdapterContext, input: RefundInput): Promise<RefundResult>;
+  /**
+   * 按渠道退款单号回查。没有这个方法，`processing` 状态的退款永远无法收敛——
+   * 钱退没退出去只能靠人打电话问渠道，对账就形同虚设。
+   */
+  queryRefund(ctx: AdapterContext, providerRefundId: string): Promise<RefundResult>;
   /** 验签失败必须抛错，绝不返回"疑似成功"。 */
   verifyWebhook(ctx: AdapterContext, headers: Record<string, string>, rawBody: Buffer): Promise<WebhookEvent>;
 }

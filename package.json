@@ -15,6 +15,7 @@
     "instance:bundle": "node scripts/build-instance-bundle.mjs",
     "instance:init": "node scripts/init-instance.mjs",
     "fleet:upgrade": "node scripts/upgrade-instances.mjs",
+    "payments:reconcile": "node scripts/reconcile.mjs",
     "db:generate": "pnpm --filter @ezstart/database exec prisma generate --config prisma.config.ts",
     "db:validate": "pnpm --filter @ezstart/database exec prisma validate --config prisma.config.ts",
     "db:migrate": "node --env-file-if-exists=.env node_modules/prisma/build/index.js migrate deploy --config packages/database/prisma.config.ts",

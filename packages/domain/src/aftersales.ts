@@ -28,7 +28,8 @@ export type CaseAction = 'approve' | 'reject' | 'dispatch_return' | 'receive_ret
   | 'request_refund' | 'refund_settled' | 'close';
 export type RefundStatus = 'requested' | 'approved' | 'processing' | 'refunded' | 'failed' | 'rejected'
   | 'cancelled' | 'unknown';
-export type RefundAction = 'approve' | 'reject' | 'execute' | 'fail' | 'cancel';
+export type RefundAction = 'approve' | 'reject' | 'execute' | 'fail' | 'cancel' | 'start' | 'mark_unknown'
+  | 'resolve';
 export type Disposition = 'sellable' | 'damaged' | 'quarantine' | 'scrap';
 
 export const CASE_TYPES: readonly CaseType[] = ['cancel', 'refund', 'return', 'exchange'];
@@ -140,17 +141,32 @@ export function assertCaseRefundable(caseType: string, status: string) {
   }
 }
 
-/** 退款状态机：requested → approved → refunded；failed 可经重新批准重试，unknown 没有人工出口。 */
+/**
+ * 退款状态机：requested → approved → (processing) → refunded。
+ *
+ * 三个只为线上渠道存在的动作：
+ * - `start`：发起渠道退款前先落 processing。渠道调用是外部 IO，不能包在事务里，
+ *   所以必须有一个"已发出、结果未知"的状态兜住崩溃窗口，否则崩溃后无从判断钱是否退出去了。
+ * - `mark_unknown`：渠道超时/应答无法判定时收敛到 unknown，禁止猜成功或失败。
+ * - `resolve`：对账/查询拿到渠道结论后收敛。它只由服务端使用，不是人工出口——
+ *   人工动作仍然不能把 unknown 直接改成 refunded 或 failed。
+ */
 const REFUND_ACTIONS: Record<string, Partial<Record<RefundAction, RefundStatus>>> = {
   requested: { approve: 'approved', reject: 'rejected', cancel: 'cancelled' },
-  approved: { execute: 'refunded', fail: 'failed', cancel: 'cancelled' },
-  processing: { execute: 'refunded', fail: 'failed' },
+  approved: { start: 'processing', execute: 'refunded', fail: 'failed', cancel: 'cancelled' },
+  processing: { execute: 'refunded', fail: 'failed', mark_unknown: 'unknown' },
   failed: { approve: 'approved', cancel: 'cancelled' },
-  unknown: {},
+  unknown: { resolve: 'refunded' },
 };
 
-export function nextRefundStatus(current: string, action: RefundAction): RefundStatus {
+export function nextRefundStatus(current: string, action: RefundAction, target?: RefundStatus): RefundStatus {
   if (!REFUND_ACTIONS[current]) fail('REFUND_STATE_CONFLICT');
+  // `resolve` 的落点由渠道结论决定（成功或失败），必须显式给出目标状态，不能猜。
+  if (action === 'resolve') {
+    if (current !== 'unknown') fail('REFUND_STATE_CONFLICT');
+    if (target !== 'refunded' && target !== 'failed') fail('REFUND_STATE_CONFLICT');
+    return target;
+  }
   const next = REFUND_ACTIONS[current]![action];
   if (!next) {
     if (current === 'unknown') fail('REFUND_STATUS_UNKNOWN_REQUIRES_PROVIDER');
@@ -159,8 +175,19 @@ export function nextRefundStatus(current: string, action: RefundAction): RefundS
   return next;
 }
 
-export function restocksStock(disposition: string): boolean {
-  return disposition === 'sellable';
+/**
+ * 渠道退款结论 → 状态机动作。只有三种落点：
+ * `succeeded` 落 refunded，`failed` 落 failed，`pending` 保持 processing 等对账收敛。
+ * 不给"超时当成功"留任何口子——那是资损事故的标准起点。
+ */
+export function refundTransitionFromProvider(status: 'pending' | 'succeeded' | 'failed'):
+{ action: RefundAction } | null {
+  if (status === 'succeeded') return { action: 'execute' };
+  if (status === 'failed') return { action: 'fail' };
+  return null;
+}
+
+export function restocksStock(disposition: string): boolean {  return disposition === 'sellable';
 }
 
 export const MOVEMENT_TYPE: Record<Disposition, string> = {

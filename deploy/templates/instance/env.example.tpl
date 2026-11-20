@@ -26,3 +26,9 @@ SMTP_PASSWORD=
 # 例：{"sf":"replace-with-carrier-shared-secret-at-least-32-chars"}
 # 修改后需重建 API 容器：docker compose up -d --build api
 CARRIER_WEBHOOK_SECRETS=
+
+# ===== 内部定时任务（对账）=====
+# 未配置时 /internal/jobs/* 一律 503，不会留下未受保护的运维入口。
+# 生成：openssl rand -base64 36
+# 配置后可用 `docker compose exec -T api node scripts/reconcile.mjs` 手动触发。
+INTERNAL_JOB_TOKEN=

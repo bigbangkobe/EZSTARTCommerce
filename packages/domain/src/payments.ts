@@ -87,8 +87,28 @@ export function nextPaymentStatus(current: string, outcome: PaymentOutcome, chan
   return next;
 }
 
-/** 订单上的付款状态：由台账状态投影而来，不单独维护一套。 */
-export function orderPaymentStatusFor(status: PaymentStatus): string {
+/**
+ * 渠道结论收敛：`unknown` 只有渠道能给出结论，所以只有这条路径允许离开 unknown。
+ *
+ * 与 `nextPaymentStatus` 的区别是**谁在调用**，不是能走到哪一步：
+ * 人工接口一律用 `nextPaymentStatus`，它会把 unknown 挡住；
+ * 回调与对账用这个函数，因为它们带来的正是渠道结论。
+ */
+export function nextPaymentStatusFromProvider(current: string, outcome: PaymentOutcome,
+  channel: string): PaymentStatus {
+  if (current !== 'unknown') return nextPaymentStatus(current, outcome, channel);
+  const allowed = CHANNEL_OUTCOMES[channel as PaymentChannel];
+  if (!allowed) fail('UNSUPPORTED_PAYMENT_PROVIDER');
+  if (!allowed.includes(outcome)) fail('PAYMENT_OUTCOME_NOT_ALLOWED');
+  // unknown 只可能收敛到终局，不存在"退回 unknown"或再停在中间态。
+  if (outcome === 'succeeded' || outcome === 'collected') return 'succeeded';
+  if (outcome === 'cancelled') return 'cancelled';
+  if (outcome === 'rejected') return 'failed';
+  if (outcome === 'returned') return 'returned';
+  fail('PAYMENT_STATE_CONFLICT');
+}
+
+/** 订单上的付款状态：由台账状态投影而来，不单独维护一套。 */export function orderPaymentStatusFor(status: PaymentStatus): string {
   switch (status) {
     case 'collected': return 'collected';
     case 'succeeded': return 'succeeded';

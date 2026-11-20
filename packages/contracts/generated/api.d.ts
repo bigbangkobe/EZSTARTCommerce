@@ -4691,6 +4691,7 @@ export interface components {
             /** @enum {string} */
             environment: "sandbox" | "production";
             enabled: boolean;
+            displayName?: string;
             publicConfig?: {
                 [key: string]: unknown;
             };

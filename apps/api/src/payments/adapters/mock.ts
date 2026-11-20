@@ -34,6 +34,10 @@ export class MockPaymentAdapter implements PaymentAdapter {
   readonly channel = 'online' as const;
 
   private readonly payments = new Map<string, MockPayment>();
+  /** 退款按内部退款单号幂等：重试不能造出第二笔退款。 */
+  private readonly refunds = new Map<string, { providerTransactionId: string; amountMinor: number;
+    status: 'pending' | 'succeeded' | 'failed' }>();
+  private readonly refundByNumber = new Map<string, string>();
 
   async testConnection(ctx: AdapterContext): Promise<ConnectionCheck> {
     const apiKey = ctx.credentials.apiKey ?? '';
@@ -87,6 +91,14 @@ export class MockPaymentAdapter implements PaymentAdapter {
   }
 
   async refund(_ctx: AdapterContext, input: RefundInput): Promise<RefundResult> {
+    // 按内部退款单号幂等：重试拿回同一笔，不会重复退钱。
+    const prior = this.refundByNumber.get(input.refundNumber);
+    if (prior) {
+      const existing = this.refunds.get(prior);
+      return { providerRefundId: prior, status: existing?.status ?? 'pending',
+        amountMinor: existing?.amountMinor ?? input.amountMinor, rawStatus: 'IDEMPOTENT_REPLAY' };
+    }
+
     const found = this.byTransaction(input.providerTransactionId);
     if (!found) fail('REFUND_PAYMENT_NOT_FOUND', 'providerTransactionId');
     if (found.status !== 'succeeded') fail('REFUND_NOT_SETTLED', 'providerTransactionId');
@@ -96,12 +108,24 @@ export class MockPaymentAdapter implements PaymentAdapter {
       fail('REFUND_EXCEEDS_CAPTURED', 'amountMinor');
     }
     found.refundedMinor += input.amountMinor;
-    return {
-      providerRefundId: `mockr_${randomBytes(6).toString('hex')}`,
-      status: 'succeeded',
+    const providerRefundId = `mockr_${randomBytes(6).toString('hex')}`;
+    this.refunds.set(providerRefundId, {
+      providerTransactionId: input.providerTransactionId,
       amountMinor: input.amountMinor,
-      rawStatus: 'REFUNDED',
-    };
+      status: 'succeeded',
+    });
+    this.refundByNumber.set(input.refundNumber, providerRefundId);
+    return { providerRefundId, status: 'succeeded', amountMinor: input.amountMinor, rawStatus: 'REFUNDED' };
+  }
+
+  async queryRefund(_ctx: AdapterContext, providerRefundId: string): Promise<RefundResult> {
+    const found = this.refunds.get(providerRefundId);
+    // 查不到不等于失败：返回 unknown 语义的 pending，让上层保持 processing 继续等。
+    if (!found) {
+      return { providerRefundId, status: 'pending', amountMinor: 0, rawStatus: 'NOT_FOUND' };
+    }
+    return { providerRefundId, status: found.status, amountMinor: found.amountMinor,
+      rawStatus: found.status.toUpperCase() };
   }
 
   async verifyWebhook(ctx: AdapterContext, headers: Record<string, string>, rawBody: Buffer): Promise<WebhookEvent> {

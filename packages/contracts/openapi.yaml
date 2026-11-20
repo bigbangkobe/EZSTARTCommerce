@@ -7634,6 +7634,7 @@ components:
         providerCode: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,63}$' }
         environment: { type: string, enum: [sandbox, production] }
         enabled: { type: boolean }
+        displayName: { type: string, minLength: 1, maxLength: 80 }
         publicConfig: { type: object, additionalProperties: true }
         secretRef: { type: [string, 'null'], maxLength: 256, writeOnly: true }
         approvalReference: { type: [string, 'null'], maxLength: 200 }
