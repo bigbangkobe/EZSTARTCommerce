@@ -721,3 +721,14 @@
 - 后台：`/admin/catalog` 新增「专题（策展）」区（列表含各语言 slug 与商品件数、新建、编辑：三语名称/slug/简介、启用、排序、商品搜索加入/上下移/移除、删除）；`/admin/merchandising` 页面下拉自动含启用中的专题，专题版面下商品选择器按专题收窄、动态区块隐藏范围选择器。页面下拉同时改为按作用域标前缀（「分类 · 雪茄」/「专题 · 秋日選物」），避免两类同名时选错。
 
 验证：契约 **53 项**全绿、Prisma schema 有效、生成物一致；领域 **11 项**（陈列 6 + 专题 5）；新增真实 PostgreSQL HTTP 集成 **1 项**（`collections-http.test.ts`，覆盖新建/ slug 冲突 409 / 前台列表与平铺顺序 / 改 slug 301 / 版本冲突 409 / 页面与商品选择器 / 跨专题手工位与筛选拒绝 / 版面候选锁定本专题 / 停用后 404 且清理跳转 / 只读账号 403 / 删除后 404 且商品不受影响）；后台与前台 typecheck、生产构建通过；全量 `node --test` **330 项全绿**（含此前在本机偶发失败的 identity-http 并发恢复码用例）；端到端新增 2 项（后台建专题与改 slug 带 `If-Match`、前台导航进入专题索引），本地整包 **58 项全绿**（桌面 project；配置含桌面/移动两个 project）。
+
+部署：提交 `d48c36e` 已推送 `origin/main` 并部署 mrinhk（`./deploy.sh`，迁移容器正常退出、API healthy、Caddy 链路冒烟 200）。第 33 条迁移 `202611200100_collections` 应用成功（迁移总数 33）；生产库确认 `Collection`、`CollectionTranslation`、`CollectionProduct` 三张表存在、`SeoRedirect."collectionId"` 已建、`merchandising_page_key_shape` 已包含 `collection:<uuid>` 分支。
+
+生产冒烟：
+
+- `/api/v1/storefront/collections?locale=zh-HK` → **200**（当前店铺尚未创建专题，`items` 为空数组）；
+- `/api/v1/storefront/collections/autumn-picks` → **404**（未知 slug 不泄露专题是否存在）；
+- `/api/v1/admin/collections` 无会话 → **401**（专题管理必须登录）；
+- `https://mrinhk.com/zh-HK/collections`、`/en/collections` → **200**，HTML 含 `collections.index` 区块标记与「專題」文案；
+- `https://mrinhk.com/zh-HK` 导航已出现 `/zh-HK/collections` 入口；`sitemap.xml` 已包含三语专题索引地址与 hreflang；
+- `https://admin.mrinhk.com/admin/catalog` → **200**（专题编辑区随商品页面一起上线）。
