@@ -316,6 +316,43 @@ model BrandTranslation {
   @@unique([locale, slug])
 }
 
+/// 专题：运营挑选的一组商品（跨分类策展），与分类骨架分开维护（M04 第五批）。
+model Collection {
+  id String @id @default(uuid()) @db.Uuid
+  position Int @default(0)
+  enabled Boolean @default(true)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  translations CollectionTranslation[]
+  products CollectionProduct[]
+  redirects SeoRedirect[]
+  @@index([enabled, position])
+}
+
+model CollectionTranslation {
+  id String @id @default(uuid()) @db.Uuid
+  collectionId String @db.Uuid
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  locale String
+  name String
+  slug String?
+  description String?
+  @@unique([collectionId, locale])
+  @@unique([locale, slug])
+}
+
+/// 专题商品：position 决定前台顺序；联合主键保证同一专题内不重复。
+model CollectionProduct {
+  collectionId String @db.Uuid
+  productId String @db.Uuid
+  position Int @default(0)
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  @@id([collectionId, productId])
+  @@index([productId])
+}
+
 model Product {
   id String @id @default(uuid()) @db.Uuid
   status String @default("draft")
@@ -334,6 +371,7 @@ model Product {
   media ProductMedia[]
   attributes ProductAttribute[]
   categories ProductCategory[]
+  collections CollectionProduct[]
   @@index([status, createdAt])
 }
 
@@ -1564,17 +1602,21 @@ model SeoRedirect {
   statusCode Int          @default(301)
   pageId     String?      @db.Uuid
   page       ContentPage? @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  /// 专题 slug 变更产生的跳转归属；内容页用 pageId，两者互斥（都可为空 = 手工登记的跳转）。
+  collectionId String?     @db.Uuid
+  collection   Collection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
   createdBy  String?      @db.Uuid
   createdAt  DateTime     @default(now()) @db.Timestamptz(3)
   @@index([locale])
   @@index([pageId])
+  @@index([collectionId])
 }
 
 /// 陈列版面：首页/分类/专题共用一张表，pageKey 决定它服务哪个地址。
 /// 草稿在 blocks，线上只读 publishedSnapshot——保存草稿永远不影响线上陈列。
 model MerchandisingLayout {
   id                String                 @id @default(uuid()) @db.Uuid
-  /// home 或 category:<uuid>（见第 32 条迁移的 CHECK）；专题等路由上线后再加。
+  /// home、category:<uuid> 或 collection:<uuid>（见第 32/33 条迁移的 CHECK）。
   pageKey           String                 @unique
   kind              String                 @default("home")
   status            String                 @default("draft")

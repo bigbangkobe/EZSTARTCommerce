@@ -1,10 +1,10 @@
 # EZSTARTCommerce 测试策略与质量门禁
 
-2026-10-19 工程入口：`pnpm check` 运行契约验证、生成类型漂移检查、TypeScript 检查、身份规则/客户端单元与 HTTP 冒烟测试。范围与尚未实现的数据库/身份联调见 [R1 工程说明](R1_ENGINEERING_PROGRESS.md)；不能将这些结果视为全部发布门禁通过。
+2026-10-19 工程入口：`pnpm check` 运行契约验证、生成类型漂移检查、TypeScript 检查、身份规则/客户端单元与 HTTP 冒烟测试。范围与尚未实现的数据库/身份联调见 [R1 工程说明](../03-开发文档/R1_ENGINEERING_PROGRESS.md)；不能将这些结果视为全部发布门禁通过。
 
 > 版本：1.0（开发前质量规格）  
 > 当前状态：策略与场景已定义；可执行测试需随代码按模块实现。当前仓库还没有应用代码、测试框架配置或可运行的自动化测试，因此不能称为“单元测试已完成”。  
-> 配套：[API 接口契约](API_SPEC.md)、[测试用例矩阵](TEST_CASES.md)、[生产就绪验收](PRODUCTION_READINESS_ACCEPTANCE.md)。
+> 配套：[API 接口契约](../03-开发文档/API_SPEC.md)、[测试用例矩阵](TEST_CASES.md)、[生产就绪验收](PRODUCTION_READINESS_ACCEPTANCE.md)。
 
 ## 1. 目标与测试原则
 

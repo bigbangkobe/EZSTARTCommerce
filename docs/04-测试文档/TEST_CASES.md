@@ -2,7 +2,7 @@
 
 > 版本：1.0（开发前用例基线）  
 > 用例状态：预期结果已定义；测试代码、实际结果、证据、缺陷号和执行日期应在对应迭代/发布记录中填写。  
-> 测试规则：[测试策略](TEST_STRATEGY.md)；接口前置：[API 契约](API_SPEC.md)；交易场景：[生产就绪验收](PRODUCTION_READINESS_ACCEPTANCE.md)。
+> 测试规则：[测试策略](TEST_STRATEGY.md)；接口前置：[API 契约](../03-开发文档/API_SPEC.md)；交易场景：[生产就绪验收](PRODUCTION_READINESS_ACCEPTANCE.md)。
 
 ## 1. 执行字段
 
@@ -172,7 +172,7 @@ E2E 每条以独立、可重置测试店铺开始；用 Playwright 桌面与移�
 
 ## 8. 可执行契约回归
 
-执行入口：`packages/contracts/test_contract.py`；命令及依赖见 [契约校验说明](../packages/contracts/README.md)。这些用例校验 schema，不替代上述 API/业务用例。
+执行入口：`packages/contracts/test_contract.py`；命令及依赖见 [契约校验说明](../../packages/contracts/README.md)。这些用例校验 schema，不替代上述 API/业务用例。
 
 | ID | 覆盖 | 预期 |
 |---|---|---|
@@ -197,7 +197,7 @@ E2E 每条以独立、可重置测试店铺开始；用 Playwright 桌面与移�
 | CT-019 | 邀请摘要/重发/撤销 | 摘要拒绝 token 字段；管理操作声明 CSRF、邀请 If-Match；重发另声明 Idempotency-Key |
 | CT-020 | 市场审核 | 声明店主/MFA/CSRF；拒绝客户端指定审核人及写入系统计算的 expired 决策 |
 
-身份新增路由的事务、限流、跨浏览器、重放及并发用例见 [生命周期交付门槛](ADMIN_IDENTITY_LIFECYCLE.md#数据审计及交付门槛)，须在实际实现后另留执行证据。
+身份新增路由的事务、限流、跨浏览器、重放及并发用例见 [生命周期交付门槛](../03-开发文档/ADMIN_IDENTITY_LIFECYCLE.md#数据审计及交付门槛)，须在实际实现后另留执行证据。
 
 ## 9. R1 可执行代码用例
 

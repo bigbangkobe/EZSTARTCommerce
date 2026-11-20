@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  assertMerchandisingPublishable, categoryMerchandisingKey, MerchandisingRuleError, merchandisingSnapshot,
+  assertMerchandisingPublishable, categoryMerchandisingKey, collectionMerchandisingKey, MerchandisingRuleError, merchandisingSnapshot,
   parseMerchandisingPageKey,
   normalizeMerchandisingSections, rankCandidates, sectionTitle, visibleLimit, type MerchandisingSection,
 } from '../packages/domain/src/merchandising.js';
@@ -36,10 +36,13 @@ test('merchandising sections stay inside the registered registry', () => {
   assert.deepEqual(sections.map(item => item.position), [0, 1]);
   assert.equal(sections[1]?.sortMode, 'newest');
   assert.deepEqual(sections[1]?.categoryIds, [UUID_C]);
-  // 未注册类型、未实现排序、专题引用都必须被拒绝，而不是存下来后前台静默失效。
+  // 未注册类型、未实现排序必须被拒绝，而不是存下来后前台静默失效。
   assert.equal(code(() => normalizeMerchandisingSections([section({ type: 'custom_html' })], LOCALES)), 'MERCHANDISING_SECTION_UNSUPPORTED');
   assert.equal(code(() => normalizeMerchandisingSections([section({ sortMode: 'random' })], LOCALES)), 'MERCHANDISING_SORT_UNSUPPORTED');
-  assert.equal(code(() => normalizeMerchandisingSections([section({ collectionId: UUID_C })], LOCALES)), 'MERCHANDISING_COLLECTION_UNSUPPORTED');
+  // 专题筛选只对动态排序有意义：手工区块自己就是清单，加专题筛选属于配置冲突。
+  assert.equal(code(() => normalizeMerchandisingSections([section({ collectionId: UUID_C })], LOCALES)), 'MERCHANDISING_MODE_CONFLICT');
+  assert.equal(code(() => normalizeMerchandisingSections([section({ sortMode: 'newest', productIds: [], collectionId: 'summer' })], LOCALES)),
+    'VALIDATION_ERROR');
   assert.equal(code(() => normalizeMerchandisingSections([section(), section()], LOCALES)), 'MERCHANDISING_SECTION_DUPLICATE');
   assert.equal(code(() => normalizeMerchandisingSections([section({ script: 'alert(1)' })], LOCALES)), 'VALIDATION_ERROR');
   assert.equal(code(() => normalizeMerchandisingSections([section({ limit: 0 })], LOCALES)), 'VALIDATION_ERROR');
@@ -117,8 +120,13 @@ test('page keys are a closed set', () => {
   assert.deepEqual(parseMerchandisingPageKey(`category:${categoryId}`),
     { kind: 'category', targetId: categoryId, pageKey: `category:${categoryId}` });
   assert.equal(categoryMerchandisingKey(categoryId.toUpperCase()), `category:${categoryId}`);
-  // 还没上线的专题要能和写错的 key 区分开：一个提示「页面未开放」，一个提示「key 格式错」。
-  assert.equal(code(() => parseMerchandisingPageKey('collection:summer')), 'MERCHANDISING_PAGE_UNKNOWN');
+  // 分类与专题都用 id 绑定；专题已上线，只有真正未开放的作用域才报 PAGE_UNKNOWN。
+  const collectionId = '9b2d3c44-1a2b-4c3d-8e4f-5a6b7c8d9e0f';
+  assert.deepEqual(parseMerchandisingPageKey(`collection:${collectionId}`),
+    { kind: 'collection', targetId: collectionId, pageKey: `collection:${collectionId}` });
+  assert.equal(collectionMerchandisingKey(collectionId.toUpperCase()), `collection:${collectionId}`);
+  assert.equal(code(() => parseMerchandisingPageKey('collection:summer')), 'VALIDATION_ERROR');
+  assert.equal(code(() => parseMerchandisingPageKey('product:abc')), 'MERCHANDISING_PAGE_UNKNOWN');
   assert.equal(code(() => parseMerchandisingPageKey('category:cigars')), 'VALIDATION_ERROR');
   assert.equal(code(() => parseMerchandisingPageKey('category:')), 'VALIDATION_ERROR');
   assert.equal(code(() => parseMerchandisingPageKey('')), 'VALIDATION_ERROR');

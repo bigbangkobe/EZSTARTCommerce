@@ -21,7 +21,7 @@
 | 通知发送失败 | 案件、退款和库存状态不回滚；通知进入失败/重试队列并可追踪。 |
 | 越权或重复售后 | 未授权者不能审批/执行；同一订单行的累计数量和金额不超上限；所有拒绝、审批、执行和变更可审计。 |
 
-详细状态机和权限见 [M16 售后模块](modules/M16_AFTERSALES.md)。
+详细状态机和权限见 [M16 售后模块](../01-产品文档/modules/M16_AFTERSALES.md)。
 
 ## 2. 付款、收款账户和结算对账（M08）
 
@@ -143,6 +143,6 @@
 
 ## 关联规格
 
-- [M00 后台账号与权限](modules/M00_ADMIN_ACCESS.md)
-- [M07 订单](modules/M07_ORDERS.md) / [M08 付款](modules/M08_PAYMENTS.md) / [M09 配送](modules/M09_DELIVERY.md) / [M12 库存](modules/M12_INVENTORY.md) / [M16 售后](modules/M16_AFTERSALES.md)
-- [M02 前台](modules/M02_STOREFRONT.md) / [M04 内容与陈列](modules/M04_CONTENT_CMS.md) / [M15 私有部署](modules/M15_SECURITY_DEPLOYMENT.md)
+- [M00 后台账号与权限](../01-产品文档/modules/M00_ADMIN_ACCESS.md)
+- [M07 订单](../01-产品文档/modules/M07_ORDERS.md) / [M08 付款](../01-产品文档/modules/M08_PAYMENTS.md) / [M09 配送](../01-产品文档/modules/M09_DELIVERY.md) / [M12 库存](../01-产品文档/modules/M12_INVENTORY.md) / [M16 售后](../01-产品文档/modules/M16_AFTERSALES.md)
+- [M02 前台](../01-产品文档/modules/M02_STOREFRONT.md) / [M04 内容与陈列](../01-产品文档/modules/M04_CONTENT_CMS.md) / [M15 私有部署](../01-产品文档/modules/M15_SECURITY_DEPLOYMENT.md)

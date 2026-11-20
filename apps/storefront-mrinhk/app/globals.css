@@ -409,4 +409,6 @@ body {
 .category-list li p { margin: 8px 0 0; font-size: 14px; opacity: 0.72; }
 
 .category-intro { max-width: 720px; margin: 8px 0 0; opacity: 0.8; }
+/* 专题卡片里的件数：作为辅助信息，不与标题争字号。 */
+.collection-count { font-size: 13px; opacity: 0.6; }
 .category-section-title { margin: 32px 0 4px; font-size: 20px; }

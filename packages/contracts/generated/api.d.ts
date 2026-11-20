@@ -547,6 +547,45 @@ export interface paths {
         patch: operations["updateCategory"];
         trace?: never;
     };
+    "/admin/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List merchandising collections */
+        get: operations["listCollections"];
+        put?: never;
+        /** Create a merchandising collection */
+        post: operations["createCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/collections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        /** Get a merchandising collection */
+        get: operations["getCollection"];
+        put?: never;
+        post?: never;
+        /** Delete a collection (products and categories are not affected) */
+        delete: operations["deleteCollection"];
+        options?: never;
+        head?: never;
+        /** Update a collection (slug changes register a 301 from the old address) */
+        patch: operations["updateCollection"];
+        trace?: never;
+    };
     "/admin/brands": {
         parameters: {
             query?: never;
@@ -802,7 +841,7 @@ export interface paths {
             header?: never;
             path: {
                 /**
-                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @description Merchandising scope: `home`, `category:<uuid>` or `collection:<uuid>`. Ids are used so renaming or changing a slug cannot orphan a published layout.
                  * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
                  */
                 pageKey: components["parameters"]["PageKey"];
@@ -1111,6 +1150,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storefront/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List enabled collections that have a slug and at least one sellable product */
+        get: operations["listStorefrontCollections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storefront/collections/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one enabled collection with its published layout or the curated product order */
+        get: operations["getStorefrontCollection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storefront/pages": {
         parameters: {
             query?: never;
@@ -1205,23 +1278,6 @@ export interface paths {
         };
         /** Resolve a legacy URL to its current target */
         get: operations["lookupStorefrontRedirect"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/storefront/collections/{slug}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get a published collection and eligible product list */
-        get: operations["getStorefrontCollection"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3436,6 +3492,37 @@ export interface components {
             };
             meta: components["schemas"]["ResponseMeta"];
         };
+        Collection: {
+            /** Format: uuid */
+            id: string;
+            position: number;
+            enabled: boolean;
+            translations: components["schemas"]["CollectionTranslation"][];
+            productIds: string[];
+            productCount: number;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CollectionTranslation: {
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            name: string;
+            slug: string | null;
+            description: string | null;
+        };
+        CollectionEnvelope: {
+            data: components["schemas"]["Collection"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        CollectionListEnvelope: {
+            data: {
+                items: components["schemas"]["Collection"][];
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
         Brand: {
             /** Format: uuid */
             id: string;
@@ -3555,6 +3642,58 @@ export interface components {
             locale: "zh-CN" | "zh-HK" | "en";
             marketCode: string;
             contentRelease: string;
+        };
+        PublicCollection: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            slug: string;
+            description: string | null;
+            position: number;
+        };
+        PublicCollectionSummary: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            slug: string;
+            description: string | null;
+            position: number;
+            productCount: number;
+            alternates: {
+                /** @enum {string} */
+                locale: "zh-CN" | "zh-HK" | "en";
+                slug: string;
+            }[];
+        };
+        PublicCollectionListEnvelope: {
+            data: {
+                items: components["schemas"]["PublicCollectionSummary"][];
+                /** @enum {string} */
+                locale: "zh-CN" | "zh-HK" | "en";
+            };
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** @description layout is present when a page layout is published; products keeps the curator order when no visible section renders. */
+        PublicCollectionPage: {
+            collection: components["schemas"]["PublicCollection"];
+            alternates: {
+                /** @enum {string} */
+                locale: "zh-CN" | "zh-HK" | "en";
+                slug: string;
+            }[];
+            layout: {
+                version: number;
+                sections: components["schemas"]["PublicMerchandisingSection"][];
+            } | null;
+            products: components["schemas"]["PublicProduct"][];
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            marketCode: string;
+            contentRelease: string;
+        };
+        PublicCollectionEnvelope: {
+            data: components["schemas"]["PublicCollectionPage"];
+            meta: components["schemas"]["ResponseMeta"];
         };
         PublicMerchandisingSection: {
             sectionId: string;
@@ -3983,6 +4122,22 @@ export interface components {
         };
         CategoryWriteRequest: components["schemas"]["CategoryFields"] & Record<string, never>;
         CategoryPatchRequest: components["schemas"]["CategoryFields"];
+        CollectionTranslationInput: {
+            /** @enum {string} */
+            locale: "zh-CN" | "zh-HK" | "en";
+            name: string;
+            slug?: string | null;
+            description?: string | null;
+        };
+        CollectionFields: {
+            position?: number;
+            /** @default true */
+            enabled: boolean;
+            translations?: components["schemas"]["CollectionTranslationInput"][];
+            productIds?: string[];
+        };
+        CollectionWriteRequest: components["schemas"]["CollectionFields"] & Record<string, never>;
+        CollectionPatchRequest: components["schemas"]["CollectionFields"];
         BrandFields: {
             /** Format: uuid */
             logoMediaId?: string | null;
@@ -4104,8 +4259,11 @@ export interface components {
             limit: number;
             productIds?: string[];
             categoryIds?: string[];
-            /** @description Collection pages are not released yet; a non-null value is rejected with MERCHANDISING_COLLECTION_UNSUPPORTED. */
-            collectionId?: null;
+            /**
+             * Format: uuid
+             * @description Candidate filter for dynamic sections. On a collection page it must equal the page collection (otherwise MERCHANDISING_COLLECTION_OUT_OF_SCOPE); manual sections reject it as a mode conflict.
+             */
+            collectionId?: string | null;
         };
         MerchandisingPublishRequest: {
             expectedVersion: number;
@@ -6313,6 +6471,45 @@ export interface components {
                 "application/json": components["schemas"]["CategoryEnvelope"];
             };
         };
+        /** @description Collections in stable position order */
+        CollectionListSuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CollectionListEnvelope"];
+            };
+        };
+        /** @description Collection with translations and curated product order */
+        CollectionSuccess: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                ETag?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CollectionEnvelope"];
+            };
+        };
+        /** @description Enabled collection with its published layout, or the curated product order when no layout is published */
+        PublicCollectionSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicCollectionEnvelope"];
+            };
+        };
+        /** @description Public collection summaries with per-locale alternates */
+        PublicCollectionListSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PublicCollectionListEnvelope"];
+            };
+        };
         /** @description Brand list */
         BrandListSuccess: {
             headers: {
@@ -6471,7 +6668,7 @@ export interface components {
     parameters: {
         UuidId: string;
         /**
-         * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+         * @description Merchandising scope: `home`, `category:<uuid>` or `collection:<uuid>`. Ids are used so renaming or changing a slug cannot orphan a published layout.
          * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
          */
         PageKey: string;
@@ -7366,6 +7563,111 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    listCollections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["CollectionListSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    createCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionWriteRequest"];
+            };
+        };
+        responses: {
+            201: components["responses"]["CollectionSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["CollectionSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    deleteCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Collection deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    updateCollection: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag for optimistic concurrency; stale value returns VERSION_CONFLICT. */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionPatchRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["CollectionSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     listBrands: {
         parameters: {
             query?: never;
@@ -7783,7 +8085,7 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @description Merchandising scope: `home`, `category:<uuid>` or `collection:<uuid>`. Ids are used so renaming or changing a slug cannot orphan a published layout.
                  * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
                  */
                 pageKey: components["parameters"]["PageKey"];
@@ -7805,7 +8107,7 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @description Merchandising scope: `home`, `category:<uuid>` or `collection:<uuid>`. Ids are used so renaming or changing a slug cannot orphan a published layout.
                  * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
                  */
                 pageKey: components["parameters"]["PageKey"];
@@ -7868,7 +8170,7 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @description Merchandising scope: `home`, `category:<uuid>` or `collection:<uuid>`. Ids are used so renaming or changing a slug cannot orphan a published layout.
                  * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
                  */
                 pageKey: components["parameters"]["PageKey"];
@@ -7896,7 +8198,7 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @description Merchandising scope: `home`, `category:<uuid>` or `collection:<uuid>`. Ids are used so renaming or changing a slug cannot orphan a published layout.
                  * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
                  */
                 pageKey: components["parameters"]["PageKey"];
@@ -8171,6 +8473,43 @@ export interface operations {
             default: components["responses"]["UnexpectedError"];
         };
     };
+    listStorefrontCollections: {
+        parameters: {
+            query: {
+                locale: components["parameters"]["Locale"];
+                marketCode: components["parameters"]["MarketCode"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicCollectionListSuccess"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getStorefrontCollection: {
+        parameters: {
+            query: {
+                locale: components["parameters"]["Locale"];
+                marketCode: components["parameters"]["MarketCode"];
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicCollectionSuccess"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
     listStorefrontPages: {
         parameters: {
             query: {
@@ -8216,7 +8555,7 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.
+                 * @description Merchandising scope: `home`, `category:<uuid>` or `collection:<uuid>`. Ids are used so renaming or changing a slug cannot orphan a published layout.
                  * @example category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11
                  */
                 pageKey: components["parameters"]["PageKey"];
@@ -8272,26 +8611,6 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["PublicRedirectSuccess"];
-            422: components["responses"]["ValidationError"];
-            default: components["responses"]["UnexpectedError"];
-        };
-    };
-    getStorefrontCollection: {
-        parameters: {
-            query: {
-                locale: components["parameters"]["Locale"];
-                marketCode: components["parameters"]["MarketCode"];
-            };
-            header?: never;
-            path: {
-                slug: components["parameters"]["Slug"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: components["responses"]["Success"];
-            404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };

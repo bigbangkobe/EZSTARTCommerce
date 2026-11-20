@@ -27,13 +27,13 @@ async function redirectEntries(tx: Tx): Promise<RedirectEntry[]> {
 }
 
 /**
- * slug 变更后登记旧地址 → 新地址。
+ * 旧地址 → 新地址登记（内容页与专题共用）。
  * 失败即关闭：任何一步让链路成环时，宁可删掉这条重定向，也不把访客送进无限跳转。
+ * owner 决定这条跳转归属于谁（内容页 / 专题）：撤下时按归属清理，不会误删别人的跳转。
  */
-export async function recordSlugRedirect(tx: Tx, command: { locale: string; fromSlug: string; toSlug: string;
-  pageId: string; actorId: string | null }): Promise<void> {
-  const fromPath = contentPagePath(command.locale, command.fromSlug);
-  const toPath = contentPagePath(command.locale, command.toSlug);
+export async function recordPathRedirect(tx: Tx, command: { locale: string; fromPath: string; toPath: string;
+  owner: { pageId?: string; collectionId?: string }; actorId: string | null }): Promise<void> {
+  const { fromPath, toPath } = command;
   if (fromPath === toPath) return;
   const entries = await redirectEntries(tx);
   const plan = slugChangePlan(entries, fromPath, toPath);
@@ -41,10 +41,12 @@ export async function recordSlugRedirect(tx: Tx, command: { locale: string; from
   for (const retarget of plan.retarget) {
     await tx.seoRedirect.updateMany({ where: { fromPath: retarget.fromPath }, data: { toPath: retarget.toPath } });
   }
+  const pageId = command.owner.pageId ?? null;
+  const collectionId = command.owner.collectionId ?? null;
   await tx.seoRedirect.upsert({
     where: { fromPath },
-    create: { locale: command.locale, fromPath, toPath, statusCode: 301, pageId: command.pageId, createdBy: command.actorId },
-    update: { toPath, statusCode: 301, pageId: command.pageId, createdBy: command.actorId },
+    create: { locale: command.locale, fromPath, toPath, statusCode: 301, pageId, collectionId, createdBy: command.actorId },
+    update: { toPath, statusCode: 301, pageId, collectionId, createdBy: command.actorId },
   });
 
   const after = await redirectEntries(tx);
@@ -52,6 +54,15 @@ export async function recordSlugRedirect(tx: Tx, command: { locale: string; from
     // 记录后仍解析不出目标（成环/自跳）：删掉刚写的这条，保持「旧地址 404」而不是坏跳转。
     await tx.seoRedirect.deleteMany({ where: { fromPath } });
   }
+}
+
+/** 内容页 slug 变更：把「语言 + slug」翻译成公开路径后登记跳转。 */
+export async function recordSlugRedirect(tx: Tx, command: { locale: string; fromSlug: string; toSlug: string;
+  pageId: string; actorId: string | null }): Promise<void> {
+  await recordPathRedirect(tx, { locale: command.locale,
+    fromPath: contentPagePath(command.locale, command.fromSlug),
+    toPath: contentPagePath(command.locale, command.toSlug),
+    owner: { pageId: command.pageId }, actorId: command.actorId });
 }
 
 /** 撤下页面：指向它的重定向全部清理，避免 301 把访客送到一个已经不存在的地址。 */

@@ -706,3 +706,18 @@
 - `sitemap.xml` → **200**，已包含三语分类索引地址与 hreflang。
 
 **上线时发现并当场修掉的问题**：生产分类只有名称、`slug` 为空，而分类页地址完全依赖 slug；后台原本只能新建分类、不能编辑，等于分类页在真实店铺里无法进入。已在 `/admin/catalog` 补分类编辑表单（三语名称 + slug、启用、排序、`If-Match` 版本锁），并在列表标出「无 slug（前台不可见）」。店主给分类填上 slug 后，前台分类页、导航与站点地图最多半分钟内生效。
+
+## 2026-11-20：M04 第五批 专题（Collection）——策展位、版面绑定与 slug 301
+
+范围：把 M04 里最后一个「明确拒绝」的作用域补上。专题是运营挑选的一组商品（可跨分类），独立于分类骨架；前台有列表页与详情页，详情页可以再套一份陈列版面；改 slug 时旧地址 301 到新地址。
+
+- 契约：新增 `/admin/collections`、`/admin/collections/{id}`（GET/PATCH/DELETE，内容读/写权限、`If-Match` 版本锁）与 `/storefront/collections`、`/storefront/collections/{slug}`；`PageKey` 模式扩为 `home | category:<uuid> | collection:<uuid>`；区块输入放开 `collectionId`（动态候选筛选）；新增 `Collection`、`CollectionWriteRequest/PatchRequest`、`PublicCollection*` 等模型；契约测试 52 → **53 项**。
+- 领域：新增 `packages/domain/src/collections.ts`（slug 只接受小写短横线、草稿可暂不写 slug、商品清单去重、`collectionPath`、前台可见性）；`merchandising.ts` 增加 `collectionMerchandisingKey/Ref`、解析 `collection:` 前缀、放开区块 `collectionId`（与手工模式冲突仍拒绝）。
+- 第 33 条迁移 `202611200100_collections`：`Collection` / `CollectionTranslation`（三语名称、slug、简介；`(locale, slug)` 唯一）/ `CollectionProduct`（联合主键 + position）；`SeoRedirect` 增加 `collectionId`（专题删除时置空，保留历史跳转）；`MerchandisingLayout` 的 pageKey/kind CHECK 放开专题作用域并保持「kind 必须与 key 前缀一致」。
+- 服务端：新增 `CollectionService`（列表/新建/编辑/删除）。编辑时按语言比对旧 slug 并登记 301（复用内容页的 `recordPathRedirect`，把归属参数化成 `pageId` 或 `collectionId`）；停用或删除时清理指向该专题的跳转；商品 id 校验真实存在，重复商品 422 `COLLECTION_PRODUCT_DUPLICATE`，slug 冲突 409 `SLUG_TAKEN`。
+- 陈列服务：`ref()` 校验专题存在；页面级范围校验从「分类」泛化为分类/专题；专题版面里区块 `collectionId` 必须等于本页专题（`MERCHANDISING_COLLECTION_OUT_OF_SCOPE`）；页面选择器与商品选择器都带上专题（`collectionId` 过滤）。
+- 前台：`getCollection` 返回专题信息、各语言地址、已发布版面或按编排顺序平铺的商品；候选池通过 `sellableWhere` 的 `collectionIds` 统一收窄（新增到 `SellableScope`），动态区块的 `collectionId` 在 `sellablePool` 里作为附加筛选；`listCollections` 只列「启用 + 有当前语言 slug + 至少一件当前市场可售商品」，count 按可售商品算而不是关联总数。
+- 前台页面：`/[locale]/collections`（索引，件数用 `{count}` 文案）与 `/[locale]/collections/{slug}`（详情，404 时先查已登记 301 再 notFound）；导航新增「專題/专题/Collections」，三语文案与 SEO 描述补齐，站点地图按专题 id 归并三语地址并写 hreflang。
+- 后台：`/admin/catalog` 新增「专题（策展）」区（列表含各语言 slug 与商品件数、新建、编辑：三语名称/slug/简介、启用、排序、商品搜索加入/上下移/移除、删除）；`/admin/merchandising` 页面下拉自动含启用中的专题，专题版面下商品选择器按专题收窄、动态区块隐藏范围选择器。页面下拉同时改为按作用域标前缀（「分类 · 雪茄」/「专题 · 秋日選物」），避免两类同名时选错。
+
+验证：契约 **53 项**全绿、Prisma schema 有效、生成物一致；领域 **11 项**（陈列 6 + 专题 5）；新增真实 PostgreSQL HTTP 集成 **1 项**（`collections-http.test.ts`，覆盖新建/ slug 冲突 409 / 前台列表与平铺顺序 / 改 slug 301 / 版本冲突 409 / 页面与商品选择器 / 跨专题手工位与筛选拒绝 / 版面候选锁定本专题 / 停用后 404 且清理跳转 / 只读账号 403 / 删除后 404 且商品不受影响）；后台与前台 typecheck、生产构建通过；全量 `node --test` **330 项全绿**（含此前在本机偶发失败的 identity-http 并发恢复码用例）；端到端新增 2 项（后台建专题与改 slug 带 `If-Match`、前台导航进入专题索引），本地整包 **58 项全绿**（桌面 project；配置含桌面/移动两个 project）。

@@ -58,6 +58,25 @@ export class StorefrontController extends ManagementHttp {
     this.send(response, request, 200, await this.front().getCategory(slug, text(locale, 10), text(marketCode, 8)));
   }
 
+  /** 专题列表：只列启用、有当前语言 slug、且至少有一件可售商品的专题。 */
+  @Get('collections')
+  async collections(@Query('locale') locale: unknown, @Query('marketCode') marketCode: unknown,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    this.send(response, request, 200, await this.front().listCollections(text(locale, 10), text(marketCode, 8)));
+  }
+
+  /**
+   * 专题页：专题信息 + 已发布版面（没有版面就按编排顺序平铺商品）。
+   * 缓存与分类页同档 30 秒：专题改名/换商品最多半分钟生效，商品资格靠重新读取收敛。
+   */
+  @Get('collections/:slug')
+  async collection(@Param('slug') slug: string, @Query('locale') locale: unknown, @Query('marketCode') marketCode: unknown,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    if (!/^[^\s/]{1,180}$/.test(slug)) throw new AuthError(422, 'VALIDATION_ERROR');
+    response.setHeader('Cache-Control', 'public, max-age=30');
+    this.send(response, request, 200, await this.front().getCollection(slug, text(locale, 10), text(marketCode, 8)));
+  }
+
   /**
    * 首页陈列：未发布时 404，前台据此退回主题默认布局（配置没做好不能把首页打空）。
    * 缓存 30 秒与重定向清单同档：陈列变更最多半分钟生效，但商品资格失效靠重新读取收敛。

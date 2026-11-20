@@ -956,13 +956,17 @@ class ContractTests(unittest.TestCase):
         self.assertEqual([], errors("MerchandisingWriteRequest",
                                     {"expectedVersion": 2, "sections": [dict(section, sortMode="fulfilled_sales_30d",
                                                                              productIds=[])]}))
-        # 版面只接受已注册的区块类型与已实现的排序口径；专题引用在本批明确不支持。
+        # 版面只接受已注册的区块类型与已实现的排序口径。
         self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
                                                              "sections": [dict(section, type="custom_html")]}))
         self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
                                                              "sections": [dict(section, sortMode="random")]}))
+        # 专题筛选只允许 uuid（手工区块再带专题筛选由领域层拒绝，契约层不管这个语义）。
+        self.assertEqual([], errors("MerchandisingWriteRequest",
+                                    {"expectedVersion": 1, "sections": [dict(section, sortMode="newest",
+                                                                             productIds=[], collectionId=UUID)]}))
         self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
-                                                             "sections": [dict(section, collectionId=UUID)]}))
+                                                             "sections": [dict(section, collectionId="summer")]}))
         self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
                                                              "sections": [dict(section, limit=25)]}))
         self.assertTrue(errors("MerchandisingWriteRequest", {"expectedVersion": 1,
@@ -995,6 +999,7 @@ class ContractTests(unittest.TestCase):
         pattern = key_param["schema"]["pattern"]
         self.assertTrue(re.match(pattern, "home"))
         self.assertTrue(re.match(pattern, f"category:{UUID}"))
+        self.assertTrue(re.match(pattern, f"collection:{UUID}"))
         self.assertFalse(re.match(pattern, "category:cigars"))
         self.assertFalse(re.match(pattern, "collection:summer"))
 
@@ -1035,6 +1040,63 @@ class ContractTests(unittest.TestCase):
                                          "layout": {"version": 2, "sections": [dict(section, position=0)]},
                                          "products": [], "locale": "zh-HK", "marketCode": "HK",
                                          "contentRelease": "cr-7"},
+                                "meta": {"requestId": "req-test"}}))
+
+    def test_collections_are_curated_by_id_and_slug_changes_keep_a_301(self):
+        # 专题沿用内容域权限：策展是内容运营动作，不是商品目录维护。
+        listing = SPEC["paths"]["/admin/collections"]["get"]
+        create = SPEC["paths"]["/admin/collections"]["post"]
+        self.assertEqual("content.read", listing["x-permission"])
+        self.assertEqual("content.write", create["x-permission"])
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], create["security"])
+        patch = SPEC["paths"]["/admin/collections/{id}"]["patch"]
+        self.assertIn({"$ref": "#/components/parameters/IfMatch"}, patch["parameters"])
+        self.assertIn("delete", SPEC["paths"]["/admin/collections/{id}"])
+
+        body = {"translations": [{"locale": "zh-HK", "name": "秋日選物", "slug": "autumn-picks"},
+                                 {"locale": "en", "name": "Autumn picks"}],
+                "productIds": [UUID], "enabled": True, "position": 0}
+        self.assertEqual([], errors("CollectionWriteRequest", body))
+        # slug 是前台地址：只接受小写短横线形式，草稿可以先不写。
+        self.assertTrue(errors("CollectionWriteRequest",
+                               {"translations": [{"locale": "zh-HK", "name": "秋日選物", "slug": "Autumn Picks"}]}))
+        self.assertTrue(errors("CollectionWriteRequest", {"translations": []}))
+        self.assertTrue(errors("CollectionWriteRequest", {"productIds": ["not-a-uuid"]}))
+        self.assertTrue(errors("CollectionPatchRequest", {}))
+        self.assertEqual([], errors("CollectionPatchRequest", {"enabled": False}))
+        # 未知字段会被拒绝：专题没有「图片位」之类还没实现的配置。
+        self.assertTrue(errors("CollectionPatchRequest", {"coverMediaId": UUID}))
+
+        view = {"id": UUID, "position": 0, "enabled": True, "version": 3,
+                "translations": [{"locale": "zh-HK", "name": "秋日選物", "slug": "autumn-picks",
+                                  "description": None}],
+                "productIds": [UUID], "productCount": 1,
+                "createdAt": "2026-11-20T02:00:00.000Z", "updatedAt": "2026-11-20T02:00:00.000Z"}
+        self.assertEqual([], errors("CollectionEnvelope", {"data": view, "meta": {"requestId": "req-test"}}))
+        self.assertTrue(errors("CollectionEnvelope",
+                               {"data": dict(view, internalNote="x"), "meta": {"requestId": "req-test"}}))
+
+        public_list = SPEC["paths"]["/storefront/collections"]["get"]
+        self.assertNotIn("security", public_list)
+        summary = {"id": UUID, "name": "秋日選物", "slug": "autumn-picks", "description": None, "position": 0,
+                   "productCount": 2, "alternates": [{"locale": "zh-HK", "slug": "autumn-picks"}]}
+        self.assertEqual([], errors("PublicCollectionListEnvelope",
+                                    {"data": {"items": [summary], "locale": "zh-HK"},
+                                     "meta": {"requestId": "req-test"}}))
+        # 空专题不进前台列表，因此 productCount 至少为 1。
+        self.assertTrue(errors("PublicCollectionListEnvelope",
+                               {"data": {"items": [dict(summary, productCount=0)], "locale": "zh-HK"},
+                                "meta": {"requestId": "req-test"}}))
+
+        page = {"collection": {"id": UUID, "name": "秋日選物", "slug": "autumn-picks", "description": None,
+                              "position": 0},
+                "alternates": [{"locale": "zh-HK", "slug": "autumn-picks"}],
+                "layout": None, "products": [], "locale": "zh-HK", "marketCode": "HK", "contentRelease": "cr-9"}
+        self.assertEqual([], errors("PublicCollectionEnvelope",
+                                    {"data": page, "meta": {"requestId": "req-test"}}))
+        # 公开响应不是编辑器接口：后台字段（enabled/version/productIds）不能混进来。
+        self.assertTrue(errors("PublicCollectionEnvelope",
+                               {"data": dict(page, collection=dict(page["collection"], enabled=True)),
                                 "meta": {"requestId": "req-test"}}))
 
 if __name__ == "__main__":

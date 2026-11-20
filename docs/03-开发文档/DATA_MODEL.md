@@ -21,7 +21,7 @@
 | 商店配置 | StoreConfig、LocaleConfig、MarketProfile、FeatureFlag | 一店配置多语言、市场和功能开关 |
 | 管理身份 | AdminUser、Role、Permission、AdminSession、MFAFactor、AuditLog | 用户通过角色获得权限；高权限账号启用 MFA，会话可撤销，关键操作可审计 |
 | 商品目录 | Product、ProductTranslation、Variant、Category、Brand、MediaAsset | 一个商品有多个翻译、规格、图片和分类关联 |
-| 内容/陈列 | ContentPage、Article、FAQItem、HomepageSection、ProductPlacement、PublishVersion、Translation、SeoRedirect | 页面和陈列配置按语言/版本发布；主题区块引用商品/分类；改 slug 保留重定向 |
+| 内容/陈列 | ContentPage、Article、FAQItem、HomepageSection、ProductPlacement、PublishVersion、Translation、SeoRedirect、Collection、CollectionProduct | 页面和陈列配置按语言/版本发布；主题区块引用商品/分类；专题是跨分类的商品策展位；改 slug 保留重定向 |
 | 购物 | Cart、CartItem、CheckoutSession | 访客购物会话包含多个商品规格 |
 | 交易 | Order、OrderItem、Payment、PaymentEvent、Refund、Shipment、ShipmentItem | 订单包含商品快照、付款/退款流水和一个或多个包裹履约记录 |
 | 结算对账 | SettlementBatch、SettlementLine、ReconciliationMatch | 服务商结算行与支付/退款台账匹配；差异保留原始记录并人工审计 |
@@ -119,13 +119,21 @@
 - SeoRedirect：locale、from_path（唯一）、to_path、status_code（301/308）、page_id（可空，页面删除后置空但保留跳转）、created_by。CHECK 约束保证两端都是站内相对路径且不相同。
 - 关键边界：预览只读草稿、不写 ContentRelease、不加载埋点；slug 变更时自动登记旧地址 → 新地址并把入站链改直；撤下页面时清理指向它的重定向；前台入口层缓存清单 30 秒后本地匹配，命中即 301。
 
-### MerchandisingLayout / MerchandisingVersion（M04 第三批 202611190100；第四批 202611190120 扩到分类）
+### MerchandisingLayout / MerchandisingVersion（M04 第三批 202611190100；第四批 202611190120 扩到分类；第五批 202611200100 扩到专题）
 
-- MerchandisingLayout：page_key（唯一，`home` 或 `category:<uuid>`，第 32 条迁移用 CHECK 锁死这两种形状）、kind（home/category；kind 必须与 page_key 形状一致）、sections（草稿区块 JSON）、status（draft/published）、version（乐观锁）、published_snapshot（线上不可变快照）、published_at/published_by、created_by/updated_by。
-- 分类版面用分类 id 绑定而不是 slug：分类改名或改 slug 时已发布版面不会失联，也不会指到别的分类上。分类被停用后版面仍在库里，但前台分类页 404。
+- MerchandisingLayout：page_key（唯一，`home`、`category:<uuid>` 或 `collection:<uuid>`，第 32/33 条迁移用 CHECK 锁死这三种形状）、kind（home/category/collection；kind 必须与 page_key 形状一致）、sections（草稿区块 JSON）、status（draft/published）、version（乐观锁）、published_snapshot（线上不可变快照）、published_at/published_by、created_by/updated_by。
+- 分类/专题版面都用 id 绑定而不是 slug：改名或改 slug 时已发布版面不会失联，也不会指到别的对象上。分类/专题被停用后版面仍在库里，但前台对应页面 404。
 - MerchandisingVersion：layout_id + version（唯一）、snapshot（发布快照）、note、published_at/published_by；历史不可覆盖，回滚只能再发一版。
-- 区块字段：section_id、type（服务端闭集，本批只有 product_grid）、visible、position（由数组顺序重排）、title_by_locale、sort_mode（manual/newest/fulfilled_sales_30d/price_asc/price_desc）、limit（1–24）、product_ids（手工顺序）、category_ids（动态候选范围）。
-- 关键边界：CHECK 约束保证「draft 无快照、published 必有快照」；保存草稿不动线上；发布要求三语标题齐全且手工商品全部可售，分类版面还要求手工商品属于该分类（`MERCHANDISING_PRODUCT_OUT_OF_SCOPE`）；读取时重跑商品资格，手工区块失效商品隐藏并在后台标 issues，动态区块由后续候选补足；分类版面的候选池先按分类收窄，区块再在此范围内按规则筛选；发布同时推进 ContentRelease（区块埋点按新版本分组）。
+- 区块字段：section_id、type（服务端闭集，本批只有 product_grid）、visible、position（由数组顺序重排）、title_by_locale、sort_mode（manual/newest/fulfilled_sales_30d/price_asc/price_desc）、limit（1–24）、product_ids（手工顺序）、category_ids 与 collection_id（动态候选范围，两者叠加是「与」）。
+- 关键边界：CHECK 约束保证「draft 无快照、published 必有快照」；保存草稿不动线上；发布要求三语标题齐全且手工商品全部可售，分类/专题版面还要求手工商品属于该范围（`MERCHANDISING_PRODUCT_OUT_OF_SCOPE`），专题版面里区块的 collection_id 必须等于本页专题（`MERCHANDISING_COLLECTION_OUT_OF_SCOPE`）；读取时重跑商品资格，手工区块失效商品隐藏并在后台标 issues，动态区块由后续候选补足；页面级范围（分类/专题）先收窄候选池，区块再在此范围内按规则筛选；发布同时推进 ContentRelease（区块埋点按新版本分组）。
+
+### Collection / CollectionTranslation / CollectionProduct（M04 第五批 202611200100）
+
+- Collection：position（前台列表顺序）、enabled、version（乐观锁）、created_at/updated_at。专题是临时策展位，可以随时新建/删除，不影响商品与分类本身。
+- CollectionTranslation：collection_id + locale（唯一）、name（1–160）、slug（可空，同语言内唯一，只接受小写短横线形式）、description（可空）。slug 为空时该语言没有前台地址，列表与站点地图都不列。
+- CollectionProduct：collection_id + product_id（联合主键去重）、position（运营编排顺序）。商品与专题是多对多：同一商品可以出现在多个专题里，专题也可以跨分类。
+- SeoRedirect 新增 collection_id（可空，专题删除时置空并保留历史跳转）：专题改 slug 时登记旧地址 → 新地址 301；停用或删除专题时清理指向它的跳转，避免把访客送进 404。
+- 关键边界：前台只列「启用 + 当前语言有 slug + 至少有一件当前市场可售商品」的专题；专题页优先渲染已发布版面，没有版面时按 position 平铺商品；专题页的候选池被锁定在该专题内，跨专题筛选保存即拒。
 
 ### AfterSalesCase / Refund / Return
 

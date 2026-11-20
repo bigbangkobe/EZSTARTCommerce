@@ -4,6 +4,7 @@ import { LOCALES, altPaths, isLocale, localePath, type Locale } from '../lib/i18
 import { fetchProducts } from '../lib/products';
 import { fetchPages } from '../lib/content';
 import { fetchCategories } from '../lib/categories';
+import { fetchCollections } from '../lib/collections';
 
 /**
  * 站点地图：只收已发布、明确可索引的页面。
@@ -15,7 +16,7 @@ import { fetchCategories } from '../lib/categories';
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = `https://${site.domain}`;
   const now = new Date();
-  const staticPaths = ['', '/products', '/categories', '/contact'];
+  const staticPaths = ['', '/products', '/categories', '/collections', '/contact'];
 
   // sitemap 的 alternate 必须是绝对地址，相对路径爬虫不会解析。
   const absoluteAlternates = (path: string) => Object.fromEntries(
@@ -90,6 +91,35 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       const slug = slugs.get(locale);
       if (!slug) continue;
       entries.push({ url: `${base}${localePath(locale, `/categories/${encodeURIComponent(slug)}`)}`,
+        lastModified: now, changeFrequency: 'weekly', priority: 0.6, alternates: { languages } });
+    }
+  }
+
+  // 专题页：只收启用且当前有可售商品的专题（列表接口已经按这个口径过滤），按专题 id 归并三语地址。
+  const collectionSlugs = new Map<string, Map<Locale, string>>();
+  for (const locale of LOCALES) {
+    const { items } = await fetchCollections(locale);
+    for (const item of items) {
+      const map = collectionSlugs.get(item.id) ?? new Map<Locale, string>();
+      for (const alternate of item.alternates ?? []) {
+        if (isLocale(alternate.locale)) map.set(alternate.locale, alternate.slug);
+      }
+      collectionSlugs.set(item.id, map);
+    }
+  }
+  for (const slugs of collectionSlugs.values()) {
+    const languages: Record<string, string> = {};
+    for (const locale of LOCALES) {
+      const slug = slugs.get(locale);
+      if (slug) languages[locale] = `${base}${localePath(locale, `/collections/${encodeURIComponent(slug)}`)}`;
+    }
+    const fallback = languages['zh-HK'] ?? Object.values(languages)[0];
+    if (!fallback) continue;
+    languages['x-default'] = fallback;
+    for (const locale of LOCALES) {
+      const slug = slugs.get(locale);
+      if (!slug) continue;
+      entries.push({ url: `${base}${localePath(locale, `/collections/${encodeURIComponent(slug)}`)}`,
         lastModified: now, changeFrequency: 'weekly', priority: 0.6, alternates: { languages } });
     }
   }

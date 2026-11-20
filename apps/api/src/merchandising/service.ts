@@ -15,7 +15,7 @@ const MERCHANDISING_CODES = [
   'MERCHANDISING_PAGE_UNKNOWN', 'MERCHANDISING_SECTION_UNSUPPORTED', 'MERCHANDISING_SECTION_DUPLICATE',
   'MERCHANDISING_SORT_UNSUPPORTED', 'MERCHANDISING_MODE_CONFLICT', 'MERCHANDISING_PRODUCT_DUPLICATE',
   'MERCHANDISING_LIMIT_UNREACHABLE', 'MERCHANDISING_LOCALE_INCOMPLETE', 'MERCHANDISING_NO_VISIBLE_SECTION',
-  'MERCHANDISING_COLLECTION_UNSUPPORTED', 'MERCHANDISING_PRODUCT_INELIGIBLE', 'MERCHANDISING_PRODUCT_OUT_OF_SCOPE',
+  'MERCHANDISING_COLLECTION_OUT_OF_SCOPE', 'MERCHANDISING_PRODUCT_INELIGIBLE', 'MERCHANDISING_PRODUCT_OUT_OF_SCOPE',
 ] as const;
 
 function rule<T>(fn: () => T): T {
@@ -94,26 +94,45 @@ export class MerchandisingService {
   }
 
   /**
-   * 分类版面的手工位必须属于这个分类：否则分类页会出现「点进去发现不在这个分类」的商品，
-   * 顾客会以为筛选坏了。跨分类推荐请用首页版面，不要在分类页混装。
+   * 页面级范围校验：手工位必须属于这个分类/专题，否则页面上会出现「点进去发现不在这个范围」的商品，
+   * 顾客会以为筛选坏了。跨范围推荐请用首页版面，不要在分类页/专题页混装。
+   *
+   * 专题页额外校验区块级 collectionId：在专题 A 的版面里再筛专题 B，候选池交集必然为空，
+   * 这种配置存下来只会在前台变成一个空区块，不如保存时就拒绝。
    */
-  private async assertCategoryScope(tx: Tx, ref: MerchandisingPageRef, sections: readonly MerchandisingSection[]) {
-    if (ref.kind !== 'category' || !ref.targetId) return;
+  private async assertPageScope(tx: Tx, ref: MerchandisingPageRef, sections: readonly MerchandisingSection[]) {
+    if (!ref.targetId) return;
     const ids = [...new Set(this.manualProducts(sections).map(item => item.productId))];
-    if (!ids.length) return;
-    const linked = await tx.productCategory.findMany({ where: { categoryId: ref.targetId, productId: { in: ids } },
-      select: { productId: true } });
-    const allowed = new Set(linked.map(row => row.productId));
-    if (ids.some(id => !allowed.has(id))) throw new AuthError(422, 'MERCHANDISING_PRODUCT_OUT_OF_SCOPE');
+    if (ref.kind === 'category') {
+      if (!ids.length) return;
+      const linked = await tx.productCategory.findMany({ where: { categoryId: ref.targetId, productId: { in: ids } },
+        select: { productId: true } });
+      const allowed = new Set(linked.map(row => row.productId));
+      if (ids.some(id => !allowed.has(id))) throw new AuthError(422, 'MERCHANDISING_PRODUCT_OUT_OF_SCOPE');
+      return;
+    }
+    if (ref.kind === 'collection') {
+      if (sections.some(section => section.collectionId && section.collectionId !== ref.targetId)) {
+        throw new AuthError(422, 'MERCHANDISING_COLLECTION_OUT_OF_SCOPE');
+      }
+      if (!ids.length) return;
+      const linked = await tx.collectionProduct.findMany({ where: { collectionId: ref.targetId, productId: { in: ids } },
+        select: { productId: true } });
+      const allowed = new Set(linked.map(row => row.productId));
+      if (ids.some(id => !allowed.has(id))) throw new AuthError(422, 'MERCHANDISING_PRODUCT_OUT_OF_SCOPE');
+    }
   }
 
   /**
-   * 解析并校验版面作用域：分类版面必须指向一个真实存在的分类。
-   * 用 id 而不是 slug 绑定，分类改名/改 slug 时已发布版面不会失联。
+   * 解析并校验版面作用域：分类/专题版面必须指向一个真实存在的对象。
+   * 用 id 而不是 slug 绑定，改名/改 slug 时已发布版面不会失联。
    */
   private async ref(tx: Tx, pageKeyInput: string): Promise<MerchandisingPageRef> {
     const ref = rule(() => parseMerchandisingPageKey(pageKeyInput));
     if (ref.kind === 'category' && !await tx.category.findUnique({ where: { id: ref.targetId! }, select: { id: true } })) {
+      throw new AuthError(404, 'NOT_FOUND');
+    }
+    if (ref.kind === 'collection' && !await tx.collection.findUnique({ where: { id: ref.targetId! }, select: { id: true } })) {
       throw new AuthError(404, 'NOT_FOUND');
     }
     return ref;
@@ -174,6 +193,17 @@ export class MerchandisingService {
         items.push({ pageKey, kind: 'category', targetId: category.id, name: category.translations.find(item => item.locale === 'zh-HK')?.name
           ?? category.translations[0]?.name ?? category.id, status: row?.status ?? 'none', version: row?.version ?? 0 });
       }
+      // 专题只列启用中的（停用专题前台不提供，给它排班只会让运营以为已经上线）。
+      const collections = await tx.collection.findMany({ where: { enabled: true }, include: { translations: true },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] });
+      for (const collection of collections) {
+        const pageKey = `collection:${collection.id}`;
+        const row = byKey.get(pageKey);
+        items.push({ pageKey, kind: 'collection', targetId: collection.id,
+          name: collection.translations.find(item => item.locale === 'zh-HK')?.name
+            ?? collection.translations[0]?.name ?? collection.id, status: row?.status ?? 'none',
+          version: row?.version ?? 0 });
+      }
       return { items };
     });
   }
@@ -188,7 +218,7 @@ export class MerchandisingService {
       const key = ref.pageKey;
       const locales = await contentLocales(tx);
       const sections = rule(() => normalizeMerchandisingSections(body.sections ?? [], locales));
-      await this.assertCategoryScope(tx, ref, sections);
+      await this.assertPageScope(tx, ref, sections);
       // advisory lock 返回 void，$queryRaw 反序列化不了；用 $executeRaw 只拿影响行数。
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`merchandising:${key}`}))`;
       const existing = await tx.merchandisingLayout.findUnique({ where: { pageKey: key } });
@@ -222,7 +252,7 @@ export class MerchandisingService {
       if (!existing) throw new AuthError(404, 'NOT_FOUND');
       if (existing.version !== body.expectedVersion) throw new AuthError(409, 'VERSION_CONFLICT');
       const sections = rule(() => normalizeMerchandisingSections(existing.sections, locales));
-      await this.assertCategoryScope(tx, ref, sections);
+      await this.assertPageScope(tx, ref, sections);
       rule(() => assertMerchandisingPublishable(sections, locales));
       const issues = await this.eligibility(tx, this.manualProducts(sections).map(item => item.productId));
       if ([...issues.values()].some(reason => reason !== null)) throw new AuthError(422, 'MERCHANDISING_PRODUCT_INELIGIBLE');
@@ -271,13 +301,15 @@ export class MerchandisingService {
    * 商品选择器：只回摘要与资格原因，不把商品全字段抛给后台列表。
    * 不合格商品在 UI 里是禁选项——运营需要看到「为什么不能选」，而不是点了保存才报错。
    */
-  async products(supplied: string, query: string | null, limit: number, categoryId: string | null = null) {
+  async products(supplied: string, query: string | null, limit: number, categoryId: string | null = null,
+    collectionId: string | null = null) {
     return this.identity.withPermission(supplied, null, 'content.read', async tx => {
       const markets = await this.sellableMarkets(tx);
       const where: Prisma.ProductWhereInput = {
         ...(query ? { translations: { some: { name: { contains: query, mode: 'insensitive' } } } } : {}),
-        // 分类版面只列本分类商品：选不到范围外的，也就不会到保存时才被拒。
+        // 分类/专题版面只列本范围商品：选不到范围外的，也就不会到保存时才被拒。
         ...(categoryId ? { categories: { some: { categoryId } } } : {}),
+        ...(collectionId ? { collections: { some: { collectionId } } } : {}),
       };
       const rows = await tx.product.findMany({
         where,
@@ -299,10 +331,15 @@ export class MerchandisingService {
       });
       const categories = await tx.category.findMany({ where: { enabled: true }, include: { translations: true },
         orderBy: [{ position: 'asc' }] });
+      const collections = await tx.collection.findMany({ where: { enabled: true }, include: { translations: true },
+        orderBy: [{ position: 'asc' }] });
       return { items, markets: markets.map(market => market.marketCode),
         categories: categories.map(category => ({ id: category.id,
           name: category.translations.find(item => item.locale === 'zh-HK')?.name
-            ?? category.translations[0]?.name ?? category.id })) };
+            ?? category.translations[0]?.name ?? category.id })),
+        collections: collections.map(collection => ({ id: collection.id,
+          name: collection.translations.find(item => item.locale === 'zh-HK')?.name
+            ?? collection.translations[0]?.name ?? collection.id })) };
     });
   }
 }

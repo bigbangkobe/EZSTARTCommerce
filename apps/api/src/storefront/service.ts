@@ -4,8 +4,10 @@ import { isPreviewLive, PREVIEW_TOKEN_PATTERN } from '../../../../packages/domai
 import { effectiveReviewStatus, normalizeMarketCode, SUPPORTED_LOCALES, StoreRuleError } from '../../../../packages/domain/src/store.js';
 import { digestPreviewToken, lookupRedirect } from '../content/preview.js';
 import {
-  categoryMerchandisingKey, parseMerchandisingPageKey, sectionTitle, type MerchandisingSection,
+  categoryMerchandisingKey, collectionMerchandisingKey, parseMerchandisingPageKey, sectionTitle,
+  type MerchandisingSection,
 } from '../../../../packages/domain/src/merchandising.js';
+import { collectionListable } from '../../../../packages/domain/src/collections.js';
 import {
   fulfilledSales30d, selectProducts, sellableByIds, sellablePool, sellableWhere,
   type SellableScope,
@@ -296,7 +298,8 @@ export class StorefrontService {
       // 手工区块按配置的 id 取（顺序即优先级）；动态区块按规则在候选池里排序。
       const rows = section.sortMode === 'manual'
         ? await sellableByIds(tx, scope, section.productIds)
-        : await sellablePool(tx, scope, section.categoryIds);
+        // 区块级分类/专题筛选是「与」关系：页面范围之外的候选进不来。
+        : await sellablePool(tx, scope, section.categoryIds, section.collectionId);
       const eligibleIds = new Set(rows.map(row => row.id));
       const units = section.sortMode === 'fulfilled_sales_30d'
         ? await fulfilledSales30d(tx, rows.map(row => row.id), scope.now) : new Map<string, number>();
@@ -375,6 +378,83 @@ export class StorefrontService {
         layout: snapshot ? { version: snapshot.version ?? layout!.version, sections } : null,
         products, locale, marketCode: market.marketCode, contentRelease: await this.contentRelease(tx),
       };
+    });
+  }
+
+  /**
+   * 专题页（M04 第五批）：与分类页同构——一次请求给齐「专题信息 + 排版 + 商品」。
+   * 有已发布版面就按版面渲染；没有就按运营排的商品顺序平铺，专题页不会因为没排版而空白。
+   * slug 解析只接受启用中的专题，且要求该语言确实有 slug（没地址的专题前台不可达）。
+   */
+  async getCollection(slug: string, localeInput: string | null, marketInput: string | null) {
+    return this.run(async tx => {
+      const settings = await this.settings(tx);
+      const locale = this.locale(settings, localeInput);
+      const market = this.market(settings, marketInput);
+      if (!market) throw new AuthError(404, 'NOT_FOUND');
+      const candidates = await tx.collectionTranslation.findMany({ where: { slug },
+        include: { collection: { include: { translations: true } } } });
+      if (!candidates.length) throw new AuthError(404, 'NOT_FOUND');
+      const rank = (value: string) => value === locale ? 0 : value === settings.defaultLocale ? 1 : 2;
+      const hit = [...candidates].sort((left, right) => rank(left.locale) - rank(right.locale)
+        || left.collectionId.localeCompare(right.collectionId)).find(row => row.collection.enabled);
+      if (!hit) throw new AuthError(404, 'NOT_FOUND');
+      const collection = hit.collection;
+      const translation = this.localized(collection.translations, locale, settings.defaultLocale);
+      const scope: SellableScope = { marketCode: market.marketCode, eligibleProductIds: market.eligibleProductIds,
+        now: new Date(), collectionIds: [collection.id] };
+
+      const layout = await tx.merchandisingLayout.findUnique({ where: { pageKey: collectionMerchandisingKey(collection.id) } });
+      const snapshot = layout?.status === 'published' && layout.publishedSnapshot
+        ? layout.publishedSnapshot as unknown as { sections?: MerchandisingSection[]; version?: number } : null;
+      const sections = snapshot
+        ? await this.resolveSections(tx, snapshot.sections ?? [], scope, locale, settings.defaultLocale) : [];
+      // 平铺顺序取运营编排的 position，而不是商品创建时间：专题的意义就是「我挑的先后」。
+      const products = sections.length ? [] : (await tx.collectionProduct.findMany({
+        where: { collectionId: collection.id, product: sellableWhere(scope) },
+        include: { product: { include: includeProduct } },
+        orderBy: [{ position: 'asc' }, { productId: 'asc' }], take: 60,
+      })).map(link => this.publicView(link.product, locale, settings.defaultLocale));
+
+      return {
+        collection: { id: collection.id, name: translation?.name ?? '', slug: translation?.slug ?? slug,
+          description: translation?.description ?? null, position: collection.position },
+        alternates: collection.translations.filter(item => item.slug)
+          .map(item => ({ locale: item.locale, slug: item.slug! })),
+        layout: snapshot ? { version: snapshot.version ?? layout!.version, sections } : null,
+        products, locale, marketCode: market.marketCode, contentRelease: await this.contentRelease(tx),
+      };
+    });
+  }
+
+  /**
+   * 专题列表：只列「启用 + 当前语言有 slug + 至少有 1 件当前市场可售商品」的专题。
+   * 空专题不列出——顾客点进空页面只会以为店铺坏了。
+   */
+  async listCollections(localeInput: string | null, marketInput: string | null) {
+    return this.run(async tx => {
+      const settings = await this.settings(tx);
+      const locale = this.locale(settings, localeInput);
+      const market = this.market(settings, marketInput);
+      if (!market) return { items: [], locale };
+      const scope: SellableScope = { marketCode: market.marketCode, eligibleProductIds: market.eligibleProductIds,
+        now: new Date() };
+      const rows = await tx.collection.findMany({ where: { enabled: true }, include: { translations: true },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] });
+      const links = rows.length ? await tx.collectionProduct.findMany({
+        where: { collectionId: { in: rows.map(row => row.id) }, product: sellableWhere(scope) },
+        select: { collectionId: true },
+      }) : [];
+      const counts = new Map<string, number>();
+      for (const link of links) counts.set(link.collectionId, (counts.get(link.collectionId) ?? 0) + 1);
+      const items = rows.map(row => {
+        const translation = this.localized(row.translations, locale, settings.defaultLocale);
+        return { id: row.id, position: row.position, name: translation?.name ?? '',
+          slug: translation?.slug ?? null, description: translation?.description ?? null,
+          productCount: counts.get(row.id) ?? 0,
+          alternates: row.translations.filter(item => item.slug).map(item => ({ locale: item.locale, slug: item.slug! })) };
+      }).filter(item => collectionListable({ enabled: true, slug: item.slug, productCount: item.productCount }));
+      return { items, locale };
     });
   }
 

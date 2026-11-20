@@ -115,3 +115,25 @@ M00/M01、M02、M03。前台消费已发布的内容与商品陈列契约；主�
 - 分类页的定时发布与历史回滚（与首页共用同一套缺口）。
 - 分类 slug 变更的 301：当前分类没有改 slug 的后台入口，等 M03 分类编辑上线时一并做。
 - 文章/公告列表页与社交分享图字段。
+
+## 第五批实现（2026-11-20）
+
+本批把「专题」做成独立于分类的策展位：后台挑一组跨分类商品、排好顺序，前台有列表页与详情页，页面可以再套一份陈列版面。专题改 slug 时旧地址 301 到新地址。
+
+已实现：
+
+- **数据模型（第 33 条迁移）**：`Collection` + `CollectionTranslation`（三语名称/slug/简介）+ `CollectionProduct`（有序多对多）。不复用 `ProductCategory`：分类是商品归类的稳定骨架，专题是临时策展，一个商品可以同时出现在多个专题里，专题也可以跨分类。
+- **陈列作用域扩到专题**：pageKey 从 `home | category:<uuid>` 扩为 `home | category:<uuid> | collection:<uuid>`；CHECK 约束同批放开，kind 必须与 key 前缀一致。与分类一样用 **id** 绑定，专题改 slug 不会让已发布版面失联。
+- **区块级专题筛选**：`collectionId` 从「一律拒绝」改为动态区块的候选筛选（与 `categoryIds` 同层，叠加是「与」关系）。手工区块带专题筛选属于配置冲突（`MERCHANDISING_MODE_CONFLICT`）；在专题 A 的版面里筛专题 B 则直接 `MERCHANDISING_COLLECTION_OUT_OF_SCOPE`——候选交集必然为空，存下来只会变成一个空区块。
+- **专题后台**：`/admin/collections`（内容读/写权限）列表、新建、编辑（三语名称/slug/简介、启用、排序、商品清单与顺序）、删除。商品按 id 校验真实存在（`COLLECTION_PRODUCT_NOT_FOUND`），重复商品拒绝而不是静默去重。`If-Match` 版本锁避免双人覆盖。
+- **slug 变更 301**：编辑时逐语言比对旧 slug，旧地址 → 新地址登记 301，并把原本指向旧地址的跳转改直。`SeoRedirect` 新增 `collectionId` 归属，停用/删除专题时按归属清理，不会把访客送到一个已经不存在的页面。
+- **前台接口**：`GET /storefront/collections`（启用 + 当前语言有 slug + 至少一件当前市场可售商品）与 `GET /storefront/collections/{slug}`（专题信息 + 各语言地址 + 已发布版面或按编排顺序平铺的商品）。没有版面时按运营编排的 `position` 平铺，而不是按创建时间——专题的意义就是「我挑的先后」。
+- **前台页面**：`/[locale]/collections`（索引）与 `/[locale]/collections/{slug}`（详情）。canonical/hreflang 用专题各语言 slug；详情 404 时先查已登记的 301（旧地址不猜目标）；导航与站点地图收录专题；埋点 `pageKey=collection:<slug>`，区块容器带 `data-ez-section`。
+- **后台交接**：`/admin/merchandising` 的页面下拉自动包含启用中的专题（标为「专题 · 名称」），专题版面下商品选择器按专题收窄，动态区块在专题版面里不再显示范围选择器（候选已锁定）。
+
+本批未做（后续批次）：
+
+- 分类 slug 变更 301：分类编辑入口已有，但还没有像专题那样在改 slug 时登记跳转。
+- 陈列与内容页的定时发布、历史回滚。
+- 文章/公告列表页与社交分享图字段。
+- 专题的手工排序拖拽与批量导入商品。

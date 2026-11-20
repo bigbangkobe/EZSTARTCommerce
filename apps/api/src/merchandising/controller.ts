@@ -14,14 +14,15 @@ export class MerchandisingController extends ManagementHttp {
   /** 商品选择器：不合格商品带原因返回，后台据此禁用选项而不是等保存才报错。 */
   @Get('products')
   async products(@Query('q') query: unknown, @Query('limit') limit: unknown, @Query('categoryId') categoryId: unknown,
-    @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    @Query('collectionId') collectionId: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     const page = this.pagination(limit, undefined);
+    const id = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
     this.send(response, request, 200, await this.layouts().products(cookie(request, 'ez_admin_session'),
       typeof query === 'string' && query.trim() ? query.trim().slice(0, 200) : null, page.limit,
-      typeof categoryId === 'string' && categoryId.trim() ? categoryId.trim() : null));
+      id(categoryId), id(collectionId)));
   }
 
-  /** 页面选择器：首页 + 启用中的分类，带各自版面状态（none 表示还没开始配）。 */
+  /** 页面选择器：首页 + 启用中的分类与专题，带各自版面状态（none 表示还没开始配）。 */
   @Get('pages')
   async pages(@Req() request: ApiRequest, @Res() response: ServerResponse) {
     this.send(response, request, 200, await this.layouts().pages(cookie(request, 'ez_admin_session')));

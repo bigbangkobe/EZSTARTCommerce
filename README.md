@@ -4,30 +4,30 @@ EZSTARTCommerce 是一个可配置、可复用、可独立部署的电商独立�
 
 ## 文档导航
 - [身份通知 Worker 与页面运行说明](apps/worker/README.md)：SMTP 配置、进程启动、租约重试、页面和验证边界。
-- [完整上线实施记录](docs/IMPLEMENTATION_PROGRESS.md)：完整交付范围、模块实施顺序、本批改动及下一实施项。
-- [R1 工程起步与运行说明](docs/R1_ENGINEERING_PROGRESS.md)：安装、检查、API 骨架及当前实现边界。
-- [身份安全参数](docs/IDENTITY_SECURITY_POLICY.md)与[管理员恢复流程](docs/ADMIN_RECOVERY_RUNBOOK.md)
-- [本轮契约审查与处理记录（2026-10-19）](docs/ANALYSIS_REVIEW_2026-10-19.md)：已修复问题、校验证据及剩余开发缺口。
+- [完整上线实施记录](docs/03-开发文档/IMPLEMENTATION_PROGRESS.md)：完整交付范围、模块实施顺序、本批改动及下一实施项。
+- [R1 工程起步与运行说明](docs/03-开发文档/R1_ENGINEERING_PROGRESS.md)：安装、检查、API 骨架及当前实现边界。
+- [身份安全参数](docs/03-开发文档/IDENTITY_SECURITY_POLICY.md)与[管理员恢复流程](docs/05-部署运维文档/ADMIN_RECOVERY_RUNBOOK.md)
+- [本轮契约审查与处理记录（2026-10-19）](docs/03-开发文档/ANALYSIS_REVIEW_2026-10-19.md)：已修复问题、校验证据及剩余开发缺口。
 - [接口契约校验命令](packages/contracts/README.md)
-- [五项需求处理决议](docs/REQUIREMENT_RESOLUTION.md)
-- [客户上线参数表](docs/CLIENT_LAUNCH_INPUTS.md)
+- [五项需求处理决议](docs/01-产品文档/REQUIREMENT_RESOLUTION.md)
+- [客户上线参数表](docs/01-产品文档/CLIENT_LAUNCH_INPUTS.md)
 
-- [完整产品总规格](docs/EZSTARTCOMMERCE_MASTER_SPEC.md)：产品范围、角色、前后台、业务规则、质量门槛、验收与里程碑统一基线。
-- [开发执行规格](docs/DEVELOPMENT_SPEC.md)：冻结技术栈、默认规则、接口/数据约定、金额与状态机、权限、异常恢复和生产门槛，是跨模块工程实施契约。
-- [API 接口契约](docs/API_SPEC.md)：首期路由、DTO 字段、权限、幂等、错误响应和交易规则；[OpenAPI 3.1 初稿](packages/contracts/openapi.yaml)用于生成客户端并作为接口校验基线。
-- [测试策略与质量门禁](docs/TEST_STRATEGY.md)：单元/集成/API/浏览器 E2E/安全/性能/恢复测试分层、发布门禁及证据要求。
-- [测试用例矩阵](docs/TEST_CASES.md)：编号的单元、API 功能、前后台 UI、全链路、安全和非功能测试场景。
-- [产品与技术总体蓝图](docs/PRODUCT_TECHNICAL_BLUEPRINT.md)：产品、前后台、后端、API、数据、安全、部署和实施路线。
-- [私有部署模式](docs/PRIVATE_DEPLOYMENT.md)：多商家独立实例、开通流程、隔离要求和运维选项。
-- [客户前台定制方案](docs/CUSTOMIZATION_MODEL.md)：通用电商核心与客户独立前台的边界、定制流程和估算方式。
-- [项目实施方案](docs/PROJECT_PLAN.md)：阶段、里程碑、团队、工作量、风险与验收门槛。
-- [研发待办与发布切分](docs/PRODUCT_BACKLOG.md)：M00–M16 Epic、依赖关系、发布批次和进入开发的验收条件。
-- [生产就绪验收清单](docs/PRODUCTION_READINESS_ACCEPTANCE.md)：售后、支付对账、履约库存、后台安全、隐私市场规则和运维恢复的端到端验收场景。
-- [架构方案](docs/ARCHITECTURE.md)：模块边界、技术建议、外部集成和升级方式。
-- [数据模型方案](docs/DATA_MODEL.md)：核心实体、关系、状态模型和治理要求。
-- [模块方案索引](docs/modules/README.md)：所有功能模块的产品目标、范围、数据、验收和实施依赖。
-- [逐页产品设计](docs/design/README.md)：设计系统、顾客前台页面、商家后台模块及核心业务流程。
-- [待确认决策](docs/DECISIONS.md)：逐店经营参数、外部服务、合同边界和上线输入。
+- [完整产品总规格](docs/01-产品文档/EZSTARTCOMMERCE_MASTER_SPEC.md)：产品范围、角色、前后台、业务规则、质量门槛、验收与里程碑统一基线。
+- [开发执行规格](docs/03-开发文档/DEVELOPMENT_SPEC.md)：冻结技术栈、默认规则、接口/数据约定、金额与状态机、权限、异常恢复和生产门槛，是跨模块工程实施契约。
+- [API 接口契约](docs/03-开发文档/API_SPEC.md)：首期路由、DTO 字段、权限、幂等、错误响应和交易规则；[OpenAPI 3.1 初稿](packages/contracts/openapi.yaml)用于生成客户端并作为接口校验基线。
+- [测试策略与质量门禁](docs/04-测试文档/TEST_STRATEGY.md)：单元/集成/API/浏览器 E2E/安全/性能/恢复测试分层、发布门禁及证据要求。
+- [测试用例矩阵](docs/04-测试文档/TEST_CASES.md)：编号的单元、API 功能、前后台 UI、全链路、安全和非功能测试场景。
+- [产品与技术总体蓝图](docs/01-产品文档/PRODUCT_TECHNICAL_BLUEPRINT.md)：产品、前后台、后端、API、数据、安全、部署和实施路线。
+- [私有部署模式](docs/05-部署运维文档/PRIVATE_DEPLOYMENT.md)：多商家独立实例、开通流程、隔离要求和运维选项。
+- [客户前台定制方案](docs/01-产品文档/CUSTOMIZATION_MODEL.md)：通用电商核心与客户独立前台的边界、定制流程和估算方式。
+- [项目实施方案](docs/01-产品文档/PROJECT_PLAN.md)：阶段、里程碑、团队、工作量、风险与验收门槛。
+- [研发待办与发布切分](docs/01-产品文档/PRODUCT_BACKLOG.md)：M00–M16 Epic、依赖关系、发布批次和进入开发的验收条件。
+- [生产就绪验收清单](docs/04-测试文档/PRODUCTION_READINESS_ACCEPTANCE.md)：售后、支付对账、履约库存、后台安全、隐私市场规则和运维恢复的端到端验收场景。
+- [架构方案](docs/03-开发文档/ARCHITECTURE.md)：模块边界、技术建议、外部集成和升级方式。
+- [数据模型方案](docs/03-开发文档/DATA_MODEL.md)：核心实体、关系、状态模型和治理要求。
+- [模块方案索引](docs/01-产品文档/modules/README.md)：所有功能模块的产品目标、范围、数据、验收和实施依赖。
+- [逐页产品设计](docs/02-设计文档/README.md)：设计系统、顾客前台页面、商家后台模块及核心业务流程。
+- [待确认决策](docs/01-产品文档/DECISIONS.md)：逐店经营参数、外部服务、合同边界和上线输入。
 
 ## 首期产品边界
 
@@ -45,6 +45,6 @@ EZSTARTCommerce 是一个可配置、可复用、可独立部署的电商独立�
 
 按 CLIENT_LAUNCH_INPUTS.md 完成首店参数表；评审需求处理决议、生产就绪验收清单、页面状态原型及客户专属前台页面/陈列清单，再冻结 PRODUCT_BACKLOG.md 和首店报价范围。
 
-工程已建立 pnpm workspace 和 NestJS API 骨架。安装与运行见 [R1 说明](docs/R1_ENGINEERING_PROGRESS.md)，统一检查命令为 `pnpm check`。首店主初始化、MFA 和本人会话 API 已接入 PostgreSQL 18/Prisma 7；配置与范围见 [身份实现说明](docs/R1_IDENTITY_IMPLEMENTATION.md)。现已新增邀请后端、通知 Worker、接受邀请/登录/MFA/密码重设页面及员工/角色管理 API 与 /admin/access 页面，并按开发规格 7.1 预置 8 个默认岗位权限包（`packages/config/src/role-presets.ts`）；店铺设置（/admin/settings，含语言/币种/时区、功能开关与市场审核门禁）与审计记录读取界面（/admin/audit）已实现；商品目录（/admin/catalog，含分类、品牌、三语商品与发布门禁）已实现；媒体上传、前台陈列、交易链路、完整后台和生产部署仍未完成。
+工程已建立 pnpm workspace 和 NestJS API 骨架。安装与运行见 [R1 说明](docs/03-开发文档/R1_ENGINEERING_PROGRESS.md)，统一检查命令为 `pnpm check`。首店主初始化、MFA 和本人会话 API 已接入 PostgreSQL 18/Prisma 7；配置与范围见 [身份实现说明](docs/03-开发文档/R1_IDENTITY_IMPLEMENTATION.md)。现已新增邀请后端、通知 Worker、接受邀请/登录/MFA/密码重设页面及员工/角色管理 API 与 /admin/access 页面，并按开发规格 7.1 预置 8 个默认岗位权限包（`packages/config/src/role-presets.ts`）；店铺设置（/admin/settings，含语言/币种/时区、功能开关与市场审核门禁）与审计记录读取界面（/admin/audit）已实现；商品目录（/admin/catalog，含分类、品牌、三语商品与发布门禁）已实现；媒体上传、前台陈列、交易链路、完整后台和生产部署仍未完成。
 
 

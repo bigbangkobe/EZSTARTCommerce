@@ -85,6 +85,7 @@ export default async function LocaleLayout({ children, params }: {
           <nav className="site-nav" aria-label={t.nav.home}>
             <Link href={localePath(locale, '/products')} hrefLang={locale}>{t.nav.products}</Link>
             <Link href={localePath(locale, '/categories')} hrefLang={locale}>{t.nav.categories}</Link>
+            <Link href={localePath(locale, '/collections')} hrefLang={locale}>{t.nav.collections}</Link>
             <Link href={localePath(locale, '/contact')} hrefLang={locale}>{t.nav.contact}</Link>
             <MemberLink />
             <CartLink />

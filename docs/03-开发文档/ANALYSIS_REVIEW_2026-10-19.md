@@ -24,7 +24,7 @@ OpenAPI 当前包含 115 个路径、145 个操作和 123 个 schema。operation
 
 ## 验证证据
 
-运行命令见 [契约校验说明](../packages/contracts/README.md)。六项 unittest 全部通过：OpenAPI 结构校验、操作 ID/权限标签、报价到下单、OTP 请求到验证、联系资料正反例、商品规格输入/响应边界。JSON Schema 校验使用 Draft 2020-12 及格式校验器，OpenAPI 使用 openapi-spec-validator。
+运行命令见 [契约校验说明](../../packages/contracts/README.md)。六项 unittest 全部通过：OpenAPI 结构校验、操作 ID/权限标签、报价到下单、OTP 请求到验证、联系资料正反例、商品规格输入/响应边界。JSON Schema 校验使用 Draft 2020-12 及格式校验器，OpenAPI 使用 openapi-spec-validator。
 
 这些结果属于契约静态验证；没有运行应用、数据库、支付、库存并发或浏览器端到端测试。
 

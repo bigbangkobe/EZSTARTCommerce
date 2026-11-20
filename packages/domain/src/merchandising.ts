@@ -19,14 +19,14 @@ export class MerchandisingRuleError extends Error {
 
 function fail(field: string, code = 'VALIDATION_ERROR'): never { throw new MerchandisingRuleError(field, code); }
 
-/** 版面作用域：首页固定一份；分类页按分类 id 绑定（一个分类一份版面）。专题等路由上线后再加。 */
-export type MerchandisingPageKind = 'home' | 'category';
+/** 版面作用域：首页固定一份；分类页与专题页按各自 id 绑定（一个分类/专题一份版面）。 */
+export type MerchandisingPageKind = 'home' | 'category' | 'collection';
 
 export interface MerchandisingPageRef {
   kind: MerchandisingPageKind;
-  /** 分类版面才有；首页为 null。 */
+  /** 分类/专题版面才有；首页为 null。 */
   targetId: string | null;
-  /** 落库与后台路由使用的稳定 key：`home` 或 `category:<uuid>`。 */
+  /** 落库与后台路由使用的稳定 key：`home`、`category:<uuid>` 或 `collection:<uuid>`。 */
   pageKey: string;
 }
 
@@ -44,6 +44,7 @@ export const MAX_GRID_LIMIT = 24;
 
 const HOME_KEY = 'home';
 const CATEGORY_KEY_PREFIX = 'category:';
+const COLLECTION_KEY_PREFIX = 'collection:';
 const SECTION_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -59,10 +60,20 @@ export function categoryMerchandisingRef(categoryId: string): MerchandisingPageR
   return { kind: 'category', targetId: categoryId.toLowerCase(), pageKey: categoryMerchandisingKey(categoryId) };
 }
 
+/** 专题版面的 key：同样用 id 绑定，专题改 slug 时已发布版面不会失联。 */
+export function collectionMerchandisingKey(collectionId: string): string {
+  if (!UUID_PATTERN.test(collectionId)) fail('pageKey');
+  return `${COLLECTION_KEY_PREFIX}${collectionId.toLowerCase()}`;
+}
+
+export function collectionMerchandisingRef(collectionId: string): MerchandisingPageRef {
+  return { kind: 'collection', targetId: collectionId.toLowerCase(), pageKey: collectionMerchandisingKey(collectionId) };
+}
+
 /**
  * 解析版面 key。三类失败要分开：
  * - 格式不对（`category:` 后面不是 id）→ VALIDATION_ERROR；
- * - kind 未开放（例如 `collection:`）→ MERCHANDISING_PAGE_UNKNOWN；
+ * - kind 未开放（例如 `product:` 这种还没有路由的作用域）→ MERCHANDISING_PAGE_UNKNOWN；
  * - kind 缺失（只写了 `home:` 之类）→ VALIDATION_ERROR。
  * 后台据此分别提示「改 key」还是「这个页面还没上线」，而不是统一说保存失败。
  */
@@ -73,9 +84,9 @@ export function parseMerchandisingPageKey(value: unknown): MerchandisingPageRef 
   if (separator <= 0 || separator === value.length - 1) fail('pageKey');
   const kind = value.slice(0, separator);
   const targetId = value.slice(separator + 1);
-  if (kind !== 'category') fail('pageKey', 'MERCHANDISING_PAGE_UNKNOWN');
+  if (kind !== 'category' && kind !== 'collection') fail('pageKey', 'MERCHANDISING_PAGE_UNKNOWN');
   if (!UUID_PATTERN.test(targetId)) fail('pageKey');
-  return categoryMerchandisingRef(targetId);
+  return kind === 'category' ? categoryMerchandisingRef(targetId) : collectionMerchandisingRef(targetId);
 }
 
 /** 后台可见文本：拒绝 HTML 标签与控制字符，长度收敛。 */
@@ -166,16 +177,18 @@ export function normalizeMerchandisingSections(input: unknown, locales: readonly
 
     const productIds = uuidList(section['productIds'], `sections[${index}].productIds`, MAX_GRID_PRODUCTS);
     const categoryIds = uuidList(section['categoryIds'], `sections[${index}].categoryIds`, 20);
-    const collectionId = section['collectionId'];
-    if (collectionId !== undefined && collectionId !== null && collectionId !== '') {
-      // 专题页（MerchandisingCollection）尚未上线：明确拒绝，避免存下一份前台不会生效的配置。
-      fail(`sections[${index}].collectionId`, 'MERCHANDISING_COLLECTION_UNSUPPORTED');
-    }
+    // 专题筛选只作用于动态排序的候选池（与分类筛选同层）；手工区块自己就是清单，不需要再筛。
+    const collectionRaw = section['collectionId'];
+    const collectionId = collectionRaw === undefined || collectionRaw === null || collectionRaw === ''
+      ? null
+      : (typeof collectionRaw === 'string' && UUID_PATTERN.test(collectionRaw))
+        ? collectionRaw.toLowerCase() : fail(`sections[${index}].collectionId`);
 
     if (sortMode === 'manual') {
-      // 手工排序：必须给商品清单；分类筛选对手工顺序没有意义，一起拒绝。
+      // 手工排序：必须给商品清单；分类/专题筛选对手工顺序没有意义，一起拒绝。
       if (productIds.length === 0) fail(`sections[${index}].productIds`);
       if (categoryIds.length) fail(`sections[${index}].categoryIds`, 'MERCHANDISING_MODE_CONFLICT');
+      if (collectionId) fail(`sections[${index}].collectionId`, 'MERCHANDISING_MODE_CONFLICT');
       if (productIds.length < limit) fail(`sections[${index}].limit`, 'MERCHANDISING_LIMIT_UNREACHABLE');
     } else if (productIds.length) {
       // 动态排序残留手工清单：清空而不是忽略，否则切换回手工时旧 id 会偷偷生效。
@@ -184,7 +197,7 @@ export function normalizeMerchandisingSections(input: unknown, locales: readonly
 
     return { sectionId, type: type as MerchandisingSectionType, visible: section['visible'], position: index,
       titleByLocale: titleByLocale(section['titleByLocale'], locales), sortMode: sortMode as MerchandisingSortMode,
-      limit, productIds, categoryIds, collectionId: null };
+      limit, productIds, categoryIds, collectionId };
   });
 }
 

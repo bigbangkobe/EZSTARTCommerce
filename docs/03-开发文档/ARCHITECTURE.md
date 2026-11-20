@@ -1,6 +1,6 @@
 # EZSTARTCommerce 架构基线
 
-完整的产品与技术设计见 [产品与技术总体蓝图](PRODUCT_TECHNICAL_BLUEPRINT.md)；本文保留架构摘要。
+完整的产品与技术设计见 [产品与技术总体蓝图](../01-产品文档/PRODUCT_TECHNICAL_BLUEPRINT.md)；本文保留架构摘要。
 
 ## 1. 架构目标
 

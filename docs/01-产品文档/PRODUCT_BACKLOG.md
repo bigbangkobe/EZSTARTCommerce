@@ -1,8 +1,8 @@
 # EZSTARTCommerce 研发待办与发布切分
 
-> 作用：把完整产品总规格拆为可按模块推进的交付批次。它不是最终 Jira 工单；产品/工程共用基线已见 [开发执行规格](DEVELOPMENT_SPEC.md)，开发团队仍需拆解为团队实际任务；逐店经营参数由客户上线表冻结。
+> 作用：把完整产品总规格拆为可按模块推进的交付批次。它不是最终 Jira 工单；产品/工程共用基线已见 [开发执行规格](../03-开发文档/DEVELOPMENT_SPEC.md)，开发团队仍需拆解为团队实际任务；逐店经营参数由客户上线表冻结。
 
-2026-10-19 实施状态：[R1 工程说明](R1_ENGINEERING_PROGRESS.md) 与 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md) 已登记数据库迁移、首店主/MFA/本人会话 API 及真实数据库校验证据；员工邀请/找回/通知、后台页面及实例交付仍未完成，R1 门槛保持未通过。
+2026-10-19 实施状态：[R1 工程说明](../03-开发文档/R1_ENGINEERING_PROGRESS.md) 与 [身份实现说明](../03-开发文档/R1_IDENTITY_IMPLEMENTATION.md) 已登记数据库迁移、首店主/MFA/本人会话 API 及真实数据库校验证据；员工邀请/找回/通知、后台页面及实例交付仍未完成，R1 门槛保持未通过。
 
 ## 1. 发布策略
 
@@ -44,7 +44,7 @@ R0 的客户经营参数不齐时，仍可并行开展 M15 实例骨架、M00 �
 | M15 私有部署 | 实例初始化、密钥、迁移、健康检查、备份/恢复/升级及客户业务数据迁出/停用 | 两套实例相互隔离；升级/恢复演练可重复；客户可导出不含秘密的业务数据；停用/备份轮转按批准策略并留审计 | R1 提供实例与运维基础；R6 联合全部已交付模块验收 |
 | M16 售后 | 取消、退款案件、退货/换货跟踪、质检和库存处置 | 不超额退款；COD 未收款不生成支付退款；库存处置可审计 | M00、M07、M08、M09、M12；M10 会员积分、M13 通知、M14 汇总按接口联动 |
 
-详细需求和模块验收见 docs/modules/M00–M16 文件；页面交互见 docs/design/；上线前 1–12 项场景验收见 [生产就绪验收清单](PRODUCTION_READINESS_ACCEPTANCE.md)；总体决策以 DECISIONS.md 为准。
+详细需求和模块验收见 docs/modules/M00–M16 文件；页面交互见 docs/design/；上线前 1–12 项场景验收见 [生产就绪验收清单](../04-测试文档/PRODUCTION_READINESS_ACCEPTANCE.md)；总体决策以 DECISIONS.md 为准。
 
 ## 3. 逐店参数与首店前台冻结项
 
@@ -77,8 +77,8 @@ R0 的客户经营参数不齐时，仍可并行开展 M15 实例骨架、M00 �
 - 权限、审计、幂等和异常处理。
 - 接口/部署配置与操作说明。
 - 业务验收条件和责任人。
-- 端到端生产就绪场景见 [PRODUCTION_READINESS_ACCEPTANCE.md](PRODUCTION_READINESS_ACCEPTANCE.md)；新增对账、分批发货和陈列范围后，各模块原人日估算须重新估算。
-- API 变更须同步 OpenAPI、权限和测试用例；每个 Epic 按 [测试策略](TEST_STRATEGY.md) 实现并执行分层测试，发布用例结果记录到构建证据中。
+- 端到端生产就绪场景见 [PRODUCTION_READINESS_ACCEPTANCE.md](../04-测试文档/PRODUCTION_READINESS_ACCEPTANCE.md)；新增对账、分批发货和陈列范围后，各模块原人日估算须重新估算。
+- API 变更须同步 OpenAPI、权限和测试用例；每个 Epic 按 [测试策略](../04-测试文档/TEST_STRATEGY.md) 实现并执行分层测试，发布用例结果记录到构建证据中。
 
 ## 5. Definition of Ready
 

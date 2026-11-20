@@ -1,6 +1,6 @@
 # 身份安全参数 identity-v1
 
-日期：2026-10-19。工程默认参数以 [security-policy.ts](../packages/config/src/security-policy.ts) 为机器来源，调整须记录版本、影响、测试和已有挑战/会话的处置；不能由普通店铺配置覆盖。
+日期：2026-10-19。工程默认参数以 [security-policy.ts](../../packages/config/src/security-policy.ts) 为机器来源，调整须记录版本、影响、测试和已有挑战/会话的处置；不能由普通店铺配置覆盖。
 
 | 参数 | 默认值 | 行为 |
 |---|---|---|

@@ -907,6 +907,82 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/collections:
+    get:
+      tags: [Content]
+      operationId: listCollections
+      summary: List merchandising collections
+      security: [{ AdminSession: [] }]
+      x-permission: content.read
+      responses:
+        '200': { $ref: '#/components/responses/CollectionListSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+    post:
+      tags: [Content]
+      operationId: createCollection
+      summary: Create a merchandising collection
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionWriteRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/CollectionSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/collections/{id}:
+    parameters: [{ $ref: '#/components/parameters/UuidId' }]
+    get:
+      tags: [Content]
+      operationId: getCollection
+      summary: Get a merchandising collection
+      security: [{ AdminSession: [] }]
+      x-permission: content.read
+      responses:
+        '200': { $ref: '#/components/responses/CollectionSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+    patch:
+      tags: [Content]
+      operationId: updateCollection
+      summary: Update a collection (slug changes register a 301 from the old address)
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.write
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionPatchRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/CollectionSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+    delete:
+      tags: [Content]
+      operationId: deleteCollection
+      summary: Delete a collection (products and categories are not affected)
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      x-permission: content.write
+      responses:
+        '204': { description: Collection deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/brands:
     get:
       tags: [Catalog]
@@ -1546,6 +1622,32 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/collections:
+    get:
+      tags: [Storefront]
+      operationId: listStorefrontCollections
+      summary: List enabled collections that have a slug and at least one sellable product
+      parameters:
+        - { $ref: '#/components/parameters/Locale' }
+        - { $ref: '#/components/parameters/MarketCode' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicCollectionListSuccess' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/collections/{slug}:
+    get:
+      tags: [Storefront]
+      operationId: getStorefrontCollection
+      summary: Read one enabled collection with its published layout or the curated product order
+      parameters:
+        - { $ref: '#/components/parameters/Slug' }
+        - { $ref: '#/components/parameters/Locale' }
+        - { $ref: '#/components/parameters/MarketCode' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicCollectionSuccess' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/pages:
     get:
       tags: [Storefront]
@@ -1621,21 +1723,6 @@ paths:
         '200': { $ref: '#/components/responses/PublicRedirectSuccess' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
-  /storefront/collections/{slug}:
-    get:
-      tags: [Storefront]
-      operationId: getStorefrontCollection
-      summary: Get a published collection and eligible product list
-      parameters:
-        - { $ref: '#/components/parameters/Slug' }
-        - { $ref: '#/components/parameters/Locale' }
-        - { $ref: '#/components/parameters/MarketCode' }
-      responses:
-        '200': { $ref: '#/components/responses/Success' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
-        default: { $ref: '#/components/responses/UnexpectedError' }
-
   /storefront/cart:
     get:
       tags: [Storefront]
@@ -3820,12 +3907,12 @@ components:
       name: pageKey
       in: path
       required: true
-      description: 'Merchandising scope: `home` or `category:<uuid>`. Slug is not used so renaming a category cannot orphan its layout.'
+      description: 'Merchandising scope: `home`, `category:<uuid>` or `collection:<uuid>`. Ids are used so renaming or changing a slug cannot orphan a published layout.'
       schema:
         type: string
         minLength: 4
-        maxLength: 45
-        pattern: '^(home|category:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$'
+        maxLength: 47
+        pattern: '^(home|(category|collection):[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$'
       example: 'category:6f1c2b24-6f2a-4c1e-9a3e-2f7f7b6d1c11'
     Slug:
       name: slug
@@ -4582,6 +4669,42 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/CategoryEnvelope'
+    CollectionListSuccess:
+      description: Collections in stable position order
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CollectionListEnvelope'
+    CollectionSuccess:
+      description: Collection with translations and curated product order
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            const: no-store
+        ETag:
+          schema:
+            type: string
+            pattern: ^"[1-9][0-9]*"$
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CollectionEnvelope'
+    PublicCollectionSuccess:
+      description: Enabled collection with its published layout, or the curated product order when no layout is published
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicCollectionEnvelope' }
+    PublicCollectionListSuccess:
+      description: Public collection summaries with per-locale alternates
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PublicCollectionListEnvelope' }
     BrandListSuccess:
       description: Brand list
       headers:
@@ -6061,6 +6184,48 @@ components:
           properties:
             items: { type: array, items: { $ref: '#/components/schemas/Category' } }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
+    Collection:
+      type: object
+      additionalProperties: false
+      required: [id, position, enabled, translations, productIds, productCount, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        position: { type: integer, minimum: 0 }
+        enabled: { type: boolean }
+        translations: { type: array, items: { $ref: '#/components/schemas/CollectionTranslation' } }
+        productIds: { type: array, maxItems: 200, items: { type: string, format: uuid } }
+        productCount: { type: integer, minimum: 0 }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CollectionTranslation:
+      type: object
+      additionalProperties: false
+      required: [locale, name, slug, description]
+      properties:
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        name: { type: string, maxLength: 160 }
+        slug: { type: [string, 'null'], maxLength: 180 }
+        description: { type: [string, 'null'], maxLength: 3000 }
+    CollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/Collection' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    CollectionListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/Collection' } }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     Brand:
       type: object
       additionalProperties: false
@@ -6203,6 +6368,83 @@ components:
         locale: { type: string, enum: [zh-CN, zh-HK, en] }
         marketCode: { type: string, pattern: '^[A-Z]{2}$' }
         contentRelease: { type: string, pattern: '^cr-[0-9]+$' }
+    PublicCollection:
+      type: object
+      additionalProperties: false
+      required: [id, name, slug, description, position]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 160 }
+        slug: { type: string, maxLength: 180 }
+        description: { type: [string, 'null'], maxLength: 3000 }
+        position: { type: integer, minimum: 0 }
+    PublicCollectionSummary:
+      type: object
+      additionalProperties: false
+      required: [id, name, slug, description, position, productCount, alternates]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 160 }
+        slug: { type: string, maxLength: 180 }
+        description: { type: [string, 'null'], maxLength: 3000 }
+        position: { type: integer, minimum: 0 }
+        productCount: { type: integer, minimum: 1 }
+        alternates:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [locale, slug]
+            properties:
+              locale: { type: string, enum: [zh-CN, zh-HK, en] }
+              slug: { type: string, maxLength: 180 }
+    PublicCollectionListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, locale]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/PublicCollectionSummary' } }
+            locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+    PublicCollectionPage:
+      type: object
+      additionalProperties: false
+      description: layout is present when a page layout is published; products keeps the curator order when no visible section renders.
+      required: [collection, alternates, layout, products, locale, marketCode, contentRelease]
+      properties:
+        collection: { $ref: '#/components/schemas/PublicCollection' }
+        alternates:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [locale, slug]
+            properties:
+              locale: { type: string, enum: [zh-CN, zh-HK, en] }
+              slug: { type: string, maxLength: 180 }
+        layout:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [version, sections]
+          properties:
+            version: { type: integer, minimum: 1 }
+            sections: { type: array, items: { $ref: '#/components/schemas/PublicMerchandisingSection' } }
+        products: { type: array, maxItems: 60, items: { $ref: '#/components/schemas/PublicProduct' } }
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        marketCode: { type: string, pattern: '^[A-Z]{2}$' }
+        contentRelease: { type: string, pattern: '^cr-[0-9]+$' }
+    PublicCollectionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/PublicCollectionPage' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     PublicMerchandisingSection:
       type: object
       additionalProperties: false
@@ -6643,6 +6885,31 @@ components:
     CategoryPatchRequest:
       allOf: [{ $ref: '#/components/schemas/CategoryFields' }]
       minProperties: 1
+    CollectionTranslationInput:
+      type: object
+      additionalProperties: false
+      required: [locale, name]
+      properties:
+        locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        slug: { type: [string, 'null'], maxLength: 180, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }
+        description: { type: [string, 'null'], maxLength: 3000 }
+    CollectionFields:
+      type: object
+      additionalProperties: false
+      properties:
+        position: { type: integer, minimum: 0 }
+        enabled: { type: boolean, default: true }
+        translations: { type: array, minItems: 1, items: { $ref: '#/components/schemas/CollectionTranslationInput' } }
+        productIds: { type: array, maxItems: 200, items: { type: string, format: uuid } }
+    CollectionWriteRequest:
+      allOf:
+        - { $ref: '#/components/schemas/CollectionFields' }
+        - type: object
+          required: [translations]
+    CollectionPatchRequest:
+      allOf: [{ $ref: '#/components/schemas/CollectionFields' }]
+      minProperties: 1
     BrandFields:
       type: object
       additionalProperties: false
@@ -6791,8 +7058,9 @@ components:
         productIds: { type: array, maxItems: 24, uniqueItems: true, items: { type: string, format: uuid } }
         categoryIds: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, format: uuid } }
         collectionId:
-          type: 'null'
-          description: Collection pages are not released yet; a non-null value is rejected with MERCHANDISING_COLLECTION_UNSUPPORTED.
+          type: [string, 'null']
+          format: uuid
+          description: Candidate filter for dynamic sections. On a collection page it must equal the page collection (otherwise MERCHANDISING_COLLECTION_OUT_OF_SCOPE); manual sections reject it as a mode conflict.
     MerchandisingPublishRequest:
       type: object
       additionalProperties: false

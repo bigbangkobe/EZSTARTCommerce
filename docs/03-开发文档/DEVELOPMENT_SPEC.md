@@ -5,7 +5,7 @@
 > 日期：2026-10-17  
 > 本文把总体方案转成开发可实现的共用契约。客户市场、服务商、政策文本和页面内容属于每家店铺必须填写的实例参数，不留给开发人员猜。
 
-2026-10-19 工程补充：[后台身份生命周期契约](ADMIN_IDENTITY_LIFECYCLE.md) 细化已有初始化、邀请、MFA 和会话需求；安全默认值见 [identity-v1](IDENTITY_SECURITY_POLICY.md)，恢复责任见 [恢复流程](ADMIN_RECOVERY_RUNBOOK.md)。路由同步 API 1.7 与 OpenAPI；首店主/MFA/本人会话和数据库迁移已通过真实验证，见 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md)。其余模块仍须实现、评审和验收，R1 未完成。
+2026-10-19 工程补充：[后台身份生命周期契约](ADMIN_IDENTITY_LIFECYCLE.md) 细化已有初始化、邀请、MFA 和会话需求；安全默认值见 [identity-v1](IDENTITY_SECURITY_POLICY.md)，恢复责任见 [恢复流程](../05-部署运维文档/ADMIN_RECOVERY_RUNBOOK.md)。路由同步 API 1.7 与 OpenAPI；首店主/MFA/本人会话和数据库迁移已通过真实验证，见 [身份实现说明](R1_IDENTITY_IMPLEMENTATION.md)。其余模块仍须实现、评审和验收，R1 未完成。
 
 ## 1. 文档效力、变更与交付范围
 
@@ -145,7 +145,7 @@ packages/
 
 购物车和会员会话仅代表访问身份，不是订单授权凭证。订单查询/前台自助售后若按 P1 加入，必须采用一次性验证链接/验证码，不允许仅凭订单号读取顾客资料。
 
-逐路由方法、请求/响应约束、权限边界和 webhook/下单时序见 [API 接口契约](API_SPEC.md)；机器可读契约当前位于 [`packages/contracts/openapi.yaml`](../packages/contracts/openapi.yaml)。本文的资源清单定义模块边界；R1 须补齐所有 operation 的成功响应字段 schema 并校验权限覆盖，之后用该文件生成客户端。
+逐路由方法、请求/响应约束、权限边界和 webhook/下单时序见 [API 接口契约](API_SPEC.md)；机器可读契约当前位于 [`packages/contracts/openapi.yaml`](../../packages/contracts/openapi.yaml)。本文的资源清单定义模块边界；R1 须补齐所有 operation 的成功响应字段 schema 并校验权限覆盖，之后用该文件生成客户端。
 
 ### 4.3 业务事件与异步任务
 
@@ -330,27 +330,27 @@ packages/
 
 | 模块 | 本期必须闭环的能力 | 细节与签收主文件 |
 |---|---|---|
-| M00 | 后台登录、员工生命周期、权限、MFA、审计、会话撤销 | [M00](modules/M00_ADMIN_ACCESS.md)；本规格第 7 节 |
-| M01 | 店铺初始化、三语、市场开关、币种/时区、配置版本 | [M01](modules/M01_STORE_LOCALE.md)；第 2 节 |
-| M02 | 响应式独立前台、公开 API、预览、SEO/URL 输出 | [M02](modules/M02_STOREFRONT.md)、`design/STOREFRONT.md` |
-| M03 | 商品/变体/SKU/分类/品牌/多语言/可售校验 | [M03](modules/M03_CATALOG.md)；第 4 节 |
-| M04 | CMS/首页陈列草稿、预览、发布、定时、回滚、重定向 | [M04](modules/M04_CONTENT_CMS.md)；第 8.1–8.2 节 |
-| M05 | 商品批量导入预览、行级错误、部分/原子执行和受控导出 | [M05](modules/M05_IMPORT_EXPORT.md)；第 8.3 节 |
-| M06 | 访客购物袋、报价、优惠/运费校验、幂等下单 | [M06](modules/M06_CART_CHECKOUT.md)；第 5–6 节 |
-| M07 | 订单快照、状态、人工履约、分包裹、地址修改审计 | [M07](modules/M07_ORDERS.md)；第 6 节 |
-| M08 | COD/线上适配器、回调/查询、退款台账、结算文件对账 | [M08](modules/M08_PAYMENTS.md)；第 5–6 节 |
-| M09 | 区域/运费/免运、配送报价、人工多包裹履约 | [M09](modules/M09_DELIVERY.md)；第 2、5 节 |
-| M10 | 顾客/会员档案、邮箱 OTP、等级积分、同意与隐私请求 | [M10](modules/M10_CUSTOMERS_MEMBERS.md)；第 5 节 |
-| M11 | 优惠创建/发放/占位/核销/返还及营销同意联动 | [M11](modules/M11_PROMOTIONS.md)；第 5–6 节 |
-| M12 | SKU 级库存、预留、流水、超时恢复、低库存预警 | [M12](modules/M12_INVENTORY.md)；第 5–6 节 |
-| M13 | 三语交易通知、模板版本、幂等发送、重试/死信/重发 | [M13](modules/M13_NOTIFICATIONS.md)；第 4.3、8.4 节 |
-| M14 | 交易经营报表、匿名访问漏斗、指标字典、受控导出 | [M14](modules/M14_REPORTS.md)；第 4.3、9 节 |
-| M15 | 独立安装、配置、密钥、升级、备份恢复、迁出/停用 | [M15](modules/M15_SECURITY_DEPLOYMENT.md)；第 3、9–10 节 |
-| M16 | 取消/退款/退货/换货案件、质检、退款与库存联动 | [M16](modules/M16_AFTERSALES.md)；第 6 节 |
+| M00 | 后台登录、员工生命周期、权限、MFA、审计、会话撤销 | [M00](../01-产品文档/modules/M00_ADMIN_ACCESS.md)；本规格第 7 节 |
+| M01 | 店铺初始化、三语、市场开关、币种/时区、配置版本 | [M01](../01-产品文档/modules/M01_STORE_LOCALE.md)；第 2 节 |
+| M02 | 响应式独立前台、公开 API、预览、SEO/URL 输出 | [M02](../01-产品文档/modules/M02_STOREFRONT.md)、`design/STOREFRONT.md` |
+| M03 | 商品/变体/SKU/分类/品牌/多语言/可售校验 | [M03](../01-产品文档/modules/M03_CATALOG.md)；第 4 节 |
+| M04 | CMS/首页陈列草稿、预览、发布、定时、回滚、重定向 | [M04](../01-产品文档/modules/M04_CONTENT_CMS.md)；第 8.1–8.2 节 |
+| M05 | 商品批量导入预览、行级错误、部分/原子执行和受控导出 | [M05](../01-产品文档/modules/M05_IMPORT_EXPORT.md)；第 8.3 节 |
+| M06 | 访客购物袋、报价、优惠/运费校验、幂等下单 | [M06](../01-产品文档/modules/M06_CART_CHECKOUT.md)；第 5–6 节 |
+| M07 | 订单快照、状态、人工履约、分包裹、地址修改审计 | [M07](../01-产品文档/modules/M07_ORDERS.md)；第 6 节 |
+| M08 | COD/线上适配器、回调/查询、退款台账、结算文件对账 | [M08](../01-产品文档/modules/M08_PAYMENTS.md)；第 5–6 节 |
+| M09 | 区域/运费/免运、配送报价、人工多包裹履约 | [M09](../01-产品文档/modules/M09_DELIVERY.md)；第 2、5 节 |
+| M10 | 顾客/会员档案、邮箱 OTP、等级积分、同意与隐私请求 | [M10](../01-产品文档/modules/M10_CUSTOMERS_MEMBERS.md)；第 5 节 |
+| M11 | 优惠创建/发放/占位/核销/返还及营销同意联动 | [M11](../01-产品文档/modules/M11_PROMOTIONS.md)；第 5–6 节 |
+| M12 | SKU 级库存、预留、流水、超时恢复、低库存预警 | [M12](../01-产品文档/modules/M12_INVENTORY.md)；第 5–6 节 |
+| M13 | 三语交易通知、模板版本、幂等发送、重试/死信/重发 | [M13](../01-产品文档/modules/M13_NOTIFICATIONS.md)；第 4.3、8.4 节 |
+| M14 | 交易经营报表、匿名访问漏斗、指标字典、受控导出 | [M14](../01-产品文档/modules/M14_REPORTS.md)；第 4.3、9 节 |
+| M15 | 独立安装、配置、密钥、升级、备份恢复、迁出/停用 | [M15](../01-产品文档/modules/M15_SECURITY_DEPLOYMENT.md)；第 3、9–10 节 |
+| M16 | 取消/退款/退货/换货案件、质检、退款与库存联动 | [M16](../01-产品文档/modules/M16_AFTERSALES.md)；第 6 节 |
 
 ### 11.2 自动化测试与发布证据
 
-- 测试分层、覆盖规则、缺陷级别和质量门禁见 [测试策略](TEST_STRATEGY.md)；编号场景见 [测试用例矩阵](TEST_CASES.md)；生产演练见 [生产就绪验收](PRODUCTION_READINESS_ACCEPTANCE.md)。
+- 测试分层、覆盖规则、缺陷级别和质量门禁见 [测试策略](../04-测试文档/TEST_STRATEGY.md)；编号场景见 [测试用例矩阵](../04-测试文档/TEST_CASES.md)；生产演练见 [生产就绪验收](../04-测试文档/PRODUCTION_READINESS_ACCEPTANCE.md)。
 - 每个实现模块至少提交领域单元测试、数据库/API 集成测试和对应功能用例；关键交易/发布/隐私链路还要有浏览器端到端测试。
 - 单元测试不能替代数据库事务、锁、唯一约束、幂等、webhook 重放和实例隔离的集成验证。
 - 开发前文档中定义的用例是待实现/待执行规格，不代表测试代码已写、结果已通过。每次发布须记录 build、commit、环境、用例结果、证据及例外签字。

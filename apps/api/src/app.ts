@@ -46,6 +46,8 @@ import { ContentController } from './content/controller.js';
 import { ContentService } from './content/service.js';
 import { MerchandisingController } from './merchandising/controller.js';
 import { MerchandisingService } from './merchandising/service.js';
+import { CollectionsController } from './collections/controller.js';
+import { CollectionService } from './collections/service.js';
 import { StorefrontController } from './storefront/controller.js';
 import { StorefrontService } from './storefront/service.js';
 import { StaffController } from './identity/staff-controller.js';
@@ -128,16 +130,18 @@ export async function createApp(identity: IdentityService | null = null, options
   const content = identity ? new ContentService(identity) : null;
   const storefront = identity ? new StorefrontService(identity) : null;
   const merchandising = identity ? new MerchandisingService(identity) : null;
+  const collections = identity ? new CollectionService(identity) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
     OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController, PrivacyController,
     MailTestController, ReportsController, AnalyticsController, CarrierWebhookController, ContentController,
-    MerchandisingController],
+    MerchandisingController, CollectionsController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
       { provide: 'CONTENT', useValue: content },
       { provide: 'MERCHANDISING', useValue: merchandising },
+      { provide: 'COLLECTIONS', useValue: collections },
       { provide: 'STOREFRONT', useValue: storefront },
       { provide: 'SHIPPING', useValue: shipping },
       { provide: 'CART', useValue: cart },

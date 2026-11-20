@@ -135,7 +135,8 @@ test('an operator lays out a category page with products from that category only
   });
 
   await page.goto('/admin/merchandising');
-  await page.getByLabel('页面').selectOption({ label: '雪茄（未配置）' });
+  // 页面下拉现在按作用域标前缀（分类/专题），同一个分类名不会和专题名混淆。
+  await page.getByLabel('页面').selectOption({ label: '分类 · 雪茄（未配置）' });
   await expect(page.getByRole('textbox', { name: '线上版本' })).toHaveValue('未发布（前台用主题默认布局）');
 
   await page.getByRole('button', { name: '新增商品网格' }).click();

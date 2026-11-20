@@ -10,6 +10,8 @@ type Product = { id: string; baseSku: string | null; brandId: string | null; cat
 type Label = { id: string; parentId: string | null; position: number; enabled: boolean; version: number;
   translations: { locale: string; name: string; slug: string | null }[] };
 type Brand = { id: string; logoMediaId: string | null; enabled: boolean; version: number; translations: { locale: string; name: string; slug: string | null }[] };
+type Collection = { id: string; position: number; enabled: boolean; version: number; productIds: string[]; productCount: number;
+  translations: { locale: string; name: string; slug: string | null; description: string | null }[] };
 type Session = { permissionCodes: string[]; csrfToken: string };
 type Page<T> = { items: T[]; nextCursor: string | null; hasMore: boolean };
 
@@ -23,10 +25,17 @@ export function CatalogConsole() {
   const [categories, setCategories] = useState<Label[]>([]); const [brands, setBrands] = useState<Brand[]>([]);
   const [editing, setEditing] = useState<Product | null>(null); const [query, setQuery] = useState('');
   const [editingCategory, setEditingCategory] = useState<Label | null>(null);
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [editingCollection, setEditingCollection] = useState<Collection | null>(null);
+  // 专题商品按运营排的顺序保存：界面上的顺序即前台顺序，不额外提供「排序号」字段。
+  const [collectionProducts, setCollectionProducts] = useState<Product[]>([]);
+  const [pickQuery, setPickQuery] = useState(''); const [pickResults, setPickResults] = useState<Product[]>([]);
   const [variantRows, setVariantRows] = useState(1);
   const [ready, setReady] = useState(false); const [busy, setBusy] = useState(false);
   const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const canWrite = permissions.includes('catalog.write'); const canPublish = permissions.includes('catalog.publish');
+  // 商品索引：专题里已选的商品可能不在当前列表页，用它把 id 还原成名称。
+  const [productIndex, setProductIndex] = useState<Map<string, Product>>(new Map());
 
   async function request<T>(path: string, method = 'GET', body?: object, version?: number): Promise<T> {
     const response = await fetch(`/api/v1/admin/${path}`, { method, credentials: 'same-origin', cache: 'no-store', headers: {
@@ -53,6 +62,10 @@ export function CatalogConsole() {
       setProducts(page.items); setCursor(page.nextCursor);
       setCategories((await request<{ items: Label[] }>('categories')).items);
       setBrands((await request<{ items: Brand[] }>('brands')).items);
+      setCollections((await request<{ items: Collection[] }>('collections')).items);
+      // 专题编辑器要用名称显示已选商品：先取一页商品建立索引，选不到时退回 id。
+      const index = await request<Page<Product>>('products?limit=100');
+      setProductIndex(new Map(index.items.map(item => [item.id, item])));
     }
     setReady(true);
   }
@@ -128,6 +141,81 @@ export function CatalogConsole() {
     });
   }
 
+  /** 打开专题编辑器：按已保存的顺序还原商品行，缺索引的退化为 id（保存时仍按 id 提交）。 */
+  function openCollection(collection: Collection) {
+    setEditingCollection(collection);
+    setPickQuery(''); setPickResults([]);
+    setCollectionProducts(collection.productIds.map(id => productIndex.get(id) ?? ({ id } as Product)));
+  }
+
+  function collectionPayload(form: HTMLFormElement) {
+    const values = new FormData(form);
+    const translations = LOCALES.map(([locale]) => {
+      const name = String(values.get(`col-name:${locale}`) ?? '').trim();
+      const slug = String(values.get(`col-slug:${locale}`) ?? '').trim();
+      const description = String(values.get(`col-desc:${locale}`) ?? '').trim();
+      return name ? { locale, name, ...(slug ? { slug } : {}), ...(description ? { description } : {}) } : null;
+    }).filter(item => item !== null);
+    const position = Number(values.get('col-position') ?? editingCollection?.position ?? 0);
+    return { position: Number.isFinite(position) && position >= 0 ? position : 0,
+      enabled: values.get('col-enabled') === 'yes', translations,
+      productIds: collectionProducts.map(item => item.id) };
+  }
+
+  function createCollection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const form = event.currentTarget;
+    void run(async () => {
+      await request('collections', 'POST', { translations: [{
+        locale: 'zh-CN', name: String(new FormData(form).get('colName') ?? '').trim(),
+        slug: String(new FormData(form).get('colSlug') ?? '').trim() || undefined,
+      }] });
+      form.reset(); setNotice('专题已建立；补上商品后前台即可看到。');
+    });
+  }
+
+  function saveCollection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!editingCollection) return;
+    const payload = collectionPayload(event.currentTarget);
+    if (!payload.translations.length) { setError('至少填写一种语言的专题名称。'); return; }
+    void run(async () => {
+      await request(`collections/${editingCollection.id}`, 'PATCH', payload, editingCollection.version);
+      setEditingCollection(null); setCollectionProducts([]);
+      setNotice('专题已保存；改过 slug 的旧地址会自动 301 到新地址。');
+    });
+  }
+
+  function removeCollection(collection: Collection) {
+    if (!confirm(`删除专题「${nameOf(collection.translations, 'zh-CN')}」？商品与分类不受影响。`)) return;
+    void run(async () => { await request(`collections/${collection.id}`, 'DELETE'); setEditingCollection(null);
+      setNotice('专题已删除。'); });
+  }
+
+  function searchPickProducts(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void run(async () => {
+      const page = await request<Page<Product>>(`products?limit=25${pickQuery ? `&q=${encodeURIComponent(pickQuery)}` : ''}`);
+      setPickResults(page.items);
+      setProductIndex(previous => new Map([...previous, ...page.items.map(item => [item.id, item] as const)]));
+    }, false);
+  }
+
+  function addCollectionProduct(product: Product) {
+    setCollectionProducts(previous => previous.some(item => item.id === product.id) ? previous : [...previous, product]);
+  }
+
+  function removeCollectionProduct(id: string) {
+    setCollectionProducts(previous => previous.filter(item => item.id !== id));
+  }
+
+  function moveCollectionProduct(index: number, delta: number) {
+    setCollectionProducts(previous => {
+      const next = [...previous]; const target = index + delta;
+      if (target < 0 || target >= next.length) return previous;
+      [next[index], next[target]] = [next[target]!, next[index]!];
+      return next;
+    });
+  }
+
   function createLabel(kind: 'categories' | 'brands') {
     return (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault(); const form = event.currentTarget; const values = new FormData(form);
@@ -185,6 +273,68 @@ export function CatalogConsole() {
           </div></article>)}
         {cursor && <button disabled={busy} onClick={() => void run(async () => { const page = await request<Page<Product>>(`products?limit=25&cursor=${cursor}`);
           setProducts(previous => [...previous, ...page.items]); setCursor(page.nextCursor); }, false)}>加载更多商品</button>}
+      </section>
+      <section aria-labelledby="collections-title"><h2 id="collections-title">专题（策展）</h2>
+        <p><small>专题是跨分类的商品组合，前台地址为 <code>/collections/&lt;slug&gt;</code>；
+          改 slug 会自动为旧地址登记 301，停用或删除时前台立即下线。没有商品或没有 slug 的专题不会出现在前台列表。</small></p>
+        {collections.length === 0 && <p>尚无专题。</p>}
+        {collections.map(collection => <article key={collection.id}>
+          <h3>{nameOf(collection.translations, 'zh-CN')} <span className="preset">{collection.enabled ? '启用' : '停用'}</span></h3>
+          <small>{collection.translations.map(item => `${item.locale}: ${item.slug ?? '无 slug（前台不可见）'}`).join(' · ')}
+            {' · '}{collection.productCount} 件商品</small>
+          {canWrite && <div className="actions">
+            <button type="button" disabled={busy} onClick={() => openCollection(collection)}>编辑专题</button>
+            <button type="button" className="secondary" disabled={busy} onClick={() => removeCollection(collection)}>删除专题</button>
+          </div>}
+        </article>)}
+        {editingCollection && canWrite && <section aria-labelledby="edit-collection-title">
+          <h2 id="edit-collection-title">编辑专题「{nameOf(editingCollection.translations, 'zh-CN')}」</h2>
+          <form key={`${editingCollection.id}:${editingCollection.version}`} onSubmit={saveCollection}>
+            <div className="permission-grid">
+              {LOCALES.map(([locale, label]) => {
+                const translation = editingCollection.translations.find(item => item.locale === locale);
+                return <fieldset key={locale}><legend>{label}</legend>
+                  <label>名称<input name={`col-name:${locale}`} defaultValue={translation?.name ?? ''} maxLength={160} /></label>
+                  <label>slug<input name={`col-slug:${locale}`} defaultValue={translation?.slug ?? ''} maxLength={180}
+                    placeholder="如 autumn-picks" /></label>
+                  <label>简介<textarea name={`col-desc:${locale}`} defaultValue={translation?.description ?? ''} maxLength={3000} rows={2} /></label>
+                </fieldset>;
+              })}
+              <label>启用<select name="col-enabled" defaultValue={editingCollection.enabled ? 'yes' : 'no'}>
+                <option value="yes">启用（前台可见）</option><option value="no">停用（前台立即下线）</option></select></label>
+              <label>排序<input name="col-position" type="number" min={0} defaultValue={editingCollection.position} /></label>
+            </div>
+            <h3>商品（按下列顺序展示）</h3>
+            {collectionProducts.length === 0 && <p>还没有商品：从下方搜索结果里加入。</p>}
+            <ol className="collection-picks">{collectionProducts.map((item, index) => <li key={item.id}>
+              <span>{item.translations ? nameOf(item.translations, 'zh-CN') : item.id}</span>
+              <span className="actions">
+                <button type="button" className="secondary" disabled={index === 0} onClick={() => moveCollectionProduct(index, -1)}>上移</button>
+                <button type="button" className="secondary" disabled={index === collectionProducts.length - 1}
+                  onClick={() => moveCollectionProduct(index, 1)}>下移</button>
+                <button type="button" className="secondary" onClick={() => removeCollectionProduct(item.id)}>移除</button>
+              </span>
+            </li>)}</ol>
+            <p><small>当前版本 {editingCollection.version}；保存后前台最多半分钟生效。</small></p>
+            <button disabled={busy}>保存专题</button>
+            <button type="button" className="secondary" onClick={() => { setEditingCollection(null); setCollectionProducts([]); }}>取消</button>
+          </form>
+          <form onSubmit={searchPickProducts}>
+            <label>搜索商品<input name="pickQ" value={pickQuery} maxLength={200}
+              onChange={event => setPickQuery(event.target.value)} placeholder="名称或 SKU" /></label>
+            <button disabled={busy}>搜索</button>
+          </form>
+          {pickResults.map(product => <p key={product.id}>
+            <small>{nameOf(product.translations, 'zh-CN')} · {product.baseSku ?? '无基础 SKU'} · {product.status === 'active' ? '已上架' : '草稿'}</small>
+            <button type="button" disabled={busy || collectionProducts.some(item => item.id === product.id)}
+              onClick={() => addCollectionProduct(product)}>加入专题</button>
+          </p>)}
+        </section>}
+        {canWrite && <form onSubmit={createCollection}>
+          <label>新专题名称（简中）<input name="colName" required maxLength={160} /></label>
+          <label>专题 slug<input name="colSlug" maxLength={180} placeholder="如 autumn-picks" /></label>
+          <button disabled={busy}>建立专题</button>
+        </form>}
       </section>
       {canWrite && <section aria-labelledby="create-title"><h2 id="create-title">新建商品草稿</h2>
         <form onSubmit={create}><div className="permission-grid">{fields()}</div><button disabled={busy}>保存草稿</button></form></section>}

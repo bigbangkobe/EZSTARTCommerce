@@ -18,6 +18,8 @@ export interface SellableScope {
   now: Date;
   /** 页面级候选范围（分类页）：无论区块怎么配，都不能把商品从别的分类拖进来。 */
   categoryIds?: readonly string[];
+  /** 页面级候选范围（专题页）：同理，专题页只允许本专题的商品。 */
+  collectionIds?: readonly string[];
 }
 
 export function sellableWhere(scope: SellableScope, extra: Prisma.ProductWhereInput[] = []): Prisma.ProductWhereInput {
@@ -30,6 +32,7 @@ export function sellableWhere(scope: SellableScope, extra: Prisma.ProductWhereIn
       // 页面级分类范围在这里统一收口：陈列、手工位、平铺商品三条路径共用同一个口径，
       // 少写一处就会让分类页混进别的分类商品。
       ...(scope.categoryIds?.length ? [{ categories: { some: { categoryId: { in: [...scope.categoryIds] } } } }] : []),
+      ...(scope.collectionIds?.length ? [{ collections: { some: { collectionId: { in: [...scope.collectionIds] } } } }] : []),
       ...extra,
     ],
   };
@@ -38,10 +41,14 @@ export function sellableWhere(scope: SellableScope, extra: Prisma.ProductWhereIn
 /** 候选池上限：动态区块只需要「足够补满展示位」的候选，不把整站商品读进内存。 */
 const POOL_LIMIT = 120;
 
-export async function sellablePool(tx: Tx, scope: SellableScope, categoryIds: readonly string[]): Promise<ProductRow[]> {
-  // 页面级范围（scope）与区块级范围是「与」的关系：分类页里的动态区块只能在该分类内再筛。
-  const filters: Prisma.ProductWhereInput[] = categoryIds.length
-    ? [{ categories: { some: { categoryId: { in: [...categoryIds] } } } }] : [];
+export async function sellablePool(tx: Tx, scope: SellableScope, categoryIds: readonly string[],
+  collectionId: string | null = null): Promise<ProductRow[]> {
+  // 页面级范围（scope）与区块级范围是「与」的关系：分类页里的动态区块只能在该分类内再筛，
+  // 专题页里的动态区块同理只能在该专题内再筛。
+  const filters: Prisma.ProductWhereInput[] = [
+    ...(categoryIds.length ? [{ categories: { some: { categoryId: { in: [...categoryIds] } } } }] : []),
+    ...(collectionId ? [{ collections: { some: { collectionId } } }] : []),
+  ];
   return tx.product.findMany({
     where: sellableWhere(scope, filters),
     include: includeProduct,
