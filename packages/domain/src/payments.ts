@@ -33,15 +33,21 @@ export interface ProviderDefinition {
   readonly label: string;
   /** 线上渠道必须配置凭证引用；线下（COD）不需要。 */
   readonly requiresSecret: boolean;
+  /** 仅沙箱可用：生产环境不允许配置或解析该渠道。 */
+  readonly sandboxOnly?: boolean;
 }
 
 /**
  * 已接入的支付方式白名单。新增服务商必须先在这里登记渠道类型与凭证要求，
  * 否则 PATCH /admin/payment-methods 会直接拒绝，避免配置出一个没有适配器的空壳渠道。
+ *
+ * `mock` 是支付适配器的联调通道，只在 sandbox 可用；它存在的意义是让
+ * 创建支付→回调→退款整条链路在没有真实收单账号时也能被测试覆盖。
  */
 export const providers: readonly ProviderDefinition[] = [
   { code: 'cod', channel: 'cod', label: 'Cash on delivery', requiresSecret: false },
   { code: 'manual_bank_transfer', channel: 'manual', label: 'Manual bank transfer', requiresSecret: false },
+  { code: 'mock', channel: 'online', label: 'Mock gateway (sandbox only)', requiresSecret: false, sandboxOnly: true },
 ];
 
 export function provider(code: string): ProviderDefinition {
@@ -185,6 +191,8 @@ export function normalizeMethodPatch(input: { providerCode?: unknown; environmen
   if (typeof input.providerCode !== 'string') fail('VALIDATION_ERROR');
   const definition = provider(input.providerCode);
   if (input.environment !== 'sandbox' && input.environment !== 'production') fail('VALIDATION_ERROR');
+  // 沙箱专用渠道不能出现在生产配置里：假支付混进真实订单等于资损。
+  if (definition.sandboxOnly && input.environment === 'production') fail('PAYMENT_PROVIDER_SANDBOX_ONLY');
   if (typeof input.enabled !== 'boolean') fail('VALIDATION_ERROR');
 
   const displayName = input.displayName === undefined
