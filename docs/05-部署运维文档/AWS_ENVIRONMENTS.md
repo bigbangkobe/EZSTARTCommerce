@@ -11,11 +11,16 @@
 
 | 环境 | 用途 | 地址 | 状态 |
 |---|---|---|---|
-| `prod-mrinhk` | mrinhk 商户正式实例（当前唯一环境） | `mrinhk.com` / `admin.mrinhk.com` | 运行中 |
-| `staging` | 支付/迁移演练 | **未建**，W4 待建 | 缺失 |
+| `prod-mrinhk` | mrinhk 商户正式实例 | `mrinhk.com` / `admin.mrinhk.com` | 运行中 |
+| `staging` | 新版本验证、支付链路演练 | `https://localhost:8443`（仅本机，经 SSH 访问） | **运行中**（2026-11-20 建立） |
 | 本地容器 | 无 AWS 依赖的功能验证 | `docker compose` | 可用 |
 
-> ⚠️ **当前没有独立 staging。** 这台服务器就是 mrinhk 的正式实例，只是尚未接入真实业务数据。任何"演练"都必须以不破坏现有卷为前提（用独立 compose project 名 + 独立端口 + 独立卷）。
+> **staging 与生产完全隔离**：独立目录 `/opt/ezstart-staging`、独立 compose project `ezstart-staging`、
+> 独立 Postgres 容器与卷、独立端口 8443。停掉 staging 不会影响生产的任何容器或数据；
+> 生产卷名是 `ezstart-mrinhk_pgdata`，staging 是 `ezstart-staging_pgdata`，不会被互相误删。
+>
+> staging 用**内部 CA 自签证书**（`tls internal`），不是偷懒：生产配置强制 `APP_ORIGIN` 必须是 `https://`，
+> 用 HTTP 起 staging 会直接被配置校验拒绝。这个"起不来"恰好证明那条约束是有效的。
 
 ---
 
@@ -180,14 +185,74 @@ cd deploy/merchants/mrinhk && ./deploy.sh
 
 迁移不回滚（Prisma 只前进）；回滚代码前必须确认新版本迁移**向后兼容**。
 
-### 6.6 隔离演练（不碰生产卷）
+### 6.6 staging 实例（已验证可用）
 
 ```bash
-# 独立 project 名 + 独立端口 + 独立卷
-COMPOSE_PROJECT_NAME=ezstart-scratch docker compose -p ezstart-scratch up -d postgres
+# 状态
+cd /opt/ezstart-staging && docker compose ps
+
+# 重建镜像（源码在 /opt/ezstart-staging/src）
+cd /opt/ezstart-staging/src && docker build -f deploy/shared/Dockerfile.node -t ezstart-staging-api .
+
+# 重启
+cd /opt/ezstart-staging && docker compose up -d --no-build
+
+# 冒烟（从服务器本机执行；证书是内部 CA，需 -k）
+curl -sk -o /dev/null -w '%{http_code}\n' https://localhost:8443/api/v1/health/ready
+
+# 对账任务（令牌在 /opt/ezstart-staging/.env）
+curl -sk -X POST https://localhost:8443/api/v1/internal/jobs/reconcile \
+  -H 'content-type: application/json' -H "x-job-token: $INTERNAL_JOB_TOKEN" -d '{"olderThanMinutes":5}'
 ```
 
-注意：Caddy 已占用 80/443，演练实例**不能再发布这两个端口**（这是已知缺口 4，W9 参数化）。
+**2026-11-20 实测结果**（新镜像首次部署）：
+
+| 检查项 | 结果 |
+|---|---|
+| 迁移 | 36 条全部应用（含新增 `202611200400_refund_event_types`） |
+| `/health/live` | 200 `alive` |
+| `/health/ready` | 200（迁移清单与库内记录逐条比对通过） |
+| 配置校验 | `http://` 来源被拒启动，改 `https://` 后正常——生产 HTTPS 约束有效 |
+| 店主初始化 | `POST /admin/auth/bootstrap` 202，`nextAction=enroll_mfa`；用户 1、owner 角色 1、引导令牌已消费 |
+| 对账端点 | 无令牌 401、错令牌 401、正确令牌 200 并返回计数报告 |
+| 生产隔离 | 同期 `mrinhk.com/api/v1/health/ready` 仍 200，5 个生产容器全部 Up |
+
+> staging 不发布 80/443（生产 Caddy 占用）。这也是已知缺口 4：同机多实例的端口尚未参数化。
+
+### 6.7 对账定时任务（生产必配）
+
+回调不会永远到。渠道重试耗尽、进程在落库前重启、网络单向不通，都会让一笔已成功的支付停在
+`pending`——**钱收了，系统不知道**。所以对账不是"以后再说"的优化项，是上线门槛。
+
+```bash
+# 手动跑一次（在实例目录下）
+cd deploy/merchants/mrinhk
+docker compose exec -T api node scripts/reconcile.mjs
+
+# 只处理 60 分钟前的，最多 200 条
+docker compose exec -T api node scripts/reconcile.mjs --older-than=60 --limit=200
+```
+
+主机 cron（每 15 分钟）：
+
+```cron
+*/15 * * * * cd /opt/ezstart-mrinhk/deploy/merchants/mrinhk && docker compose exec -T api node scripts/reconcile.mjs >> /var/log/ezstart-reconcile.log 2>&1
+```
+
+要点：
+
+- 令牌从容器环境变量 `INTERNAL_JOB_TOKEN` 读，**不进命令行**（命令行会出现在 `ps` 与 history 里）。
+- 未配置令牌时该端点整体 503，不会留下未受保护的运维入口。
+- 脚本只打印计数，不打印订单号：日志长期留存，没必要把客户订单散进去。
+- 有失败项也返回 0 并打印明细——对账"跑完了但有几笔要人看"不等于作业失败，否则 cron 天天报警会被忽略。
+
+### 6.8 清理 staging
+
+```bash
+cd /opt/ezstart-staging && docker compose down          # 停容器，保留卷
+cd /opt/ezstart-staging && docker compose down -v       # 连卷一起删（仅 staging）
+docker rmi ezstart-staging-api                          # 删镜像
+```
 
 ---
 

@@ -121,6 +121,23 @@ export interface WebhookEvent {
   readonly occurredAt: Date;
 }
 
+export interface RefundInput {
+  /** 内部退款单号，同时是渠道侧幂等键；重试必须复用。 */
+  readonly refundNumber: string;
+  readonly providerTransactionId: string;
+  readonly amountMinor: number;
+  readonly currency: string;
+  readonly reason: string | null;
+}
+
+export interface RefundResult {
+  readonly providerRefundId: string;
+  /** pending 表示渠道还没给结论，调用方必须保持 processing 等对账，不能判成功或失败。 */
+  readonly status: 'pending' | 'succeeded' | 'failed';
+  readonly amountMinor: number;
+  readonly rawStatus: string;
+}
+
 export interface PaymentAdapter {
   readonly code: string;
   readonly channel: PaymentChannel;
@@ -129,6 +146,8 @@ export interface PaymentAdapter {
   createPayment(ctx: AdapterContext, input: CreatePaymentInput): Promise<CreatePaymentResult>;
   queryPayment(ctx: AdapterContext, providerTransactionId: string): Promise<QueryPaymentResult>;
   refund(ctx: AdapterContext, input: RefundInput): Promise<RefundResult>;
+  /** 按渠道退款单号回查。没有它，processing 的退款永远无法收敛。 */
+  queryRefund(ctx: AdapterContext, providerRefundId: string): Promise<RefundResult>;
   /** 验签失败必须抛错，不允许返回"疑似成功"。 */
   verifyWebhook(ctx: AdapterContext, headers: Record<string, string>, rawBody: Buffer): Promise<WebhookEvent>;
 }
@@ -139,9 +158,12 @@ export interface PaymentAdapter {
 1. **金额只收 minor units + currency**，适配器内部禁止浮点运算。
 2. **幂等键固定为内部 `paymentNumber`**，重试沿用同一个，不允许每次生成新键。
 3. **`unknown` 只能由 `queryPayment` 收敛**，后台无人工出口（沿用现有 `PAYMENT_STATUS_UNKNOWN_REQUIRES_PROVIDER`）。
-4. **状态推进必须走 `nextPaymentStatus()`**，适配器只返回原始状态，不许自己写库。
+4. **状态推进必须走 `nextPaymentStatus()`**（渠道来源用 `nextPaymentStatusFromProvider()`），
+   适配器只返回原始状态，不许自己写库。人工接口永远用前者，`unknown` 在那里被挡住。
 5. **验签失败即拒绝**，返回 400 且不落任何台账。
 6. **密钥不出 `AdapterContext`**，不进日志、不进 `Payment.metadata`、不进错误信息。
+7. **适配器只能为"渠道明确拒绝"抛 `PaymentAdapterError`**；网络超时、连接中断要原样抛出。
+   上层据此区分"确定失败"和"结果未知"——把超时当失败，就会把钱退了却记成没退。
 
 ---
 
@@ -378,11 +400,71 @@ V1 的抽象层必须一次做对，否则第二个客户会推倒重来。
 - **金额不符不抛错**：记 `WEBHOOK_AMOUNT_MISMATCH` 冲突事件、不推进状态。抛 400 同样会让渠道无限重试。
 - **终态再收到前进事件**：记事件、不改状态，供对账解释差异。
 
-### 12.4 尚未完成
+### 12.4 已完成：退款编排（W3）
 
-- 对账任务（`pending` 超时拉 `queryPayment` 收敛）与死信重放未实现。
-- 退款编排未接入 `PaymentsService`（适配器已支持 `refund`，但缺对外接口与售后台账串联）。
-- 后台支付通道管理 UI 未接（端点已就绪）。
-- 真实渠道适配器未接入；`@aws-sdk/client-secrets-manager` 仍未安装。
+线上退款是**两次事务夹一次渠道调用**，这是刻意的设计，不是偷懒：
 
-**当前验证结果：** 全量测试 **390/390** 通过（含真实 PostgreSQL 的 HTTP 集成测试）；契约校验 54 项通过。
+```
+事务1：校验 → 落 processing → 记 dispatched 事件 → 提交
+        ↓（中间是崩溃窗口）
+渠道调用：adapter.refund()
+        ↓
+事务2：按结论收敛（refunded / failed / unknown / 保持 processing）
+```
+
+**为什么不能一个事务做完**：渠道调用是秒级外部 IO，包进事务会长时间持锁；更关键的是，
+渠道成功而本地回滚会造成"钱退了，系统不知道"。先落 `processing`，崩了也知道有一笔钱可能已退出。
+
+| 渠道返回 | 落库结果 | 说明 |
+|---|---|---|
+| `succeeded` | `refunded` + `executedAt` + `externalRefundId` | 幂等靠 `refundNumber`，重试拿回同一笔 |
+| `failed` | `failed` + `failureCode` | 渠道明确拒绝，可重新批准后重试 |
+| `pending` | 保持 `processing` | 没结论就是没结论，等对账 |
+| 抛 `PaymentAdapterError` | `failed` + 错误码 | 渠道规则拒绝（超额、币种不符） |
+| 抛网络/超时异常 | `unknown` | 无法判定钱是否退出，禁止猜 |
+
+顺带修的两处：
+
+- **退款状态机补了 `start` / `mark_unknown` / `resolve`**。`processing` 状态此前存在但没有入口，
+  `unknown` 也没有服务端出口——两者不补，线上退款只能停在中间态。
+- **`RefundEvent.type` 数据库约束放开了 `dispatched / provider_pending / refunded`**
+  （迁移 `202611200400_refund_event_types`）。原约束只允许手工动作类型，写入会在事务尾部 500。
+
+### 12.5 已完成：对账任务（W3）
+
+`POST /api/v1/internal/jobs/reconcile`，需 `x-job-token` 与 `INTERNAL_JOB_TOKEN` 匹配，
+**未配置令牌时整体 503**——运维端点默认开放等于送攻击者一个执行入口。
+
+| 扫描对象 | 条件 | 收敛方式 |
+|---|---|---|
+| 支付 | `channel=online` 且 `status ∈ pending/authorized/unknown` 且创建超过阈值 | `queryPayment` → 走同一段 `settlePayment` |
+| 退款 | `channel=online` 且 `status ∈ processing/unknown` 且创建超过阈值 | `queryRefund` → 收敛或保持 |
+
+三条边界：
+
+1. **只处理超时的**。刚创建就去查，渠道可能还没落库，只会得到噪声。
+2. **只推进不制造**。渠道说 pending 就保持原状；查询失败记进 `errors` 不中断整批。
+3. **回调与对账共用 `settlePayment`**。两套逻辑迟早给出不同判断，尤其是"金额冲突"这种边界。
+
+运维触发：`docker compose exec -T api node scripts/reconcile.mjs`（令牌从环境变量读，不进命令行）。
+
+### 12.6 已完成：后台自助配置闭环
+
+三处补齐，才让"客户自己接收单账号、不改代码"成立：
+
+1. **每个渠道都有配置行**。`ensureDefaults` 现在按白名单为所有在线渠道播种（默认关闭、无批准依据）。
+   在此之前后台只能改已存在的行——新客户连"加一个渠道"的入口都没有。
+2. **连接状态参与结账门禁**。`resolveCheckout` 对线上渠道增加 `checkoutVisible` 判断：
+   启用但没测通凭据，结账页看不到它。配错凭据的最坏结果是"看不见"，不是"下单必失败"。
+3. **站点支付环境可切换**。`PAYMENTS_ENVIRONMENT=sandbox` 才使用仅沙箱存在的渠道（如 mock），
+   默认 production，配错时宁可少一个渠道，也不让沙箱渠道出现在生产。
+4. **契约补 `displayName`**。后台一直在发这个字段，契约 `additionalProperties: false` 会直接 422。
+   属于"UI 写了、契约没写"的典型脱节。
+
+### 12.7 尚未完成
+
+- 真实渠道适配器未接入；`@aws-sdk/client-secrets-manager` 仍未安装（`aws-sm` 引用当前返回 `SECRET_PROVIDER_UNAVAILABLE`）。
+- 死信重放：未知单号回调目前只记 `deferred`，没有持久化，靠对账按超时扫描兜底。
+- 退款部分失败的对账人工工单流程（现在只能看 `errors` 与台账）。
+
+**当前验证结果：** 全量测试 396 条（含真实 PostgreSQL 的 HTTP 集成测试）；契约校验 54 项通过。
