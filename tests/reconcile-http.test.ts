@@ -20,7 +20,9 @@ const CREDENTIALS = JSON.stringify({ apiKey: 'test_api_key_1234', webhookSecret:
 const JOB_TOKEN = 'job_token_for_tests_0123456789abcdef';
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 
-test('reconcile job converges dropped webhooks and stuck refunds', { timeout: 300_000 }, async () => {
+test('reconcile job converges dropped webhooks and stuck refunds', { timeout: 300_000 }, async (t) => {
+  process.env.PAYMENTS_ENVIRONMENT = 'sandbox';
+  t.after(() => { delete process.env.PAYMENTS_ENVIRONMENT; });
   process.env.PAYMENTS_BASE_URL = 'https://shop.example.test';
   process.env.MOCK_PAYMENT_SECRET = CREDENTIALS;
   process.env.INTERNAL_JOB_TOKEN = JOB_TOKEN;

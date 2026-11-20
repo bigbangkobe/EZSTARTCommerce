@@ -20,8 +20,11 @@ const WEBHOOK_SECRET = 'test_webhook_secret_1234';
 const CREDENTIALS = JSON.stringify({ apiKey: 'test_api_key_1234', webhookSecret: WEBHOOK_SECRET });
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 
-test('online payments: intent, signed webhook settlement and idempotent replay', { timeout: 300_000 }, async () => {
-  // createApp 读这两个变量决定线上支付是否可用，以及 mock 渠道的凭据来源。
+test('online payments: intent, signed webhook settlement and idempotent replay', { timeout: 300_000 }, async (t) => {
+  // createApp 读这三个变量决定线上支付是否可用、用哪套密钥环境、以及 mock 渠道的凭据来源。
+  // 站点支付环境必须显式声明 sandbox：默认是 production，而生产禁用 secret://env/。
+  process.env.PAYMENTS_ENVIRONMENT = 'sandbox';
+  t.after(() => { delete process.env.PAYMENTS_ENVIRONMENT; });
   process.env.PAYMENTS_BASE_URL = 'https://shop.example.test';
   process.env.MOCK_PAYMENT_SECRET = CREDENTIALS;
 

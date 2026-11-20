@@ -43,6 +43,7 @@ import { PaymentsController } from './payments/controller.js';
 import { PaymentsService, type OnlinePaymentDeps } from './payments/service.js';
 import { adapterFor } from './payments/adapters/registry.js';
 import { createSecretResolver } from './payments/adapters/secret-resolver.js';
+import { paymentEnvironment } from './payments/environment.js';
 import { PaymentWebhookController } from './payment-webhooks/controller.js';
 import { InternalJobsController } from './payments/jobs-controller.js';
 import { OrdersService } from './orders/service.js';
@@ -123,7 +124,9 @@ export async function createApp(identity: IdentityService | null = null, options
   const paymentsBaseUrl = (process.env.PAYMENTS_BASE_URL ?? process.env.PUBLIC_SITE_URL ?? '').trim();
   const online: OnlinePaymentDeps | null = identity && paymentsBaseUrl
     ? {
-      resolver: createSecretResolver({ environment: process.env.NODE_ENV === 'production' ? 'production' : 'sandbox' }),
+      // 密钥环境必须与站点支付环境同源：staging 声明 sandbox 才允许 secret://env/，
+      // 生产无论 NODE_ENV 如何都拒绝 env / file。
+      resolver: createSecretResolver({ environment: paymentEnvironment() }),
       adapterFor,
       baseUrl: paymentsBaseUrl,
     }

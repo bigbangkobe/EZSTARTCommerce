@@ -14,6 +14,7 @@ import {
   webhookEventKey, type AdapterContext, type AdapterStatus, type PaymentAdapter,
 } from '../../../../packages/domain/src/payment-adapter.js';
 import type { SecretResolver } from './adapters/secret-resolver.js';
+import { paymentEnvironment, type PaymentEnvironment } from './environment.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -21,7 +22,7 @@ type MethodRow = Prisma.PaymentMethodConfigGetPayload<{}>;
 type PaymentRow = Prisma.PaymentGetPayload<{}>;
 type PaymentOrderRow = Prisma.ShopOrderGetPayload<{}>;
 type PaymentWithOrder = Prisma.PaymentGetPayload<{ include: { order: true } }>;
-type Environment = 'sandbox' | 'production';
+type Environment = PaymentEnvironment;
 
 /** 线上支付需要的三件外部能力；缺失时线上支付整体不可用（返回 503），线下不受影响。 */
 export interface OnlinePaymentDeps {
@@ -179,9 +180,11 @@ export class PaymentsService {
    * 本站点使用的支付环境。生产实例只能用生产渠道；staging 用 `PAYMENTS_ENVIRONMENT=sandbox`
    * 才能用 mock 之类仅沙箱存在的渠道。默认 production——配错时宁可"少一个渠道"，
    * 也不能让沙箱渠道在生产里出现。
+   *
+   * 判定集中在 `paymentEnvironment`：密钥解析器也用它，两处不能各认一套变量。
    */
   private environment(): Environment {
-    return process.env.PAYMENTS_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'production';
+    return paymentEnvironment();
   }
 
   private async methodRow(tx: Tx, code: string, environment = this.environment()) {
