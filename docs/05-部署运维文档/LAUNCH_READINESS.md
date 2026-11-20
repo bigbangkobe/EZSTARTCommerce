@@ -1,6 +1,6 @@
 # 上线准备度报告（mrinhk 首个客户）
 
-> 版本：v1.0　日期：2026-11-20　状态：技术侧就绪，外部输入待签
+> 版本：v1.1　日期：2026-11-20　状态：版本已上生产，外部输入待签
 > 依据：[开发方案与排期](../03-开发文档/DEVELOPMENT_PLAN.md) · [支付适配器规格](../03-开发文档/PAYMENT_ADAPTER_SPEC.md) · [AWS 环境与运维](AWS_ENVIRONMENTS.md) · [上线验收用例](../04-测试文档/TEST_CASES_LAUNCH.md)
 
 ---
@@ -11,6 +11,9 @@
 
 按当前状态，可以立刻做的是：把 mrinhk 现有实例升到本版本（含线上退款、对账、自助配支付），
 用 COD 先跑通真实订单；线上收款等渠道到位后，插一个适配器即可，不再改业务代码。
+
+> **2026-11-20 更新**：前半句已执行——生产 `mrinhk.com` 已升级到 `61682e8`（36 条迁移），
+> 详情见 [4.4 生产发布记录](#44-生产发布记录2026-11-20)。线上渠道仍未启用，待客户给凭证与类目批复。
 
 ---
 
@@ -84,9 +87,16 @@ Linux 容器（生产镜像）复跑单元层 255 条：252 通过，3 条因容
 
 ```bash
 cd /opt/ezstart-mrinhk/deploy/merchants/mrinhk
-docker compose down
-docker tag ezstart-mrinhk-api:previous ezstart-mrinhk-api   # 或从 registry 拉旧标签
-docker compose up -d
+./deploy.sh --rollback    # 等价于把 api/admin/storefront 的 :prev 镜像重打为当前标签再 up
+```
+
+手工等价写法（`deploy.sh` 打的是 `:prev`，不是 `:previous`）：
+
+```bash
+docker tag ezstart-mrinhk-api:prev ezstart-mrinhk-api
+docker tag ezstart-mrinhk-admin:prev ezstart-mrinhk-admin
+docker tag ezstart-mrinhk-storefront:prev ezstart-mrinhk-storefront
+docker compose up -d --no-build
 ```
 
 迁移不回滚。回滚代码前必须确认新迁移对旧代码是**向后兼容**的（本次
@@ -97,6 +107,25 @@ docker compose up -d
 | 迁移 | 内容 | 向后兼容 |
 |---|---|---|
 | `202611200400_refund_event_types` | `RefundEvent.type` CHECK 增加 `dispatched / provider_pending / refunded` | ✅ 只放宽，旧代码不受影响 |
+
+### 4.4 生产发布记录（2026-11-20）
+
+`234c746 → 61682e8`，10 个提交、57 文件、1 条迁移。执行 `deploy.sh` 全程 3 分 32 秒。
+
+| 阶段 | 事实 |
+|---|---|
+| 回滚点 | `ezstart-mrinhk-{api,admin,storefront}:prev` |
+| 备份 | `ezstart-20261120-151337.sql.gz`，43 KB，gzip 校验通过，95 张表 |
+| 迁移 | `migrate` 容器退出码 0，35 → 36，`_prisma_migrations` 记录与仓库文件逐条比对通过 |
+| 停机窗口 | 约 30 秒（15:16:32 → 15:17:00），构建 3 分钟期间旧容器持续服务 |
+| 健康 | `live` / `ready` 均 200；Caddy 本地链路与公网均 200 |
+| 页面复核 | 前台首页/列表/三语商品详情/购物车/结账/分类/会员登录、后台登录页全 200 |
+| 数据复核 | `PaymentMethodConfig` 与发布前一致（`cod` 启用、`manual_bank_transfer` 停用） |
+| 渠道暴露 | `mock` 为 sandbox 专用，生产 `POST /payments/webhook/mock` 返回 404（不注册） |
+
+**发布后仍缺的一项配置**：生产未设 `INTERNAL_JOB_TOKEN`，对账端点按设计 fail-closed 返回 503。
+当前线上渠道未启用，不影响业务；但**开通线上支付前必须配置并挂 cron**，否则“渠道已扣款、回调丢失”无法被对账任务收敛。
+开通顺序应为：配 `INTERNAL_JOB_TOKEN` → 后台填渠道凭证 → 测试连接 `ok` → 挂对账 cron → 下一笔真实测试单 → 退款演练（本文件第 5 节第 3 项）。
 
 ---
 
@@ -149,3 +178,4 @@ docker compose up -d
 | 日期 | 变更 |
 |---|---|
 | 2026-11-20 | 首版；线上退款、对账任务、自助配支付完成；staging 实例建立并实测 |
+| 2026-11-20 | v1.1：`61682e8` 发布到生产（36 条迁移，停机 30 秒）；补 4.4 发布记录与回滚命令修正（`:prev`）；标注 `INTERNAL_JOB_TOKEN` 为开通线上支付的前置 |

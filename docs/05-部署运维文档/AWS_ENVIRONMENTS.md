@@ -110,28 +110,49 @@ mrinhk.com/api/*            → api:3000
 
 ---
 
-## 5. 当前状态快照（2026-11-20 实测）
+## 5. 当前状态快照（2026-11-20 支付版本发布后实测）
 
 | 项 | 值 |
 |---|---|
-| 代码版本 | `234c746`（`docs: 同步配置化前台落地状态与实施记录`） |
+| 代码版本 | `61682e8`（`docs: 记录 staging 支付版本实测与迁移校验和坑`） |
+| 上一版本 | `234c746`（镜像 tag `:prev` 已保留，可回滚） |
 | 工作区 | 干净，无未提交改动 |
 | 容器 | caddy / api / admin / storefront / postgres 全部 Up，api `healthy` |
-| 运行时长 | 主机 uptime 4 天；caddy/postgres 3 天；api 33 分钟 |
-| 磁盘 | 22 GB / 100 GB（22%） |
-| 内存 | 已用 939 MB / 3.9 GB，可用 2627 MB |
-| `mrinhk.com` | 307（locale 重定向，正常） |
-| `admin.mrinhk.com` | 307（登录重定向，正常） |
+| 运行时长 | 主机 uptime 4 天；caddy/postgres 3 天 |
+| 磁盘 | 28 GB / 100 GB（28%） |
+| 内存 | 已用 1090 MB / 3.9 GB，可用 2417 MB |
+| `mrinhk.com` | 307 → `/zh-HK`，跟随 200 |
+| `admin.mrinhk.com` | 307 → `/admin/login`，跟随 200 |
 | `/api/v1/health/ready` | **200** |
-| 数据库迁移 | 35 条已应用 |
+| 数据库迁移 | **36 条**已应用（新增 `202611200400_refund_event_types`） |
 | 主题发布 | 未发布（后台主题配置尚未走发布流程） |
-| 线上支付 | **未接入**（仅 COD / 人工转账） |
+| 线上支付 | 代码就绪，**渠道未启用**（仅 COD 可用；`mock` 为 sandbox 专用，生产 404） |
 
-### 5.1 待清理项
+### 5.1 本次发布的复核结果（2026-11-20 15:13–15:17）
+
+| 检查项 | 结果 |
+|---|---|
+| 快进合并 | `234c746 → 61682e8`，10 个提交，57 文件 |
+| 部署前备份 | `/opt/ezstart-backups/ezstart-20261120-151337.sql.gz`，gzip 校验通过，95 张表 |
+| 迁移 | `migrate` 一次性容器退出码 0，36 条；`RefundEvent_type_check` 已扩到 10 类 |
+| 停机窗口 | 构建期间旧容器持续服务；重建在 15:16:32–15:17:00，约 30 秒 |
+| 健康 | `live` / `ready` 均 200 |
+| 前台 | `/zh-HK`、`products`、三语商品详情、`cart`、`checkout`、`categories`、`collections`、`login`、`sitemap.xml` 全 200 |
+| 后台 | `admin.mrinhk.com/admin/login` 200，登录表单要素齐全 |
+| 支付配置未被动 | `cod`（production，已启用）、`manual_bank_transfer`（停用），与发布前一致 |
+| 新端点接线 | `GET /admin/payment-methods` 无凭证 401；`POST /payments/webhook/mock` 生产环境 404（渠道不注册） |
+| API 日志 | 部署后无 error / fatal |
+| staging 隔离 | 三个 staging 容器仍在跑，未受影响 |
+
+> **已知待办**：生产未设置 `INTERNAL_JOB_TOKEN`，`POST /internal/jobs/reconcile` 按设计 fail-closed 返回 503。
+> 这不影响当前（线上渠道未启用），但**开通线上支付前必须配置**，否则丢回调无法被对账任务收敛。
+
+### 5.2 待清理项
 
 | 项 | 说明 | 影响 |
 |---|---|---|
 | `ezstart-pg-test` 容器 | 测试残留，已运行 3 天，占内存 | 低；确认无测试在跑后可 `docker rm -f` |
+| Docker 构建缓存 | 12.5 GB 可回收（`docker builder prune`） | 低；磁盘仍余 73 GB，暂不动 |
 | `/opt/ezstart-mrinhk.bak-20261117-041145` | 历史目录备份 | 低；确认后清理释放磁盘 |
 
 ---
@@ -378,6 +399,7 @@ docker rmi ezstart-staging-api                          # 删镜像
 | 2026-11-18 | 生产部署 `7c1b569`（25 条迁移），报表模块上线 | — |
 | 2026-11-20 | 本文档建立；实测连通与状态快照；代码 `234c746`（35 条迁移） | — |
 | 2026-11-20 | staging 库重建并部署支付版本 `c8c6760`；36 条迁移从零应用；支付冒烟 25/25；记录迁移校验和换行符坑 | — |
+| 2026-11-20 | **生产升级到 `61682e8`**（36 条迁移），线上支付编排/退款/对账代码上线；渠道仍未启用；停机约 30 秒；备份 `ezstart-20261120-151337.sql.gz` | — |
 
 ---
 
