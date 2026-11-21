@@ -454,6 +454,26 @@ export interface paths {
         patch: operations["updateStoreConfig"];
         trace?: never;
     };
+    "/admin/workbench": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Aggregated counters for the admin home screen
+         * @description One round trip for the admin landing page. Counters are computed only for blocks the actor may read: a block whose permission is missing is returned as null rather than zero, so the client can hide it instead of showing a misleading number.
+         */
+        get: operations["getWorkbench"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/products": {
         parameters: {
             query?: never;
@@ -4063,6 +4083,28 @@ export interface components {
             redirectUrl?: string | null;
             instructions?: string | null;
         };
+        WorkbenchSummary: {
+            /** Format: date-time */
+            generatedAt: string;
+            orders: {
+                awaitingConfirmation: number;
+                awaitingDispatch: number;
+                prepaidUnsettled: number;
+            };
+            /** @description Null when the actor lacks aftersales.read. */
+            aftersales?: {
+                open: number;
+            } | null;
+            /** @description Null when the actor lacks inventory.read. */
+            inventory?: {
+                lowStock: number;
+            } | null;
+            recentOrders: components["schemas"]["OrderSummary"][];
+        };
+        WorkbenchEnvelope: {
+            data: components["schemas"]["WorkbenchSummary"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         OrderSummary: {
             /** Format: uuid */
             id: string;
@@ -6703,6 +6745,15 @@ export interface components {
                 "application/json": components["schemas"]["OrderCreatedEnvelope"];
             };
         };
+        /** @description Workbench counters; blocks the actor may not read come back as null */
+        WorkbenchSuccess: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["WorkbenchEnvelope"];
+            };
+        };
         /** @description Order collection with masked contact fields */
         OrderListSuccess: {
             headers: {
@@ -7652,6 +7703,21 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getWorkbench: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["WorkbenchSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["UnexpectedError"];
         };
     };

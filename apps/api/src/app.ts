@@ -38,6 +38,8 @@ import { CarrierWebhookController } from './carrier-webhooks/controller.js';
 import { CarrierWebhookService } from './carrier-webhooks/service.js';
 import { carrierWebhookSecrets } from '../../../packages/domain/src/carrier.js';
 import { AfterSalesService } from './aftersales/service.js';
+import { WorkbenchController } from './workbench/controller.js';
+import { WorkbenchService } from './workbench/service.js';
 import { OrdersController } from './orders/controller.js';
 import { PaymentsController } from './payments/controller.js';
 import { PaymentsService, type OnlinePaymentDeps } from './payments/service.js';
@@ -155,12 +157,13 @@ export async function createApp(identity: IdentityService | null = null, options
   const merchandising = identity ? new MerchandisingService(identity) : null;
   const theme = identity ? new ThemeService(identity) : null;
   const collections = identity ? new CollectionService(identity) : null;
+  const workbench = identity ? new WorkbenchService(identity) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
     CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
     OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController, PrivacyController,
     MailTestController, ReportsController, AnalyticsController, CarrierWebhookController, ContentController,
     MerchandisingController, ThemeController, CollectionsController, PaymentWebhookController,
-    InternalJobsController],
+    InternalJobsController, WorkbenchController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
@@ -168,6 +171,7 @@ export async function createApp(identity: IdentityService | null = null, options
       { provide: 'MERCHANDISING', useValue: merchandising },
       { provide: 'THEME', useValue: theme },
       { provide: 'COLLECTIONS', useValue: collections },
+      { provide: 'WORKBENCH', useValue: workbench },
       { provide: 'STOREFRONT', useValue: storefront },
       { provide: 'SHIPPING', useValue: shipping },
       { provide: 'CART', useValue: cart },

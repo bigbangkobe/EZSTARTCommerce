@@ -753,6 +753,22 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
 
+  /admin/workbench:
+    get:
+      tags: [Reports]
+      operationId: getWorkbench
+      summary: Aggregated counters for the admin home screen
+      description: >
+        One round trip for the admin landing page. Counters are computed only for blocks the actor
+        may read: a block whose permission is missing is returned as null rather than zero, so the
+        client can hide it instead of showing a misleading number.
+      security: [{ AdminSession: [] }]
+      x-permission: orders.read
+      responses:
+        '200': { $ref: '#/components/responses/WorkbenchSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/products:
     get:
       tags: [Catalog]
@@ -4807,6 +4823,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/OrderCreatedEnvelope' }
+    WorkbenchSuccess:
+      description: Workbench counters; blocks the actor may not read come back as null
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkbenchEnvelope' }
     OrderListSuccess:
       description: Order collection with masked contact fields
       content:
@@ -6885,6 +6906,45 @@ components:
         type: { type: string, enum: [none, redirect, instructions] }
         redirectUrl: { type: [string, 'null'], format: uri }
         instructions: { type: [string, 'null'], maxLength: 2000 }
+    WorkbenchSummary:
+      type: object
+      additionalProperties: false
+      required: [generatedAt, orders, recentOrders]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        orders:
+          type: object
+          additionalProperties: false
+          required: [awaitingConfirmation, awaitingDispatch, prepaidUnsettled]
+          properties:
+            awaitingConfirmation: { type: integer, minimum: 0 }
+            awaitingDispatch: { type: integer, minimum: 0 }
+            prepaidUnsettled: { type: integer, minimum: 0 }
+        aftersales:
+          description: Null when the actor lacks aftersales.read.
+          type: [object, 'null']
+          additionalProperties: false
+          required: [open]
+          properties:
+            open: { type: integer, minimum: 0 }
+        inventory:
+          description: Null when the actor lacks inventory.read.
+          type: [object, 'null']
+          additionalProperties: false
+          required: [lowStock]
+          properties:
+            lowStock: { type: integer, minimum: 0 }
+        recentOrders:
+          type: array
+          maxItems: 8
+          items: { $ref: '#/components/schemas/OrderSummary' }
+    WorkbenchEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/WorkbenchSummary' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
     OrderSummary:
       type: object
       additionalProperties: false
