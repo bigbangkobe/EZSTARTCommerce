@@ -1,9 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import type { CSSProperties } from 'react';
 import { notFound } from 'next/navigation';
 import { whatsappLink } from '../../../../lib/site';
 import { altPaths, copyFor, fill, isLocale, localePath, type Locale } from '../../../../lib/i18n';
 import { fetchProduct, formatPrice } from '../../../../lib/products';
+import { productHue, productInitial } from '../../../product-cards';
 import AddToCartForm from './add-to-cart-form';
 import AnalyticsTracker from '../../../analytics-tracker';
 
@@ -43,46 +45,60 @@ export default async function ProductDetailPage({ params }: {
 
   return (
     <section className="section">
-      <AnalyticsTracker pageKey={`product:${slug}`} locale={locale} variantId={product.variants[0]?.id} />
-      <div className="red-line" />
-      <div className="section-head">
-        <span className="num">弐</span>
-        <h2>{product.name}</h2>
-        <span className="jp">{t.products.jp}</span>
-      </div>
+      <div className="container">
+        <AnalyticsTracker pageKey={`product:${slug}`} locale={locale} variantId={product.variants[0]?.id} />
+        <nav className="breadcrumb" aria-label={t.nav.home}>
+          <Link href={localePath(locale)} hrefLang={locale}>{t.nav.home}</Link>
+          <span aria-hidden="true">/</span>
+          <Link href={localePath(locale, '/products')} hrefLang={locale}>{t.nav.products}</Link>
+          <span aria-hidden="true">/</span>
+          <span aria-current="page">{product.name}</span>
+        </nav>
 
-      <div className="card product-card">
-        <div className="product-thumb">{product.name}</div>
-        <div className="product-body">
-          <div className="product-price">
-            {formatPrice(product.price, product.currency)}
-            <small> {t.common.from}</small>
+        <div className="detail-layout">
+          <div className="detail-media" style={{ '--h': String(productHue(product.name)) } as CSSProperties}>
+            {product.image
+              ? <img src={product.image} alt={product.name} />
+              : <span className="detail-mark" aria-hidden="true">{productInitial(product.name)}</span>}
+            {!product.inStock && <span className="product-flag">{t.common.soldOut}</span>}
           </div>
-          <p>{product.description ?? t.productDetail.noDescription}</p>
 
-          <h3>{t.productDetail.specs}</h3>
-          <ul>
-            {product.variants.map((variant) => (
-              <li key={variant.id}>
-                {Object.entries(variant.optionValues).map(([key, value]) => `${key} ${value}`).join(' / ') || variant.sku}
-                {' — '}
-                {formatPrice(variant.price, variant.currency)}
-                {variant.available > 0
-                  ? fill(t.productDetail.stock, { count: variant.available })
-                  : t.productDetail.outOfStock}
-              </li>
-            ))}
-          </ul>
+          <div className="detail-info">
+            <p className="eyebrow">{t.products.jp}</p>
+            <h1>{product.name}</h1>
+            <p className="detail-price">
+              {formatPrice(product.price, product.currency)}
+              <small>{t.common.from}</small>
+            </p>
+            <p className="detail-desc">{product.description ?? t.productDetail.noDescription}</p>
 
-          <AddToCartForm productName={product.name} variants={product.variants} locale={locale} />
+            <h2 className="detail-sub">{t.productDetail.specs}</h2>
+            <ul className="detail-specs">
+              {product.variants.map((variant) => (
+                <li key={variant.id}>
+                  <span className="detail-spec-name">
+                    {Object.entries(variant.optionValues).map(([key, value]) => `${key} ${value}`).join(' / ') || variant.sku}
+                  </span>
+                  <span className="detail-spec-price">{formatPrice(variant.price, variant.currency)}</span>
+                  <span className="detail-spec-stock">
+                    {variant.available > 0
+                      ? fill(t.productDetail.stock, { count: variant.available })
+                      : t.productDetail.outOfStock}
+                  </span>
+                </li>
+              ))}
+            </ul>
 
-          <div className="cta-row secondary-cta">
-            <a className="btn btn-ghost" href={whatsappLink} target="_blank" rel="noopener noreferrer">
-              {t.products.inquiry}
-            </a>
-            <Link className="btn btn-ghost" href={localePath(locale, '/products')} hrefLang={locale}>
-              {t.common.backToProducts}
-            </Link>
+            <AddToCartForm productName={product.name} variants={product.variants} locale={locale} />
+
+            <div className="cta-row secondary-cta">
+              <a className="btn btn-ghost" href={whatsappLink} target="_blank" rel="noopener noreferrer">
+                {t.products.inquiry}
+              </a>
+              <Link className="btn btn-ghost" href={localePath(locale, '/products')} hrefLang={locale}>
+                {t.common.backToProducts}
+              </Link>
+            </div>
           </div>
         </div>
       </div>

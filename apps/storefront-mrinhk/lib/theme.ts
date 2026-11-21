@@ -9,7 +9,15 @@
 const apiBase = process.env.API_INTERNAL_ORIGIN ?? 'http://127.0.0.1:3001';
 
 export type ThemeSection = {
-  type: 'hero' | 'about' | 'product_grid' | 'rich_text' | 'faq' | 'content_card';
+  type:
+    | 'hero'
+    | 'about'
+    | 'category_grid'
+    | 'promises'
+    | 'product_grid'
+    | 'rich_text'
+    | 'faq'
+    | 'content_card';
   params?: Record<string, string | number | boolean>;
 };
 
