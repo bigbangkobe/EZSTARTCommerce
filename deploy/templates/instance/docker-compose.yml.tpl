@@ -60,6 +60,9 @@ services:
       ADMIN_ORIGIN: https://admin.${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
       IDENTITY_ENCRYPTION_KEY: ${IDENTITY_ENCRYPTION_KEY:?请在 .env 设置 IDENTITY_ENCRYPTION_KEY}
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+      # 后台是否强制二次验证。默认 true：店主/管理员必须绑定 TOTP。
+      # 只有实例明确写 false 才关闭（店主只要「账号 + 密码」时用），改配置即可，不必改代码。
+      ADMIN_REQUIRE_MFA: ${ADMIN_REQUIRE_MFA:-true}
       # 承运商签名回传密钥 JSON；留空时所有承运商回调返回 404（安全默认）
       CARRIER_WEBHOOK_SECRETS: ${CARRIER_WEBHOOK_SECRETS:-}
       # 线上支付：这个地址是"顾客付完从哪里回来"的基址，缺了它整块线上支付不装配

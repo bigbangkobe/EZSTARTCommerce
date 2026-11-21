@@ -5187,7 +5187,7 @@ components:
       properties:
         email:
           type: string
-          format: email
+          minLength: 1
           maxLength: 254
         displayName:
           type: string
@@ -5195,7 +5195,7 @@ components:
           maxLength: 120
         password:
           type: string
-          minLength: 12
+          minLength: 8
           maxLength: 256
           writeOnly: true
         locale:
@@ -5218,7 +5218,7 @@ components:
           writeOnly: true
         newPassword:
           type: string
-          minLength: 12
+          minLength: 8
           maxLength: 256
           writeOnly: true
     AdminMfaSetupChallenge:
@@ -5246,7 +5246,7 @@ components:
       properties:
         currentPassword:
           type: string
-          minLength: 12
+          minLength: 1
           maxLength: 256
           writeOnly: true
         currentMfaCode:
@@ -6929,8 +6929,12 @@ components:
       additionalProperties: false
       required: [email, password]
       properties:
-        email: { type: string, format: email, maxLength: 254 }
-        password: { type: string, minLength: 12, maxLength: 256, writeOnly: true }
+        # 键名沿用 email 以兼容既有调用方，但不再限定邮箱格式：一客户一实例，
+        # 账号名由店主自定（如 admin），不需要真实邮箱。
+        email: { type: string, minLength: 1, maxLength: 254 }
+        # 登录只判断凭据是否匹配，不套用「设置密码」的强度策略。否则策略调整后，
+        # 历史短口令会永远登不进去（校验发生在比对哈希之前）。
+        password: { type: string, minLength: 1, maxLength: 256, writeOnly: true }
     MfaVerifyRequest:
       type: object
       additionalProperties: false
@@ -6950,7 +6954,7 @@ components:
       required: [resetToken, newPassword]
       properties:
         resetToken: { type: string, minLength: 32, maxLength: 512, writeOnly: true }
-        newPassword: { type: string, minLength: 12, maxLength: 256, writeOnly: true }
+        newPassword: { type: string, minLength: 8, maxLength: 256, writeOnly: true }
     AdminUserInviteRequest:
       type: object
       additionalProperties: false

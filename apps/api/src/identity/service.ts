@@ -97,7 +97,12 @@ export class IdentityService {
       return fn(tx, user, await this.now(tx));
     }, { timeout: 10_000 });
   }
+  /** 省略即视为强制：只有实例显式 ADMIN_REQUIRE_MFA=false 才关闭。 */
+  private get mfaEnforced() { return this.config.requireMfa !== false; }
   private needsMfa(user: User) {
+    // 实例显式关闭强制 MFA 时只看账号级标记，角色不再单独加码：
+    // 私有部署的店主可能只要「账号 + 密码」，否则 owner/admin 会被永久挡住。
+    if (!this.mfaEnforced) return false;
     return user.mfaRequired || user.roles.some(link => ['owner', 'admin'].includes(link.role.kind));
   }
   private userSummary(user: User) {
@@ -205,7 +210,8 @@ export class IdentityService {
     return this.withUser(candidate.id, async (tx, user, now) => {
       if (user.passwordHash !== candidate.passwordHash) throw new AuthError(401, 'UNAUTHORIZED');
       await this.audit(tx, ctx, user.id, 'admin.login.password_verified', user.id);
-      if (user.factor || this.needsMfa(user)) {
+      // 关闭强制 MFA 的实例不再走 challenge：密码通过即发会话（mfaVerified=false）。
+      if (this.mfaEnforced && (user.factor || this.needsMfa(user))) {
         return { status: 202 as const, ...await this.newChallenge(tx, user, now, user.factor ? 'verify_mfa' : 'enroll_mfa') };
       }
       return { status: 200 as const, ...await this.newSession(tx, user, now, false) };
@@ -805,7 +811,8 @@ export class IdentityService {
       await this.lock(tx, 'store-config');
       const marketCode = this.rule(() => normalizeMarketCode(marketCodeInput));
       if (this.rule(() => normalizeMarketCode(body.confirmedMarketCode)) !== marketCode) throw new AuthError(422, 'VALIDATION_ERROR');
-      if (!actor.roles.some(link => link.role.kind === 'owner') || !actor.factor || !session.mfaVerified) throw new AuthError(403, 'FORBIDDEN');
+      if (!actor.roles.some(link => link.role.kind === 'owner') ||
+        (this.mfaEnforced && (!actor.factor || !session.mfaVerified))) throw new AuthError(403, 'FORBIDDEN');
       const row = await this.ensureStoreConfig(tx);
       if (row.version !== version) throw new AuthError(409, 'VERSION_CONFLICT');
       const market = await tx.marketProfile.findUnique({ where: { marketCode } });

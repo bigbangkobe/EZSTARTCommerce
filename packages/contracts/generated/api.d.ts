@@ -3103,7 +3103,6 @@ export interface components {
             meta: components["schemas"]["ResponseMeta"];
         };
         BootstrapOwnerRequest: {
-            /** Format: email */
             email: string;
             displayName: string;
             password: string;
@@ -4126,7 +4125,6 @@ export interface components {
             message: string;
         };
         AdminLoginRequest: {
-            /** Format: email */
             email: string;
             password: string;
         };

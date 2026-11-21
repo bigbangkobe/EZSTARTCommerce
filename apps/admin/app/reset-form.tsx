@@ -44,7 +44,7 @@ export function ResetForm() {
     {error && <p role="alert" className="error">{error}</p>}
     {(mode === 'request' || mode === 'complete') && <form onSubmit={submit}>
       {mode === 'request' && <label>员工邮箱<input name="email" type="email" autoComplete="username" required maxLength={254} /></label>}
-      {mode === 'complete' && <label>新密码<input name="password" type="password" autoComplete="new-password" minLength={12} maxLength={256} required /><small>至少 12 个字符，请使用独立密码。</small></label>}
+      {mode === 'complete' && <label>新密码<input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={256} required /><small>至少 8 个字符，请使用独立密码。</small></label>}
       <button disabled={busy || !ready}>{busy ? '正在处理…' : mode === 'request' ? '发送重设链接' : '设置新密码'}</button>
     </form>}
     {mode === 'complete' && <a href="/admin/reset-password">链接无效？重新申请</a>}

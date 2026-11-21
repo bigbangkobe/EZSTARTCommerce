@@ -9,6 +9,13 @@ export interface IdentityConfig {
   storefrontOrigin?: string;
   encryptionKey: Buffer;
   bootstrapToken?: string;
+  /**
+   * 后台是否强制二次验证。默认 true：店主/管理员角色无条件要 MFA。
+   * 仅当实例明确设 `ADMIN_REQUIRE_MFA=false` 时关闭 —— 私有部署的店主可能只要
+   * 「账号 + 密码」，此时按 AdminUser.mfaRequired 字段为准，不再按角色强制。
+   * 省略视为开启：测试与旧调用方不需要改动。
+   */
+  requireMfa?: boolean;
 }
 
 /** 生产只接受 HTTPS；开发允许 localhost 的 HTTP，形式必须与配置值完全一致（不带路径）。 */
@@ -38,7 +45,9 @@ export function identityConfig(env: NodeJS.ProcessEnv): IdentityConfig {
   if (encryptionKey.length !== 32 || encryptionKey.toString('base64') !== key) throw new Error('Identity encryption key must be canonical base64 for 32 bytes');
   const bootstrapToken = env['BOOTSTRAP_TOKEN'];
   if (bootstrapToken && (bootstrapToken.length < 32 || bootstrapToken.length > 512)) throw new Error('Invalid bootstrap token');
-  return { instanceId, allowedOrigin: admin ?? storefront, storefrontOrigin: storefront, encryptionKey,
+  // 默认开启；只有显式写成 false 才关闭，避免拼错变量名把二次验证静默关掉。
+  const requireMfa = env['ADMIN_REQUIRE_MFA'] !== 'false';
+  return { instanceId, allowedOrigin: admin ?? storefront, storefrontOrigin: storefront, encryptionKey, requireMfa,
     ...(bootstrapToken ? { bootstrapToken } : {}) };
 }
 
