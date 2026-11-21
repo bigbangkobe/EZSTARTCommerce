@@ -43,6 +43,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
   ] },
   { title: '顾客与隐私', items: [
     { code: 'customers.read_masked', label: '查看脱敏顾客资料' },
+    { code: 'customers.read_pii', label: '查看完整顾客资料（含联系方式）' },
     { code: 'customers.manage', label: '维护顾客资料' },
     { code: 'members.manage', label: '会员与积分' },
     { code: 'points.adjust', label: '调整积分' },
