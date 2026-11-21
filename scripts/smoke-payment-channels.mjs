@@ -63,6 +63,8 @@ const contact = { email: 'smoke@example.test', phone: null, fullName: 'Smoke' };
 
 let product = null;
 let original = [];
+let rate = null;
+let originalCodEnabled = null;
 try {
   // ---- 准备：拿一个可售商品、一个运费方式，并确保转账渠道处于启用状态 ----
   const variant = await db.productVariant.findFirst({
@@ -73,16 +75,21 @@ try {
   product = variant.product;
   original = [...product.allowedPaymentChannels];
 
-  const rate = await db.shippingRate.findFirst({ where: { enabled: true } });
+  rate = await db.shippingRate.findFirst({ where: { enabled: true } });
   if (!rate) fail('实例里没有启用的运费方式，无法报价');
+  originalCodEnabled = rate.codEnabled;
+  // 配送方式本身不开货到付款时，COD 不展示是正确的。验收要故意打开它才能走通这条链路。
+  if (!rate.codEnabled) {
+    await db.shippingRate.update({ where: { id: rate.id }, data: { codEnabled: true } });
+    console.log('• 已临时为该配送方式开启货到付款（仅本机验收）');
+  }
 
   const market = await db.marketProfile.findFirst({ where: { enabled: true, reviewStatus: 'approved' } });
   const marketCode = market?.marketCode ?? 'HK';
 
-  // 按站点实际支付环境取配置行：staging 是 sandbox，生产是 production。
-  const environment = process.env.PAYMENTS_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'production';
+  // 线下渠道与环境无关（只播种在 production），按 providerCode 取即可。
   const manual = await db.paymentMethodConfig.findFirst({
-    where: { providerCode: 'manual_bank_transfer', environment } });
+    where: { providerCode: 'manual_bank_transfer' } });
   if (!manual) fail('缺少转账渠道配置行');
   let manualRow = manual;
   if (!manualRow.enabled) {
@@ -154,6 +161,9 @@ try {
   // 恢复商品配置与渠道开关，避免验收脚本改变实例状态。
   if (product) await db.product.update({ where: { id: product.id }, data: { allowedPaymentChannels: original } })
     .catch(() => {});
+  if (!originalCodEnabled && rate) {
+    await db.shippingRate.update({ where: { id: rate.id }, data: { codEnabled: false } }).catch(() => {});
+  }
   await db.$disconnect();
 }
 
