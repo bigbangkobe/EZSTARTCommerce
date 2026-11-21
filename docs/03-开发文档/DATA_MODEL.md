@@ -47,6 +47,7 @@
 ### Product / ProductVariant
 
 - Product：id、sku_base、brand_id、status、category_ids、product_type、tax_class_ref、created_at、updated_at。
+- Product.allowed_payment_channels：允许的收款渠道（cod / manual / online 的子集），空数组表示不限。数据库 CHECK 约束限定值域。用于表达「这类商品必须先行付款，不接受货到付款」，见 [支付适配器规格](PAYMENT_ADAPTER_SPEC.md#13-商品级收款渠道约束2026-11-21)。
 - ProductTranslation：product_id、locale、name、slug、description、seo_title、seo_description。
 - Variant：id、product_id、sku、attributes、price_minor、compare_at_minor、currency、stock_tracking、status。
 - 图片保存在对象存储，数据库存媒体 ID、顺序、替代文本及语言信息。
