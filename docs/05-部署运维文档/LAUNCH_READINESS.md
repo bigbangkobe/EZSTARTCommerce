@@ -49,9 +49,9 @@ Linux 容器（生产镜像）复跑单元层 255 条：252 通过，3 条因容
 | 3 | 配送计费口径 | 配送费率、区域、免邮门槛已建模 | 🟡 配置完成待确认 | 客户 |
 | 4 | 税费/发票口径 | 税费规则引擎可用 | ⬜ 未签 | 客户 |
 | 5 | 隐私政策与资料请求责任人 | 隐私模块（导出/删除请求）已有 | ⬜ 未签 | 客户 |
-| 6 | 管理员账号与 MFA | 引导 + TOTP + 恢复码已验证（staging 实测） | 🟡 流程就绪，生产待建号 | 我方 + 客户 |
+| 6 | 管理员账号与 MFA | 引导 + TOTP + 恢复码已验证；直建员工账号（一次性初始密码 + 强制改密）已上线 | 🟡 生产已有 `admin` 账号，**本实例按客户要求关闭强制 MFA**（`ADMIN_REQUIRE_MFA=false`）；员工账号可直建，无需 SMTP | 我方 + 客户 |
 | 7 | 生产域名/HTTPS/索引策略 | Caddy 自动证书；生产已 307 → HTTPS | ✅ 就绪 | 我方 |
-| 8 | 邮件通知 | Worker + SMTP 已实现 | ⬜ SMTP 未配置 | 客户 |
+| 8 | 邮件通知 | Worker + SMTP 已实现 | ⬜ SMTP 未配置（邀请可改走直建账号，但找回密码仍依赖邮件） | 客户 |
 | 9 | 备份恢复演练 | 备份脚本与恢复步骤已有 | ✅ 已演练（318KB/2s/95 表一致，见 AWS_ENVIRONMENTS 6.3.1） | 我方 |
 | 10 | 生产订单与退款演练 | 沙箱链路已演练 | 🟡 沙箱已过，生产待做 | 我方 |
 
@@ -160,6 +160,23 @@ docker compose up -d --no-build
 购物车混单按**整单最严格**取交集：任一件商品不允许 COD，则整单无 COD。
 `requiresPrepayment` 在下单时快照；未收款发货返回 409 `PAYMENT_REQUIRED_BEFORE_DISPATCH`，
 管理员可填理由强制放行并写审计 `order.shipment.dispatch_override`。
+
+### 4.6 生产发布记录（2026-11-21）店主直建员工账号
+
+`76643a0 → e45fc1e`，1 个提交、14 文件、1 条迁移（`202611211200_admin_must_change_password`）。`deploy.sh` 全程 **58 秒**。
+
+| 阶段 | 事实 |
+|---|---|
+| 回滚点 / 备份 | `:prev` 已重打；`ezstart-20261121-083542.sql.gz` |
+| 迁移 | 37 → **38**，`migrate` 退出码 0 |
+| 结构 | `AdminUser.mustChangePassword`（`boolean`，默认 false）与部分索引 `AdminUser_mustChangePassword_idx` 均已建，存量账号为 false（行为不变） |
+| 页面 | `/admin/login` `/admin/password` `/admin/access` 全 200；`admin` 登录 200、`mustChangePassword=false`、54 项权限 |
+| 链路实测 | 用一次性账号跑完：直建（账号名 `smoke-temp`，非邮箱）→ 初始密码登录 200 → 访问 `/admin/users` 403 `PASSWORD_CHANGE_REQUIRED`（会话查询仍 200）→ 改密 200 且标记清除 → 初始密码 401、新密码 200。验收后账号连同会话、角色绑定一并删除 |
+| 审计 | `admin.staff.created` / `admin.password.changed` 留痕；`AuditLog` 有 append-only 触发器，**删不掉**——验收记录按设计永久保留 |
+
+设计口径：`POST /admin/users` 带 `password` 即直建可登录账号（不依赖 SMTP），省略则回落邮件邀请。
+直建账号置 `mustChangePassword`，除「看会话 / 登出 / 改密」外所有后台接口返回 403 `PASSWORD_CHANGE_REQUIRED`；
+改密后清理标记并吊销其他设备会话，初始密码随即作废。账号名与登录一致，不再强制邮箱格式。
 
 ---
 
