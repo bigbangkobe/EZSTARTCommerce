@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { dateTime, fulfillmentStatus, money, orderStatus, paymentStatus } from './labels';
 
 type Session = { permissionCodes: string[]; csrfToken: string };
 type OrderSummary = { id: string; publicOrderNumber: string; orderStatus: string; paymentStatus: string;
@@ -22,12 +23,8 @@ type Order = { id: string; publicOrderNumber: string; orderStatus: string; payme
   shipments: Shipment[]; statusHistory: { id: string; fromStatus: string | null; toStatus: string; reason: string | null;
     actorType: string; createdAt: string }[]; notes: { id: string; note: string; authorId: string | null; createdAt: string }[] };
 
-function money(minor: number, currency: string) {
-  return `${currency} ${(minor / 100).toFixed(2)}`;
-}
-function shortDate(value: string) {
-  return new Date(value).toLocaleString();
-}
+// 状态、金额、时间统一走 labels：同一单在不同页面不能出现两种写法。
+const shortDate = dateTime;
 /** 金额按“元”录入、按分提交：超过两位小数直接判为非法，不四舍五入。 */
 function toMinor(value: string): number | null {
   const text = value.trim();
@@ -40,6 +37,10 @@ function toMinor(value: string): number | null {
 const OPEN_PAYMENT_STATUSES = new Set(['cod_due', 'created', 'processing', 'requires_action', 'unknown']);
 
 const SHIPMENT_LABEL: Record<string, string> = { created: '待发货', dispatched: '已发货', delivered: '已签收', cancelled: '已取消' };
+/** 收款方式在库里是机器码，柜台上只该看到“顾客怎么付的”。 */
+const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  cod: '货到付款', manual: '线下转账', manual_bank_transfer: '线下转账', stripe: '线上支付', card: '线上支付',
+};
 /** 视为已到账的台账状态：COD 已收与线上成功。其余状态都不足以放货。 */
 const SETTLED_PAYMENT = new Set(['collected', 'succeeded']);
 const CARRIER_STATUS_LABEL: Record<string, string> = { in_transit: '运输中', out_for_delivery: '派送中',
@@ -221,30 +222,58 @@ export function OrdersConsole() {
     {error && <p className="error">{error}</p>}{notice && <p className="notice">{notice}</p>}
     {!canRead && <p className="error">当前账号没有订单读取权限（orders.read）。</p>}
 
-    {canRead && <section>
+    {canRead && <div className="order-split">
+      <section aria-label="订单列表">
       <h2>订单列表</h2>
       <form onSubmit={event => { event.preventDefault(); void run(async () => '已按关键字筛选。'); }}>
         <label>搜索<small>订单号或顾客备注</small><input value={query} maxLength={200}
           onChange={event => setQuery(event.target.value)} placeholder="EZ-" /></label>
-        <button disabled={busy || !canRead}>搜索</button>
+        <button className="secondary" disabled={busy || !canRead}>搜索</button>
       </form>
-      {orders.length === 0 ? <p>暂无订单。</p> : <ul>{orders.map(order => <li key={order.id}>
-        <button className="secondary" disabled={busy} onClick={() => void openOrder(order.id)}>{order.publicOrderNumber}</button>
-        {' '}{order.orderStatus} · {order.paymentStatus} · {money(order.totalMinor, order.currency)}
-        {order.contactMasked ? ` · ${order.contactMasked}` : ''} · {shortDate(order.createdAt)}
-      </li>)}</ul>}
-    </section>}
+      {orders.length === 0
+        ? <div className="empty"><strong>没有匹配的订单</strong><span>换个订单号，或清空搜索再试。</span></div>
+        : <ul className="order-list">{orders.map(order => {
+          const o = orderStatus(order.orderStatus); const p = paymentStatus(order.paymentStatus);
+          return <li key={order.id}>
+            <button type="button" className="order-row" disabled={busy}
+              aria-current={selected?.id === order.id ? 'true' : undefined}
+              onClick={() => void openOrder(order.id)}>
+              <span className="order-row-top">
+                <span className="order-no">{order.publicOrderNumber}</span>
+                <span className="order-amount">{money(order.totalMinor, order.currency)}</span>
+              </span>
+              <span className="order-meta">
+                <span className="badge-status" data-tone={o.tone || undefined}>{o.label}</span>
+                <span className="badge-status" data-tone={p.tone || undefined}>{p.label}</span>
+                <span>{dateTime(order.createdAt)}</span>
+              </span>
+            </button>
+          </li>;
+        })}</ul>}
+      </section>
 
-    {selected && <section>
-      <h2>{selected.publicOrderNumber}</h2>
-      <p><a href={`/admin/aftersales?orderId=${selected.id}`}>为该订单建立售后案件</a></p>
-      <p>{selected.orderStatus} · 付款 {selected.paymentStatus} · 履约 {selected.fulfillmentStatus}
-        · 版本 {selected.version} · 下单 {shortDate(selected.placedAt)}</p>
+    {selected && <section aria-label="订单详情">
+      <div className="detail-head">
+        <div>
+          <h2>{selected.publicOrderNumber}</h2>
+          <p className="lede">下单 {dateTime(selected.placedAt)} · 版本 {selected.version}</p>
+        </div>
+        <a className="btn-ghost" href={`/admin/aftersales?orderId=${selected.id}`}>建立售后案件</a>
+      </div>
+      <div className="detail-meta">
+        <span className="badge-status" data-tone={orderStatus(selected.orderStatus).tone || undefined}>
+          {orderStatus(selected.orderStatus).label}</span>
+        <span className="badge-status" data-tone={paymentStatus(selected.paymentStatus).tone || undefined}>
+          付款 · {paymentStatus(selected.paymentStatus).label}</span>
+        <span className="badge-status" data-tone={fulfillmentStatus(selected.fulfillmentStatus).tone || undefined}>
+          履约 · {fulfillmentStatus(selected.fulfillmentStatus).label}</span>
+      </div>
       <article>
         <h3>金额</h3>
         <p>小计 {money(selected.subtotalMinor, selected.currency)} · 折扣 {money(selected.discountMinor, selected.currency)}
           · 运费 {money(selected.shippingMinor, selected.currency)} · 税 {money(selected.taxMinor, selected.currency)}</p>
-        <p>总额 {money(selected.totalMinor, selected.currency)} · 付款方式 {selected.paymentMethodCode}</p>
+        <p>总额 <strong>{money(selected.totalMinor, selected.currency)}</strong>
+          {' · '}付款方式 {PAYMENT_METHOD_LABEL[selected.paymentMethodCode] ?? selected.paymentMethodCode}</p>
         {selected.cancellation && <p>已取消：{selected.cancellation.reason ?? '未填写原因'}
           （{shortDate(selected.cancellation.cancelledAt)}）</p>}
       </article>
@@ -362,9 +391,12 @@ export function OrdersConsole() {
       <article>
         <h3>状态历史</h3>
         <ul>{selected.statusHistory.map(event => <li key={event.id}>
-          {shortDate(event.createdAt)} · {event.fromStatus ?? '—'} → {event.toStatus}
-          {event.reason ? `（${event.reason}）` : ''} · {event.actorType}</li>)}</ul>
+          {shortDate(event.createdAt)} · {event.fromStatus ? orderStatus(event.fromStatus).label : '新建'}
+          → {orderStatus(event.toStatus).label}
+          {event.reason ? `（${event.reason}）` : ''}
+          {' · '}{event.actorType === 'customer' ? '顾客' : event.actorType === 'system' ? '系统' : '员工'}</li>)}</ul>
       </article>
     </section>}
+    </div>}
   </main>;
 }
