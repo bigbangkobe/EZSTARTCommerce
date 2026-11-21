@@ -3711,6 +3711,8 @@ export interface components {
             brandId?: string | null;
             categoryIds?: string[];
             marketCodes?: string[];
+            /** @description Channels the product may be paid with; empty means unrestricted. */
+            allowedPaymentChannels?: ("cod" | "manual" | "online")[];
             /** @enum {string} */
             status: "draft" | "active" | "archived";
             translations: components["schemas"]["ProductTranslationInput"][];
@@ -3997,6 +3999,14 @@ export interface components {
                 tax: string | null;
             };
             warnings: string[];
+            /** @description Payment methods selectable for this cart, already narrowed by each line's allowed-payment channels. Empty means the cart cannot be checked out as-is. */
+            paymentMethods?: {
+                code: string;
+                /** @enum {string} */
+                channel: "cod" | "manual" | "online";
+                label: string;
+                instructions?: string | null;
+            }[];
         };
         QuoteLine: {
             productName?: string;
@@ -4064,6 +4074,9 @@ export interface components {
             locale?: string;
             marketCode?: string;
             paymentMethodCode?: string;
+            /** @description Frozen at checkout: no line in this order allows cash on delivery, so the order cannot be dispatched before a settled payment exists unless an override reason is supplied. */
+            requiresPrepayment?: boolean;
+            dispatchOverrideReason?: string | null;
             customerNote?: string | null;
             /** Format: date-time */
             placedAt?: string;
@@ -4184,6 +4197,8 @@ export interface components {
             brandId?: string | null;
             categoryIds?: string[];
             marketCodes?: string[];
+            /** @description Channels this product may be paid with. Omit or send an empty array for "unrestricted". Once set, a cart containing this product can only use the intersection of every line's allowed channels. */
+            allowedPaymentChannels?: ("cod" | "manual" | "online")[];
             translations?: components["schemas"]["ProductTranslationInput"][];
             variants?: components["schemas"]["ProductVariantInput"][];
             media?: components["schemas"]["ProductMediaInput"][];
@@ -4656,6 +4671,8 @@ export interface components {
             dispatchedAt: string;
             trackingNumber?: string | null;
             evidenceRef?: string | null;
+            /** @description Required only when the order requires prepayment and no settled payment exists. Providing it dispatches anyway and is recorded in the audit log; omitting it yields 409 PAYMENT_REQUIRED_BEFORE_DISPATCH. */
+            overrideReason?: string | null;
         };
         ShipmentDeliverRequest: {
             /** Format: date-time */

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import {
   api, createQuote, formatMinor, listShippingMethods, notifyCartUpdated, placeOrder,
-  type ApiOutcome, type CartView, type OrderCreatedView, type ShippingMethodView,
+  type ApiOutcome, type CartView, type OrderCreatedView, type QuoteView, type ShippingMethodView,
 } from '../../../lib/cart-client';
 import { fetchProfile, type MemberProfileView } from '../../../lib/member-client';
 import { trackBeginCheckout } from '../../../lib/analytics-client';
@@ -25,6 +25,12 @@ export default function CheckoutView({ locale }: { locale: Locale }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [order, setOrder] = useState<OrderCreatedView | null>(null);
+  // 已报价但尚未下单：此时才拿得到本单可用的收款方式（服务端已按商品约束收窄）。
+  const [preview, setPreview] = useState<{ quoteId: string; version: number;
+    options: QuoteView['paymentMethods'] } | null>(null);
+  const [payMethod, setPayMethod] = useState<string>('');
+  /** 下单成功的付款方式名称，确认面板直接用它，避免硬编码成货到付款。 */
+  const [placedMethodLabel, setPlacedMethodLabel] = useState<string>('');
   const [member, setMember] = useState<MemberProfileView | null>(null);
   const [pointsToUse, setPointsToUse] = useState('');
   const [form, setForm] = useState({
@@ -63,6 +69,8 @@ export default function CheckoutView({ locale }: { locale: Locale }) {
   }, [cart, locale]);
 
   const method = methods?.find((item) => item.id === methodId) ?? null;
+  // 地址、配送方式或积分一变，先前的报价就作废：清掉支付方式选择器，避免拿旧报价下单。
+  useEffect(() => { setPreview(null); }, [form, methodId, pointsToUse]);
   // 输入框只是「想用多少」；实际抵扣以服务端报价为准，页面不自己算钱。
   const points = Math.max(0, Math.min(Number.parseInt(pointsToUse, 10) || 0, member?.loyalty.balance ?? 0));
 
@@ -101,13 +109,32 @@ export default function CheckoutView({ locale }: { locale: Locale }) {
       await loadCart();
       return;
     }
-    const placed = await placeOrder(quote.data.quoteId, quote.data.version, 'cod');
+    const options = quote.data.paymentMethods ?? [];
+    if (options.length === 0) {
+      // 购物袋里的商品没有任何共同可用的收款方式：只能明确告知，不能替顾客挑一个。
+      setBusy(false);
+      setError(t.checkout.noPaymentMethods);
+      return;
+    }
+    // 只有一种方式时不多问一次，保持原有的两步结账。
+    if (options.length === 1) { await place(quote.data.quoteId, quote.data.version, options[0].code, options[0].label); return; }
+    // 多种方式：先把选项摆出来，顾客选完再确认。
+    setPreview({ quoteId: quote.data.quoteId, version: quote.data.version, options });
+    setPayMethod(options[0].code);
     setBusy(false);
+  }
+
+  /** 落单：成功进入确认面板，失败保留页面状态让顾客修正。 */
+  async function place(quoteId: string, version: number, code: string, label: string) {
+    const placed = await placeOrder(quoteId, version, code);
+    setBusy(false);
+    setPreview(null);
     if (!placed.ok) {
       setError(describe(placed, t));
       await loadCart();
       return;
     }
+    setPlacedMethodLabel(label);
     setOrder(placed.data);
     notifyCartUpdated();
   }
@@ -127,7 +154,7 @@ export default function CheckoutView({ locale }: { locale: Locale }) {
           <ul className="order-facts">
             <li>{t.checkout.orderStatus}<strong>{order.orderStatus === 'awaiting_confirmation'
               ? t.checkout.awaitingConfirmation : order.orderStatus}</strong></li>
-            <li>{t.checkout.paymentMethod}<strong>{t.checkout.cod}</strong></li>
+            <li>{t.checkout.paymentMethod}<strong>{placedMethodLabel || t.checkout.cod}</strong></li>
             <li>{t.checkout.amountDue}<strong>{formatMinor(order.totalMinor, order.currency)}</strong></li>
             {order.pointsRedeemed > 0 && <li>{t.checkout.pointsUsed}<strong>{fill(t.checkout.pointsUsedDetail, {
               points: order.pointsRedeemed, value: formatMinor(order.pointsValueMinor, order.currency),
@@ -162,7 +189,9 @@ export default function CheckoutView({ locale }: { locale: Locale }) {
   const canSubmit = Boolean(
     cart && cart.items.length > 0 && method && !busy
     && form.fullName.trim() && form.phone.trim() && form.addressLine1.trim() && agree
-    && cart.items.every((item) => item.available),
+    && cart.items.every((item) => item.available)
+    // 已经摆出支付方式选项时，必须先选一个才允许落单。
+    && (!preview || payMethod),
   );
 
   return (
@@ -215,15 +244,18 @@ export default function CheckoutView({ locale }: { locale: Locale }) {
             ))}
           </div>
 
-          <h3>{t.checkout.paymentSection}</h3>
+          <h3>{preview ? t.checkout.choosePayment : t.checkout.paymentSection}</h3>
           <div className="method-list">
-            {method?.codEnabled ? (
-              <label className="method-option selected">
-                <input type="radio" checked readOnly />
-                <span className="method-name">{t.checkout.cod}<small>{t.checkout.codHint}</small></span>
+            {preview ? preview.options.map((option) => (
+              <label key={option.code} className={`method-option${option.code === payMethod ? ' selected' : ''}`}>
+                <input type="radio" name="payment-method" checked={option.code === payMethod}
+                  onChange={() => setPayMethod(option.code)} />
+                <span className="method-name">{option.label}
+                  {option.instructions && <small>{option.instructions}</small>}</span>
               </label>
-            ) : (
-              <p className="form-note">{t.checkout.codUnavailable}</p>
+            )) : (
+              // 报价前不知道本单有哪些收款方式（受商品约束），先说明规则，不预设 COD。
+              <p className="form-note">{t.checkout.paymentAfterQuote}</p>
             )}
           </div>
 
@@ -264,8 +296,12 @@ export default function CheckoutView({ locale }: { locale: Locale }) {
               </label>}
               <MemberNudge locale={locale} />
               <p className="form-note">{t.checkout.amountNote}</p>
-              <button className="btn btn-primary checkout-btn" type="button" disabled={!canSubmit} onClick={() => void submit()}>
-                {busy ? t.checkout.submitting : t.checkout.submit}
+              <button className="btn btn-primary checkout-btn" type="button" disabled={!canSubmit}
+                onClick={() => void (preview
+                  ? place(preview.quoteId, preview.version, payMethod,
+                    preview.options.find((option) => option.code === payMethod)?.label ?? '')
+                  : submit())}>
+                {busy ? t.checkout.submitting : preview ? t.checkout.confirmPayment : t.checkout.submit}
               </button>
             </>
           )}

@@ -245,14 +245,18 @@ export class PaymentsService {
 
   /**
    * 结账时的可售方式判定：只认 production 环境、已启用、已批准的配置；
-   * COD 还要求所选配送方式本身开启了货到付款。缺一即明确拒绝，不静默降级。
+   * COD 还要求所选配送方式本身开启了货到付款；并且该渠道必须落在
+   * 购物车商品允许的集合内（商品级约束，见 availableChannelsFor）。缺一即明确拒绝。
    */
-  async resolveCheckout(tx: Tx, methodCode: string, codEnabledByRate: boolean) {
+  async resolveCheckout(tx: Tx, methodCode: string, codEnabledByRate: boolean,
+    allowed: ReadonlySet<PaymentChannel> = new Set<PaymentChannel>(['cod', 'manual', 'online'])) {
     await this.ensureDefaults(tx);
     // 未知或未接入的方式一律按“该方式不可用”处理：结账页不该看到没有适配器的渠道。
     const definition = (() => {
       try { return provider(methodCode); } catch { throw new AuthError(422, 'PAYMENT_METHOD_UNAVAILABLE'); }
     })();
+    // 购物车里有一件「必须先行转账」的商品，整单就不能货到付款。
+    if (!allowed.has(definition.channel)) throw new AuthError(422, 'PAYMENT_METHOD_NOT_ALLOWED_FOR_CART');
     const row = await this.methodRow(tx, definition.code, this.environment());
     if (!row || !row.enabled || !row.approvalReference) throw new AuthError(422, 'PAYMENT_METHOD_UNAVAILABLE');
     if (definition.channel === 'cod' && !codEnabledByRate) throw new AuthError(422, 'PAYMENT_METHOD_UNAVAILABLE');
@@ -262,6 +266,34 @@ export class PaymentsService {
       connectionStatus: row.connectionStatus, environment: row.environment,
       requestEnvironment: this.environment() })) throw new AuthError(422, 'PAYMENT_METHOD_UNAVAILABLE');
     return { definition, row };
+  }
+
+  /**
+   * 结账页可展示的收款方式：站点已启用 + 已批准 + 落在商品允许的集合内。
+   *
+   * 与 resolveCheckout 共用同一套门禁，避免「页面能选、下单被拒」这种割裂。
+   * 只回展示所需字段：凭证引用与指纹一概不出现在面向顾客的响应里。
+   */
+  async availableMethods(tx: Tx, allowed: ReadonlySet<PaymentChannel>, codEnabledByRate: boolean) {
+    if (!allowed.size) return [];
+    await this.ensureDefaults(tx);
+    const environment = this.environment();
+    const rows = await tx.paymentMethodConfig.findMany({ where: { environment, enabled: true },
+      orderBy: { providerCode: 'asc' } });
+    const output: Array<{ code: string; channel: PaymentChannel; label: string; instructions: string | null }> = [];
+    for (const row of rows) {
+      const definition = providers.find(entry => entry.code === row.providerCode);
+      if (!definition || !allowed.has(definition.channel) || !row.approvalReference) continue;
+      if (definition.channel === 'cod' && !codEnabledByRate) continue;
+      if (definition.channel === 'online' && !checkoutVisible({ enabled: row.enabled,
+        connectionStatus: row.connectionStatus, environment: row.environment,
+        requestEnvironment: environment })) continue;
+      const config = row.publicConfig as Record<string, string>;
+      output.push({ code: definition.code, channel: definition.channel, label: row.displayName,
+        // 顾客看到的付款指引：COD 由确认页按语言生成，转账渠道就是这一段原文。
+        instructions: definition.channel === 'cod' ? null : config.accountSummary ?? null });
+    }
+    return output;
   }
 
   /** 下单即开一条待收流水：台账从“应收”开始，收款登记只推进状态，不补造记录。 */

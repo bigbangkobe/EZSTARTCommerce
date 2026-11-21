@@ -56,6 +56,56 @@ export function provider(code: string): ProviderDefinition {
   return found;
 }
 
+// ---------------------------------------------------------------------------
+// 商品级收款渠道约束
+// ---------------------------------------------------------------------------
+
+/** 商品可配置的收款渠道全集；顺序即后台展示顺序。 */
+export const PRODUCT_PAYMENT_CHANNELS: readonly PaymentChannel[] = ['cod', 'manual', 'online'];
+
+/**
+ * 归一化商品的「允许收款渠道」。
+ *
+ * 空数组 = 不限，交给店铺默认（存量商品与未关心此事的商品都不受影响）。
+ * 只在商品上表达「不许什么」，不在商品上表达「怎么收款」——具体怎么收仍由
+ * 站点级支付方式配置决定，商品不能绕过审批开关私自开出一条收款通道。
+ */
+export function normalizeAllowedChannels(input: unknown): PaymentChannel[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) fail('VALIDATION_ERROR');
+  if (input.length > PRODUCT_PAYMENT_CHANNELS.length) fail('VALIDATION_ERROR');
+  const output: PaymentChannel[] = [];
+  for (const entry of input) {
+    if (typeof entry !== 'string' || !(PRODUCT_PAYMENT_CHANNELS as readonly string[]).includes(entry)) {
+      fail('UNSUPPORTED_PAYMENT_PROVIDER');
+    }
+    if (!output.includes(entry as PaymentChannel)) output.push(entry as PaymentChannel);
+  }
+  return output;
+}
+
+/**
+ * 一单可用渠道 = 各商品允许集合的交集（空集合视为全集）。
+ *
+ * 这就是「整单按最严格」：只要有一件商品要求先付款，整单就不能货到付款，
+ * 顾客仍可一次下单，只是可选方式被收窄——比逼顾客拆单更符合直觉。
+ * 交集为空（一件只许 COD、另一件只许转账）时返回空集合，由调用方明确拒绝，
+ * 不静默降级成某一种方式。
+ */
+export function availableChannelsFor(products: readonly (readonly string[])[]): Set<PaymentChannel> {
+  let allowed = new Set<PaymentChannel>(PRODUCT_PAYMENT_CHANNELS);
+  for (const channels of products) {
+    if (!channels.length) continue;
+    allowed = new Set([...allowed].filter(channel => channels.includes(channel)));
+  }
+  return allowed;
+}
+
+/** 整单必须先收款才能发货：可用渠道里没有货到付款。 */
+export function requiresPrepayment(available: ReadonlySet<PaymentChannel>): boolean {
+  return !available.has('cod');
+}
+
 /** 每个渠道可以登记的结果：COD 没有“授权成功/渠道失败”，线上支付没有“拒收”。 */
 const CHANNEL_OUTCOMES: Record<PaymentChannel, readonly PaymentOutcome[]> = {
   cod: ['collected', 'rejected', 'returned'],

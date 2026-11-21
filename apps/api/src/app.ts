@@ -104,6 +104,10 @@ class ApiExceptionFilter implements ExceptionFilter {
     const code = exception instanceof AuthError ? exception.code : defaultCode;
     // 5xx 必须留下服务端证据：客户端只看到 INTERNAL_ERROR，没有堆栈就无法定位。
     if (status >= 500) console.error(`[${request.requestId}] ${request.method} ${request.url}`, exception);
+    // 契约失败默认只回笼统文案（不向客户端泄露校验细节），排查时把 DEBUG_CONTRACT=1 打开即可看到具体字段。
+    if (process.env.DEBUG_CONTRACT === '1' && exception instanceof ContractValidationError) {
+      console.error(`[${request.requestId}] CONTRACT_FAIL ${request.method} ${request.url}`, exception.message);
+    }
     if (status === 429) response.setHeader('Retry-After', '900');
     response.statusCode = status;
     response.setHeader('Content-Type', 'application/json; charset=utf-8');

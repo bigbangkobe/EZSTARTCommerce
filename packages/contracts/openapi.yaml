@@ -6485,6 +6485,12 @@ components:
         brandId: { type: [string, 'null'], format: uuid }
         categoryIds: { type: array, items: { type: string, format: uuid } }
         marketCodes: { type: array, items: { type: string } }
+        allowedPaymentChannels:
+          type: array
+          uniqueItems: true
+          maxItems: 3
+          items: { type: string, enum: [cod, manual, online] }
+          description: Channels the product may be paid with; empty means unrestricted.
         status: { type: string, enum: [draft, active, archived] }
         translations: { type: array, items: { $ref: '#/components/schemas/ProductTranslationInput' } }
         variants: { type: array, items: { $ref: '#/components/schemas/ProductVariantResponse' } }
@@ -6790,6 +6796,20 @@ components:
         couponSummary: { type: [object, 'null'], additionalProperties: false, properties: { codeMasked: { type: string }, discountMinor: { type: integer, minimum: 0 } } }
         ruleVersions: { type: object, additionalProperties: false, required: [price, promotion, shipping, tax], properties: { price: { type: string }, promotion: { type: string }, shipping: { type: string }, tax: { type: [string, 'null'] } } }
         warnings: { type: array, items: { type: string, maxLength: 500 } }
+        paymentMethods:
+          type: array
+          description: >-
+            Payment methods selectable for this cart, already narrowed by each line's
+            allowed-payment channels. Empty means the cart cannot be checked out as-is.
+          items:
+            type: object
+            additionalProperties: false
+            required: [code, channel, label]
+            properties:
+              code: { type: string, maxLength: 40 }
+              channel: { type: string, enum: [cod, manual, online] }
+              label: { type: string, maxLength: 80 }
+              instructions: { type: [string, 'null'], maxLength: 2000 }
     QuoteLine:
       type: object
       additionalProperties: false
@@ -6859,6 +6879,13 @@ components:
         locale: { type: string, maxLength: 16 }
         marketCode: { type: string, maxLength: 8 }
         paymentMethodCode: { type: string, maxLength: 40 }
+        requiresPrepayment:
+          type: boolean
+          description: >-
+            Frozen at checkout: no line in this order allows cash on delivery, so the
+            order cannot be dispatched before a settled payment exists unless an
+            override reason is supplied.
+        dispatchOverrideReason: { type: [string, 'null'], maxLength: 500 }
         customerNote: { type: [string, 'null'], maxLength: 1000 }
         placedAt: { type: string, format: date-time }
         lines: { type: array, items: { type: object, additionalProperties: true } }
@@ -6986,6 +7013,15 @@ components:
         brandId: { type: [string, 'null'], format: uuid }
         categoryIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
         marketCodes: { type: array, minItems: 1, uniqueItems: true, items: { type: string, maxLength: 16 } }
+        allowedPaymentChannels:
+          type: array
+          uniqueItems: true
+          maxItems: 3
+          items: { type: string, enum: [cod, manual, online] }
+          description: >-
+            Channels this product may be paid with. Omit or send an empty array for
+            "unrestricted". Once set, a cart containing this product can only use the
+            intersection of every line's allowed channels.
         translations: { type: array, minItems: 1, items: { $ref: '#/components/schemas/ProductTranslationInput' } }
         variants: { type: array, minItems: 1, items: { $ref: '#/components/schemas/ProductVariantInput' } }
         media: { type: array, items: { $ref: '#/components/schemas/ProductMediaInput' } }
@@ -7585,6 +7621,13 @@ components:
         dispatchedAt: { type: string, format: date-time }
         trackingNumber: { type: [string, 'null'], maxLength: 160 }
         evidenceRef: { type: [string, 'null'], maxLength: 200 }
+        overrideReason:
+          type: [string, 'null']
+          maxLength: 500
+          description: >-
+            Required only when the order requires prepayment and no settled payment exists.
+            Providing it dispatches anyway and is recorded in the audit log; omitting it
+            yields 409 PAYMENT_REQUIRED_BEFORE_DISPATCH.
     ShipmentDeliverRequest:
       type: object
       additionalProperties: false

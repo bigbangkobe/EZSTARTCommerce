@@ -28,7 +28,9 @@ type CarrierEventRow = Prisma.CarrierStatusEventGetPayload<{}>;
 export interface AddressChangeBody { expectedVersion: number; address: Address; customerConfirmationRef?: string | null }
 export interface ShipmentBody { items: ShipmentLineRequest[]; carrierCode?: string | null; carrierName?: string | null;
   trackingNumber?: string | null; note?: string | null }
-export interface DispatchBody { dispatchedAt: string; trackingNumber?: string | null; evidenceRef?: string | null }
+export interface DispatchBody { dispatchedAt: string; trackingNumber?: string | null; evidenceRef?: string | null;
+  /** 预付订单未到款时的强制发货事由。填了才放行，且写入审计。 */
+  overrideReason?: string | null }
 export interface DeliverBody { deliveredAt: string; evidenceRef?: string | null; note?: string | null }
 
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
@@ -37,6 +39,12 @@ const CONFLICT_CODES = new Set(['VERSION_CONFLICT', 'ORDER_ALREADY_SHIPPED', 'OR
   'PAID_ORDER_REQUIRES_REFUND', 'SHIPMENT_QUANTITY_EXCEEDED', 'SHIPMENT_ALREADY_DISPATCHED',
   'SHIPMENT_ALREADY_DELIVERED', 'SHIPMENT_NOT_DISPATCHED', 'SHIPMENT_CANCELLED', 'STATE_CONFLICT',
   'IDEMPOTENCY_CONFLICT', 'RESERVATION_EXPIRED']);
+
+/**
+ * 视为「钱已到账」的台账状态：COD 交货收款（collected）与线上支付成功（succeeded）。
+ * pending/created/unknown 之类都不算——未定论的状态不能当成已收款放货。
+ */
+const SETTLED_PAYMENT_STATUSES = new Set(['collected', 'succeeded']);
 
 /**
  * 订单管理与履约（M07）。
@@ -125,6 +133,9 @@ export class OrdersService {
       subtotalMinor: row.subtotalMinor, discountMinor: row.discountMinor, shippingMinor: row.shippingMinor,
       taxMinor: row.taxMinor, totalMinor: row.totalMinor, version: row.version, locale: row.locale,
       marketCode: row.marketCode, paymentMethodCode: row.paymentMethodCode, customerNote: row.customerNote ?? null,
+      // 后台据 requiresPrepayment 决定发货前是否必须等到款；override 事由供审计追溯。
+      requiresPrepayment: row.requiresPrepayment,
+      dispatchOverrideReason: row.dispatchOverrideReason ?? null,
       placedAt: row.placedAt.toISOString(),
       lines: [...row.items].map(item => ({ id: item.id, variantId: item.variantId, sku: item.sku,
         productName: item.productName, variantName: item.variantName ?? null, quantity: item.quantity,
@@ -324,8 +335,9 @@ export class OrdersService {
     const dispatchedAt = this.timestamp(body.dispatchedAt);
     const trackingNumber = this.optionalText(body.trackingNumber, 160);
     const evidenceRef = this.optionalText(body.evidenceRef, 200);
+    const overrideReason = this.optionalText(body.overrideReason, 500);
     const digest = this.digest('shipment_dispatch', id, { expectedVersion, dispatchedAt: dispatchedAt.toISOString(),
-      trackingNumber, evidenceRef });
+      trackingNumber, evidenceRef, overrideReason });
     return this.identity.withPermission(supplied, csrfValue, 'shipments.manage', async (tx, actor, _session, now) => {
       const shipment = await tx.shipment.findUnique({ where: { id }, include: { items: true } });
       if (!shipment) throw new AuthError(404, 'NOT_FOUND');
@@ -340,6 +352,15 @@ export class OrdersService {
       this.rule(() => assertShipmentDispatch(shipment.status));
       const row = await this.detail(tx, shipment.orderId);
       if (row.orderStatus === 'cancelled') throw new AuthError(409, 'ORDER_ALREADY_CANCELLED');
+      // 预付订单（整单没有货到付款余地）：钱没到就不许发货。
+      // 银行到账延迟是真实存在的，所以留一条「写明事由强制放行」的通道，但必然留痕。
+      if (row.requiresPrepayment && !SETTLED_PAYMENT_STATUSES.has(row.paymentStatus)) {
+        if (!overrideReason) throw new AuthError(409, 'PAYMENT_REQUIRED_BEFORE_DISPATCH');
+        await tx.shopOrder.update({ where: { id: row.id }, data: { dispatchOverrideReason: overrideReason,
+          dispatchOverrideAt: now } });
+        await this.identity.recordAudit(tx, ctx, actor.id, 'order.shipment.dispatch_override', id, 'success',
+          overrideReason);
+      }
 
       for (const item of shipment.items) {
         const line = row.items.find(entry => entry.id === item.orderItemId);

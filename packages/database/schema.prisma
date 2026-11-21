@@ -362,6 +362,9 @@ model Product {
   brand Brand? @relation(fields: [brandId], references: [id], onDelete: Restrict)
   taxClassRef String?
   marketCodes String[]
+  /// 允许的收款渠道：cod / manual / online 的子集。空数组表示不限，按店铺默认。
+  /// 烟草场景用它区分「可货到付款」与「必须先行转账」的商品。
+  allowedPaymentChannels String[] @default([])
   /// 未来时间表示定时发布；status 仍为 draft，直到发布时刻生效。
   publishedAt DateTime? @db.Timestamptz(3)
   version Int @default(1)
@@ -618,6 +621,12 @@ model ShopOrder {
   couponSnapshot Json?
   customerNote String?
   paymentMethodCode String
+  /// 下单时按商品约束算出的快照：整单不可货到付款，必须先收到钱才发货。
+  /// 存快照而不是发货时回查商品，避免商品事后改配置追溯影响历史订单。
+  requiresPrepayment Boolean @default(false)
+  /// 未收款强行发货时填写的事由，留痕用；为空表示按正常流程放行。
+  dispatchOverrideReason String?
+  dispatchOverrideAt DateTime? @db.Timestamptz(3)
   policyAcceptances Json
   cancelledAt DateTime? @db.Timestamptz(3)
   cancelReasonCode String?

@@ -15,6 +15,7 @@ type Shipment = { id: string; status: string; carrierCode: string | null; carrie
 type Order = { id: string; publicOrderNumber: string; orderStatus: string; paymentStatus: string;
   fulfillmentStatus: string; currency: string; subtotalMinor: number; discountMinor: number; shippingMinor: number;
   taxMinor: number; totalMinor: number; version: number; paymentMethodCode: string; customerNote: string | null;
+  requiresPrepayment: boolean; dispatchOverrideReason: string | null;
   placedAt: string; lines: Line[]; addressSnapshot: Record<string, string | null> | null;
   contact: { email: string | null; phone: string | null; fullName: string | null };
   cancellation: { cancelledAt: string; reasonCode: string | null; reason: string | null; customerNotified: boolean } | null;
@@ -39,6 +40,8 @@ function toMinor(value: string): number | null {
 const OPEN_PAYMENT_STATUSES = new Set(['cod_due', 'created', 'processing', 'requires_action', 'unknown']);
 
 const SHIPMENT_LABEL: Record<string, string> = { created: '待发货', dispatched: '已发货', delivered: '已签收', cancelled: '已取消' };
+/** 视为已到账的台账状态：COD 已收与线上成功。其余状态都不足以放货。 */
+const SETTLED_PAYMENT = new Set(['collected', 'succeeded']);
 const CARRIER_STATUS_LABEL: Record<string, string> = { in_transit: '运输中', out_for_delivery: '派送中',
   delivered: '承运商已签收', exception: '运输异常', returned: '退回' };
 
@@ -153,9 +156,16 @@ export function OrdersConsole() {
   }
 
   function dispatch(shipment: Shipment) {
+    // 预付订单在钱到账前发货需要写事由；不写就不放行，服务端同样会拒绝。
+    const blocked = Boolean(selected?.requiresPrepayment && !SETTLED_PAYMENT.has(selected.paymentStatus));
+    const overrideReason = blocked
+      ? prompt('本单必须先收款，当前尚未到账。填写强制发货事由（将写入审计记录）：')
+      : null;
+    if (blocked && !overrideReason) return;
     void run(async () => {
-      await request(`shipments/${shipment.id}/dispatch`, 'POST', { dispatchedAt: new Date().toISOString() }, shipment.version);
-      return '包裹已发出，库存已扣减。';
+      await request(`shipments/${shipment.id}/dispatch`, 'POST', {
+        dispatchedAt: new Date().toISOString(), ...(overrideReason ? { overrideReason } : {}) }, shipment.version);
+      return overrideReason ? '已强制放行发货，事由已写入审计。' : '包裹已发出，库存已扣减。';
     });
   }
 
@@ -287,6 +297,9 @@ export function OrdersConsole() {
               {event.note ? ` · ${event.note}` : ''}
             </small></li>)}
           </ul>}
+          {canShip && shipment.status === 'created' && selected?.requiresPrepayment
+            && !SETTLED_PAYMENT.has(selected.paymentStatus)
+            && <p className="error"><small>本单必须先行收款，当前尚未到账：发货需填写强制事由，并会写入审计。</small></p>}
           {canShip && shipment.status === 'created' && <button className="secondary" disabled={busy}
             onClick={() => dispatch(shipment)}>发货</button>}
           {canShip && shipment.status === 'dispatched' && <button className="secondary" disabled={busy}

@@ -3,6 +3,7 @@ import type { Prisma } from '../../../../packages/database/src/client.js';
 import { assertCategoryParent, assertMarketSelection, assertPublishable, normalizeAttributes, normalizeLabelTranslations,
   normalizeMedia, normalizeProductTranslations, normalizeVariants, publicationState, categoryPath, CatalogRuleError } from '../../../../packages/domain/src/catalog.js';
 import { effectiveReviewStatus, normalizeMarketCode } from '../../../../packages/domain/src/store.js';
+import { normalizeAllowedChannels } from '../../../../packages/domain/src/payments.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import { recordPathRedirect } from '../content/preview.js';
 
@@ -18,6 +19,8 @@ export interface BrandBody { logoMediaId?: string | null; enabled?: boolean;
   translations?: { locale: string; name: string; slug?: string | null; description?: string | null }[] }
 export interface ProductBody {
   baseSku?: string | null; brandId?: string | null; categoryIds?: string[]; marketCodes?: string[]; taxClassRef?: string | null;
+  /** 允许的收款渠道（cod / manual / online 子集）。不传或空数组 = 不限。 */
+  allowedPaymentChannels?: string[];
   translations?: { locale: string; name: string; slug: string; shortDescription?: string | null; description?: string | null;
     seoTitle?: string | null; seoDescription?: string | null }[];
   variants?: { sku: string; optionValues: Record<string, string>; priceMinor: number; compareAtMinor?: number | null;
@@ -225,6 +228,7 @@ export class CatalogService {
       id: row.id, baseSku: row.baseSku ?? null, brandId: row.brandId ?? null,
       categoryIds: row.categories.map(link => link.categoryId).sort(),
       marketCodes: [...row.marketCodes].sort(), status: row.status,
+      allowedPaymentChannels: [...row.allowedPaymentChannels].sort(),
       translations: [...row.translations].sort((a, b) => a.locale.localeCompare(b.locale)).map(translation => ({
         locale: translation.locale, name: translation.name, slug: translation.slug,
         shortDescription: translation.shortDescription ?? null, description: translation.description ?? null,
@@ -312,11 +316,12 @@ export class CatalogService {
       const categoryIds = await this.requireCategories(tx, body.categoryIds ?? []);
       const marketCodes = await this.requireMarkets(tx, body.marketCodes ?? []);
       const brandId = await this.requireBrand(tx, body.brandId ?? null);
+      const allowedPaymentChannels = this.rule(() => normalizeAllowedChannels(body.allowedPaymentChannels));
       await this.requireMedia(tx, media.map(item => item.mediaId));
       const id = randomUUID();
       const row = await this.guarded(() => tx.product.create({ data: {
         id, status: 'draft', baseSku: body.baseSku?.trim() || null, brandId, taxClassRef: body.taxClassRef?.trim() || null,
-        marketCodes, translations: { create: translations },
+        marketCodes, allowedPaymentChannels, translations: { create: translations },
         variants: { create: variants.map(variant => ({ id: randomUUID(), ...variant })) },
         media: { create: media.map(item => ({ id: randomUUID(), ...item })) },
         attributes: { create: attributes.map(attribute => ({ id: randomUUID(), ...attribute })) },
@@ -345,6 +350,8 @@ export class CatalogService {
       const media = body.media ? this.rule(() => normalizeMedia(body.media!)) : null;
       const categoryIds = body.categoryIds ? await this.requireCategories(tx, body.categoryIds) : null;
       const marketCodes = body.marketCodes ? await this.requireMarkets(tx, body.marketCodes) : null;
+      const allowedPaymentChannels = body.allowedPaymentChannels === undefined ? null
+        : this.rule(() => normalizeAllowedChannels(body.allowedPaymentChannels));
       const brandId = body.brandId === undefined ? undefined : await this.requireBrand(tx, body.brandId);
       if (media) await this.requireMedia(tx, media.map(item => item.mediaId));
 
@@ -373,6 +380,7 @@ export class CatalogService {
         ...(brandId !== undefined ? { brandId } : {}),
         ...(body.taxClassRef !== undefined ? { taxClassRef: body.taxClassRef?.trim() || null } : {}),
         ...(marketCodes ? { marketCodes } : {}),
+        ...(allowedPaymentChannels ? { allowedPaymentChannels } : {}),
         version: { increment: 1 },
       } }));
       await this.identity.recordAudit(tx, ctx, actor.id, 'catalog.product.updated', id);

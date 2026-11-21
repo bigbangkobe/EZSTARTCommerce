@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  assertCodRequiresDispatch, assertCollectable, assertPaymentAmount, assertVersion, nextPaymentStatus,
-  normalizeMethodPatch, normalizeOutcome, normalizePublicConfig, orderPaymentStatusFor, paymentNumber,
-  PaymentRuleError, provider,
+  assertCodRequiresDispatch, assertCollectable, assertPaymentAmount, assertVersion, availableChannelsFor,
+  nextPaymentStatus, normalizeAllowedChannels, normalizeMethodPatch, normalizeOutcome, normalizePublicConfig,
+  orderPaymentStatusFor, paymentNumber, PRODUCT_PAYMENT_CHANNELS, provider, requiresPrepayment,
+  PaymentRuleError,
 } from '../packages/domain/src/payments.js';
 
 const code = (fn: () => unknown) => {
@@ -139,4 +140,36 @@ test('ledger numbers are date-stamped and shape-checked', () => {
   assert.equal(paymentNumber('20261116', 'AB12CD'), 'PAY-20261116-AB12CD');
   assert.equal(code(() => paymentNumber('2026-11-16', 'AB12CD')), 'VALIDATION_ERROR');
   assert.equal(code(() => paymentNumber('20261116', 'ab12cd')), 'VALIDATION_ERROR');
+});
+
+test('allowed channels are a closed set; empty means unrestricted', () => {
+  assert.deepEqual(normalizeAllowedChannels(undefined), []);
+  assert.deepEqual(normalizeAllowedChannels(null), []);
+  assert.deepEqual(normalizeAllowedChannels([]), []);
+  assert.deepEqual(normalizeAllowedChannels(['manual']), ['manual']);
+  // 重复项收敛成一个，顺序按提交顺序保留。
+  assert.deepEqual(normalizeAllowedChannels(['manual', 'cod', 'manual']), ['manual', 'cod']);
+  // 未知渠道不能混进来：否则结账交集里会出现永远对不上的名字。
+  assert.equal(code(() => normalizeAllowedChannels(['cod', 'stripe'])), 'UNSUPPORTED_PAYMENT_PROVIDER');
+  assert.equal(code(() => normalizeAllowedChannels(['cod', 7])), 'UNSUPPORTED_PAYMENT_PROVIDER');
+  assert.equal(code(() => normalizeAllowedChannels('cod')), 'VALIDATION_ERROR');
+  assert.equal(code(() => normalizeAllowedChannels(['cod', 'manual', 'online', 'cod'])), 'VALIDATION_ERROR');
+});
+
+test('cart channel set is the intersection of every line, empty means unrestricted', () => {
+  // 全部商品都没限制：三种渠道都可用。
+  assert.deepEqual([...availableChannelsFor([[], []])].sort(), [...PRODUCT_PAYMENT_CHANNELS].sort());
+  // 只要有一件要求先付款，整单就不能货到付款——这就是「整单按最严格」。
+  assert.deepEqual([...availableChannelsFor([[], ['manual']])], ['manual']);
+  // 两件商品各只允许不同渠道：交集为空，调用方必须明确拒绝而不是替顾客挑一个。
+  assert.equal(availableChannelsFor([['cod'], ['manual']]).size, 0);
+  // 空购物袋不产生约束（由上层拦空袋），这里是纯粹集合语义。
+  assert.equal(availableChannelsFor([]).size, 3);
+});
+
+test('prepayment is required exactly when cash on delivery is gone', () => {
+  assert.equal(requiresPrepayment(availableChannelsFor([[], ['cod']])), false);
+  assert.equal(requiresPrepayment(availableChannelsFor([['manual']])), true);
+  assert.equal(requiresPrepayment(availableChannelsFor([['online']])), true);
+  assert.equal(requiresPrepayment(availableChannelsFor([['cod'], ['manual']])), true);
 });

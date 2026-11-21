@@ -5,7 +5,8 @@ type Variant = { id: string; sku: string; optionValues: Record<string, string>; 
   currency: string; status: string; onHand: number; reserved: number; available: number };
 type Translation = { locale: string; name: string; slug: string | null; shortDescription: string | null; description: string | null;
   seoTitle: string | null; seoDescription: string | null };
-type Product = { id: string; baseSku: string | null; brandId: string | null; categoryIds: string[]; marketCodes: string[]; status: string;
+type Product = { id: string; baseSku: string | null; brandId: string | null; categoryIds: string[]; marketCodes: string[];
+  allowedPaymentChannels: string[]; status: string;
   translations: Translation[]; variants: Variant[]; media: { mediaId: string; position: number }[]; version: number; createdAt: string; updatedAt: string };
 type Label = { id: string; parentId: string | null; position: number; enabled: boolean; version: number;
   translations: { locale: string; name: string; slug: string | null }[] };
@@ -90,8 +91,10 @@ export function CatalogConsole() {
         currency: String(values.get('currency') ?? '').trim().toUpperCase(), status: 'active' as const };
     }).filter(item => item !== null);
     const marketCodes = String(values.get('marketCodes') ?? '').split(',').map(code => code.trim()).filter(Boolean);
+    // 一个都不勾 = 空数组 = 不限，交给店铺默认；勾了才收窄。
+    const allowedPaymentChannels = values.getAll('allowedPaymentChannels').map(String);
     return { baseSku: String(values.get('baseSku') ?? '').trim() || null, categoryIds: values.getAll('categoryIds').map(String),
-      ...(marketCodes.length ? { marketCodes } : {}), translations,
+      ...(marketCodes.length ? { marketCodes } : {}), allowedPaymentChannels, translations,
       // 编辑时不提交规格：规格编辑缺少安全的库存语义，先保持只读，避免误删有库存的规格。
       ...(existing ? {} : { variants }) };
   }
@@ -243,6 +246,12 @@ export function CatalogConsole() {
       {categories.map(category => <label className="check" key={category.id}><input type="checkbox" name="categoryIds" value={category.id}
         defaultChecked={product?.categoryIds.includes(category.id) ?? false} />{nameOf(category.translations, 'zh-CN')}</label>)}</fieldset>
     <label>市场代码（逗号分隔，须已审核并启用）<input name="marketCodes" defaultValue={product?.marketCodes.join(',') ?? ''} placeholder="HK" /></label>
+    <fieldset><legend>允许的收款方式</legend>
+      <p><small>全不勾＝不限，按店铺默认。勾了以后按最严格生效：购物袋里只要有一件商品不允许某种方式，整单就不能用该方式。</small></p>
+      {([['cod', '货到付款'], ['manual', '先行转账（FPS / 银行 / PayMe）'], ['online', '在线支付']] as const).map(([value, label]) =>
+        <label className="check" key={value}><input type="checkbox" name="allowedPaymentChannels" value={value}
+          defaultChecked={product?.allowedPaymentChannels.includes(value) ?? false} />{label}</label>)}
+    </fieldset>
     <label>规格币种（须等于店铺本位币）<input name="currency" defaultValue={product?.variants[0]?.currency ?? 'HKD'} maxLength={3} /></label>
     <fieldset><legend>规格</legend>
       {product ? product.variants.map(variant => <p key={variant.id}><small>{variant.sku} · {Object.entries(variant.optionValues).map(([key, value]) => `${key}=${value}`).join(', ')} · {variant.priceMinor} {variant.currency} · 现货 {variant.available}</small></p>)

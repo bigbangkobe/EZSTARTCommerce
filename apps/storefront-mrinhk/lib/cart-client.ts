@@ -53,6 +53,8 @@ export type QuoteView = {
   pointsValueMinor: number;
   pointsRuleVersion: string | null;
   shippingMethod: { code: string; name: string; estimatedMinDays: number | null; estimatedMaxDays: number | null };
+  /** 本单可选收款方式，服务端已按购物车商品的渠道约束收窄。 */
+  paymentMethods: { code: string; channel: string; label: string; instructions: string | null }[];
   warnings: string[];
 };
 

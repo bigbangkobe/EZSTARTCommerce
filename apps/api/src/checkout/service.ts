@@ -8,6 +8,7 @@ import { assertQuoteActive, assertQuoteMath, assertQuoteVersion, CheckoutRuleErr
   publicOrderNumber, quoteExpiry, QUOTE_TTL_SECONDS, type Address, type Contact } from '../../../../packages/domain/src/checkout.js';
 import { effectiveReviewStatus, normalizeMarketCode } from '../../../../packages/domain/src/store.js';
 import { pickAttribution } from '../../../../packages/domain/src/placement.js';
+import { availableChannelsFor, requiresPrepayment } from '../../../../packages/domain/src/payments.js';
 import { AuthError, IdentityService, type RequestContext } from '../identity/service.js';
 import { resolveMemberSession } from '../members/session.js';
 import type { PaymentsService } from '../payments/service.js';
@@ -106,12 +107,14 @@ export class CheckoutService {
         ?? product.translations.find(item => item.locale === fallback) ?? product.translations[0] ?? null;
       const variantName = Object.values((variant.optionValues ?? {}) as Record<string, string>).join(' / ') || null;
       return { variant, productId: product.id, categoryIds: categoryIds.get(product.id) ?? [],
+        // 商品级收款约束随行带出：报价阶段就要据此收窄可选支付方式。
+        allowedChannels: product.allowedPaymentChannels,
         productName: translation?.name ?? product.baseSku ?? variant.sku, variantName,
         quantity: row.quantity, unitPriceMinor: variant.priceMinor, lineSubtotalMinor: variant.priceMinor * row.quantity };
     });
   }
 
-  private quoteView(row: QuoteRow) {
+  private quoteView(row: QuoteRow, paymentMethods: Awaited<ReturnType<PaymentsService['availableMethods']>> = []) {
     const method = row.shippingMethodSnapshot as { code: string; name: string; estimatedMinDays: number | null; estimatedMaxDays: number | null };
     return { quoteId: row.id, version: row.version, expiresAt: row.expiresAt.toISOString(), currency: row.currency,
       lines: [...row.lines].map(line => ({ variantId: line.variantId, sku: line.sku, productName: line.productName,
@@ -124,7 +127,9 @@ export class CheckoutService {
       shippingMethod: { code: method.code, name: method.name, estimatedMinDays: method.estimatedMinDays ?? null,
         estimatedMaxDays: method.estimatedMaxDays ?? null },
       couponSummary: (row.couponSummary ?? null) as { codeMasked: string; discountMinor: number } | null,
-      ruleVersions: row.ruleVersions as Record<string, string | null>, warnings: row.warnings as string[] };
+      ruleVersions: row.ruleVersions as Record<string, string | null>, warnings: row.warnings as string[],
+      // 本单可选收款方式：已按商品级约束收窄，前端据此渲染选择器。
+      paymentMethods };
   }
 
   /**
@@ -204,6 +209,10 @@ export class CheckoutService {
       this.rule(() => assertQuoteMath(amounts));
       await tx.checkoutQuote.updateMany({ where: { cartId: cart.id, status: 'active' }, data: { status: 'superseded' } });
       const rate = await tx.shippingRate.findUnique({ where: { id: method.id } });
+      // 商品级收款约束在报价阶段就生效：前端拿到的就是收窄后的可选方式，
+      // 而不是先让人选、下单再被拒。
+      const allowedChannels = availableChannelsFor(lines.map(line => line.allowedChannels));
+      const paymentMethods = await this.payments.availableMethods(tx, allowedChannels, Boolean(rate?.codEnabled));
       const row = await tx.checkoutQuote.create({ data: {
         cartId: cart.id, version: 1, locale: body.locale, marketCode: market.marketCode, currency: cart.currency,
         contact: contact as unknown as Prisma.InputJsonValue, shippingAddress: address as unknown as Prisma.InputJsonValue,
@@ -229,7 +238,7 @@ export class CheckoutService {
       }, include: { lines: true } });
       await tx.guestCart.update({ where: { id: cart.id }, data: { marketCode: market.marketCode, locale: body.locale } });
       await this.identity.recordAudit(tx, ctx, null, 'checkout.quote.created', row.id);
-      return this.quoteView(row);
+      return this.quoteView(row, paymentMethods);
     }, { timeout: 15_000 });
   }
 
@@ -322,7 +331,9 @@ export class CheckoutService {
           }
           if (cart.status !== 'active') throw new AuthError(401, 'UNAUTHORIZED');
           const quote = await tx.checkoutQuote.findUnique({ where: { id: body.quoteId }, include: { lines: true } });
-          if (!quote || quote.cartId !== cart.id) throw new AuthError(422, 'VALIDATION_ERROR');
+          // 两种失败原因分开报：排查「报价过期」和「拿别人的报价下单」时要能一眼区分。
+          if (!quote) throw new AuthError(422, 'QUOTE_NOT_FOUND');
+          if (quote.cartId !== cart.id) throw new AuthError(422, 'QUOTE_CART_MISMATCH');
           this.rule(() => assertQuoteActive(quote.status, quote.expiresAt, new Date()));
           this.rule(() => assertQuoteVersion(quote.version, body.confirmedQuoteVersion));
           await this.lock(tx, `quote:${quote.id}`);
@@ -332,11 +343,21 @@ export class CheckoutService {
 
           const rate = await tx.shippingRate.findUnique({ where: { id: quote.shippingMethodId } });
           if (!rate || !rate.enabled) throw new AuthError(409, 'SHIPPING_UNAVAILABLE');
-          // 可售方式 = 已接入 + 已批准 + 已启用；COD 还需要配送方式本身开启货到付款。
-          const method = await this.payments.resolveCheckout(tx, body.paymentMethodCode.trim().toLowerCase(), rate.codEnabled);
+          // 商品级收款约束：按购物袋里的商品取交集（空数组视为不限）。
+          // 用独立查询而不是复用下面的循环，是因为必须先于 resolveCheckout 得到结果。
+          const channelOwnerIds = quote.lines.map(line => line.variantId).filter((id): id is string => Boolean(id));
+          const channelOwners = await tx.productVariant.findMany({ where: { id: { in: channelOwnerIds } },
+            select: { product: { select: { allowedPaymentChannels: true } } } });
+          if (channelOwners.length !== channelOwnerIds.length) throw new AuthError(409, 'CART_ITEM_UNAVAILABLE');
+          const allowedChannels = availableChannelsFor(channelOwners.map(owner => owner.product.allowedPaymentChannels));
+          // 可售方式 = 已接入 + 已批准 + 已启用 + 落在商品允许范围内；COD 还需配送方式开启货到付款。
+          const method = await this.payments.resolveCheckout(tx, body.paymentMethodCode.trim().toLowerCase(),
+            rate.codEnabled, allowedChannels);
           const methodCode = method.definition.code;
-          // 首期没有线上网关：COD 记 cod_due（交货收钱），人工转账记 created（等到账）。
+          // 线上网关：COD 记 cod_due（交货收钱），人工转账记 created（等到账）。
           const paymentStatus = method.definition.channel === 'cod' ? 'cod_due' : 'created';
+          // 整单没有任何货到付款余地时，未收款不许发货（发货侧据此拦截）。
+          const prepaymentRequired = requiresPrepayment(allowedChannels);
           const accountSummary = (method.row.publicConfig as Record<string, string>).accountSummary ?? null;
 
           const now = new Date();
@@ -375,6 +396,7 @@ export class CheckoutService {
             ...(quote.couponId ? { couponId: quote.couponId,
               couponSnapshot: quote.couponSnapshot as Prisma.InputJsonValue } : {}),
             customerNote: body.customerNote ?? null, paymentMethodCode: methodCode,
+            requiresPrepayment: prepaymentRequired,
             policyAcceptances: quote.policyAcceptances as Prisma.InputJsonValue, placedAt: now,
           } });
           await tx.orderItem.createMany({ data: quote.lines.map(line => ({ orderId: created.id, variantId: line.variantId,
