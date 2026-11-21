@@ -144,8 +144,13 @@ mrinhk.com/api/*            → api:3000
 | API 日志 | 部署后无 error / fatal |
 | staging 隔离 | 三个 staging 容器仍在跑，未受影响 |
 
-> **已知待办**：生产未设置 `INTERNAL_JOB_TOKEN`，`POST /internal/jobs/reconcile` 按设计 fail-closed 返回 503。
-> 这不影响当前（线上渠道未启用），但**开通线上支付前必须配置**，否则丢回调无法被对账任务收敛。
+> **2026-11-21 已处置**：首次发布后发现生产容器里既没有 `PAYMENTS_BASE_URL` 也没有
+> `INTERNAL_JOB_TOKEN` —— 只写 `.env` 不生效，因为 `docker-compose.yml` 的 `api.environment`
+> 没有透传。后果比 503 更严重：`PAYMENTS_BASE_URL` 缺失时 `app.ts` 直接把线上支付依赖置为
+> `null`，webhook 路由根本不存在，客户配好渠道也收不了钱，且现象只是 404。
+> 已在两处 compose（mrinhk 实例 + 实例交付模板）补齐并重启 API 验证：
+> `PAYMENTS_BASE_URL` 由 `SITE_DOMAIN` 推导、`PAYMENTS_ENVIRONMENT=production`、
+> 令牌 64 位随机；对账无令牌/错令牌 401、带令牌返回计数；systemd timer 每 10 分钟跑一次。
 
 ### 5.2 待清理项
 
@@ -325,7 +330,38 @@ docker compose exec -T api node scripts/reconcile.mjs
 docker compose exec -T api node scripts/reconcile.mjs --older-than=60 --limit=200
 ```
 
-主机 cron（每 15 分钟）：
+生产用 systemd timer（本机 crond 未启用，timer 更可靠、能开机自启、日志进 journal）：
+
+```ini
+# /etc/systemd/system/ezstart-reconcile.service
+[Unit]
+Description=EZStart 支付对账任务（mrinhk）
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/opt/ezstart-mrinhk/deploy/merchants/mrinhk
+ExecStart=/usr/bin/docker compose exec -T api node scripts/reconcile.mjs
+TimeoutStartSec=300
+
+# /etc/systemd/system/ezstart-reconcile.timer
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Unit=ezstart-reconcile.service
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now ezstart-reconcile.timer
+systemctl list-timers ezstart-reconcile.timer      # 看下次触发
+sudo journalctl -u ezstart-reconcile.service -n 20 # 看每轮计数
+```
+
+若要改回 cron，等价的 crontab 行是：
 
 ```cron
 */15 * * * * cd /opt/ezstart-mrinhk/deploy/merchants/mrinhk && docker compose exec -T api node scripts/reconcile.mjs >> /var/log/ezstart-reconcile.log 2>&1
@@ -335,8 +371,9 @@ docker compose exec -T api node scripts/reconcile.mjs --older-than=60 --limit=20
 
 - 令牌从容器环境变量 `INTERNAL_JOB_TOKEN` 读，**不进命令行**（命令行会出现在 `ps` 与 history 里）。
 - 未配置令牌时该端点整体 503，不会留下未受保护的运维入口。
+- **变量必须在 `docker-compose.yml` 的 `api.environment` 里显式透传**——只写 `.env` 不生效，这是 2026-11-21 实际踩到的坑。
 - 脚本只打印计数，不打印订单号：日志长期留存，没必要把客户订单散进去。
-- 有失败项也返回 0 并打印明细——对账"跑完了但有几笔要人看"不等于作业失败，否则 cron 天天报警会被忽略。
+- 有失败项也返回 0 并打印明细——对账"跑完了但有几笔要人看"不等于作业失败，否则定时任务天天报警会被忽略。
 
 ### 6.8 清理 staging
 

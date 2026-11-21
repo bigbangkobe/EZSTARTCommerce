@@ -50,6 +50,8 @@ export const SECRET_ENV_KEYS = [
   'POSTGRES_PASSWORD',
   'INSTANCE_ID',
   'IDENTITY_ENCRYPTION_KEY',
+  // 对账端点令牌：每个实例独立生成，泄露即可被伪造成对账调用
+  'INTERNAL_JOB_TOKEN',
 ] as const;
 
 /** 由 manifest 推导、可写入 .env 的非敏感变量。 */

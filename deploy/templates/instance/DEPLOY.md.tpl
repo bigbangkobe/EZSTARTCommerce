@@ -32,6 +32,44 @@
 脚本行为：部署前把当前镜像打 `:prev` 标签；`pg_dump` 备份到 `BACKUP_DIR`（默认
 `/opt/ezstart-backups`，保留 14 份）；API 未通过 `/api/v1/health/ready` 会打印日志并以非 0 退出。
 
+## 支付对账（开通线上支付前必做）
+
+线上支付依赖两个环境变量，**必须出现在 `docker-compose.yml` 的 `api.environment` 里**，
+只写 `.env` 不会进容器：
+
+- `PAYMENTS_BASE_URL`：模板已从 `SITE_DOMAIN` 推导，无需手工配。
+  缺了它线上支付整体不装配（webhook 路由不存在），表现为莫名 404。
+- `INTERNAL_JOB_TOKEN`：对账端点的令牌，`openssl rand -hex 32` 生成。留空则端点 503。
+
+挂定时任务（每 10 分钟）：
+
+```ini
+# /etc/systemd/system/ezstart-reconcile.service
+[Unit]
+Description={{INSTANCE_ID}} 支付对账
+After=docker.service
+Requires=docker.service
+[Service]
+Type=oneshot
+User=<实例属主>
+WorkingDirectory=<实例目录>
+ExecStart=/usr/bin/docker compose exec -T api node scripts/reconcile.mjs
+TimeoutStartSec=300
+
+# /etc/systemd/system/ezstart-reconcile.timer
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Unit=ezstart-reconcile.service
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now ezstart-reconcile.timer
+sudo journalctl -u ezstart-reconcile.service -n 20   # 每轮只打印计数
+```
+
 ## 安全基线
 
 - PostgreSQL / API / worker 不暴露公网端口，唯一入口是 Caddy 80/443。

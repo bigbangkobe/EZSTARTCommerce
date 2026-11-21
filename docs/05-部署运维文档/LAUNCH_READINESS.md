@@ -66,7 +66,8 @@ Linux 容器（生产镜像）复跑单元层 255 条：252 通过，3 条因容
 | 同机多实例端口未参数化 | 第二客户不能与首个客户共机 | 一客户一实例（本就在设计内）；共机需求留到 W9 |
 | 前端应用目录按商户名硬编码（`storefront-<id>`） | 新客户需手工建目录 | 复制流程已写入交付清单，W9 改为生成 |
 | identity 双实例竞态用例在高并发跑全量时偶发 ECONNRESET | 本地回归噪音 | 单文件运行 22/22 通过；属本机资源争用，非代码缺陷。CI 建议 `--test-concurrency=2` |
-| 对账任务依赖主机 cron | 漏配则退化为无对账 | 交付清单强制项；未配时端点 503 而非静默 |
+| 对账任务漏配 | 丢回调的单无法收敛 | 端点未配令牌即 503 而非静默；定时任务用 systemd timer（`ezstart-reconcile.timer`，每 10 分钟），交付清单强制项 |
+| 环境变量只写 `.env` 未在 compose 透传 | 变量静默丢失，表现为功能"莫名不可用" | 已补齐两处 compose；发布后务必核对 `printenv`，不能只看 `.env` |
 
 ---
 
@@ -123,9 +124,17 @@ docker compose up -d --no-build
 | 数据复核 | `PaymentMethodConfig` 与发布前一致（`cod` 启用、`manual_bank_transfer` 停用） |
 | 渠道暴露 | `mock` 为 sandbox 专用，生产 `POST /payments/webhook/mock` 返回 404（不注册） |
 
-**发布后仍缺的一项配置**：生产未设 `INTERNAL_JOB_TOKEN`，对账端点按设计 fail-closed 返回 503。
-当前线上渠道未启用，不影响业务；但**开通线上支付前必须配置并挂 cron**，否则“渠道已扣款、回调丢失”无法被对账任务收敛。
-开通顺序应为：配 `INTERNAL_JOB_TOKEN` → 后台填渠道凭证 → 测试连接 `ok` → 挂对账 cron → 下一笔真实测试单 → 退款演练（本文件第 5 节第 3 项）。
+**发布后次日发现并修复的交付缺口**（2026-11-21）：生产容器里 `PAYMENTS_BASE_URL` 与
+`INTERNAL_JOB_TOKEN` 都不存在——`docker-compose.yml` 的 `api.environment` 没透传，写 `.env` 无效。
+前者缺失时线上支付依赖整体不装配（webhook 路由不存在、发起支付必失败），
+即客户配好渠道也收不了钱；后者缺失时对账端点 503。
+两处 compose（mrinhk 实例 + 实例交付模板）已补齐，API 已重建验证。
+
+现状：`PAYMENTS_BASE_URL=https://mrinhk.com`、`PAYMENTS_ENVIRONMENT=production`、
+`INTERNAL_JOB_TOKEN` 64 位随机；对账端点无令牌/错令牌 401、带令牌返回计数；
+`ezstart-reconcile.timer` 每 10 分钟跑一次（`Result=success`）。
+
+开通线上支付剩余顺序：后台填渠道凭证 → 测试连接 `ok` → 下一笔真实小额单 → 退款演练（第 5 节第 3 项）。
 
 ---
 

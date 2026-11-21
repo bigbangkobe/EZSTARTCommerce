@@ -159,6 +159,8 @@ export function writeEnv({ outDir, manifest, force = false } = {}) {
     POSTGRES_PASSWORD: randomBytes(24).toString('base64url'),
     INSTANCE_ID: randomUUID(),
     IDENTITY_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+    // 对账端点令牌。实例建好即可用，不留"上线前记得补一个"的口子。
+    INTERNAL_JOB_TOKEN: randomBytes(32).toString('hex'),
   };
   const lines = template.split('\n').map((line) => {
     const match = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
