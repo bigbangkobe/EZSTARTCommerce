@@ -4,6 +4,10 @@ import { notFound } from 'next/navigation';
 import { altPaths, copyFor, isLocale, localePath } from '../../../lib/i18n';
 import { fetchCategories } from '../../../lib/categories';
 
+// 目录类页面按请求渲染：构建镜像时 API 还没起，预渲染出来的首页会是「商品无法载入」，
+// 而且运营上架后要等 ISR 才能看到。目录数据本身很轻，按请求取更划算。
+export const dynamic = 'force-dynamic';
+
 export const revalidate = 60;
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {

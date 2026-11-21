@@ -33,6 +33,10 @@ function SectionHead({ num, title, jp, action }: {
   );
 }
 
+// 目录类页面按请求渲染：构建镜像时 API 还没起，预渲染出来的首页会是「商品无法载入」，
+// 而且运营上架后要等 ISR 才能看到。目录数据本身很轻，按请求取更划算。
+export const dynamic = 'force-dynamic';
+
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
   const { locale: raw } = await params;
   if (!isLocale(raw)) notFound();
