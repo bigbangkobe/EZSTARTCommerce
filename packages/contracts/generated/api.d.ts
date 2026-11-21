@@ -309,6 +309,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 已登录成员修改自己的密码（首次登录强制改密也走这里） */
+        post: operations["changeAdminPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/auth/password-reset": {
         parameters: {
             query?: never;
@@ -3113,6 +3130,10 @@ export interface components {
             invitationToken: string;
             newPassword: string;
         };
+        AdminPasswordChangeRequest: {
+            currentPassword: string;
+            newPassword: string;
+        };
         AdminMfaSetupChallenge: {
             /** Format: uuid */
             challengeId: string;
@@ -3201,7 +3222,7 @@ export interface components {
         AdminUser: {
             /** Format: uuid */
             id: string;
-            /** Format: email */
+            /** @description 登录账号名。历史上存邮箱，实例可改用任意账号名（如 admin、zhangsan）。 */
             email: string;
             displayName: string;
             /** @enum {string} */
@@ -3211,6 +3232,8 @@ export interface components {
             roleIds: string[];
             mfaRequired: boolean;
             mfaEnabled: boolean;
+            /** @description 直建账号使用一次性初始密码时为真；除改密与登出外的后台接口一律 403。 */
+            mustChangePassword: boolean;
             version: number;
             /** Format: date-time */
             lastLoginAt: string | null;
@@ -4134,7 +4157,7 @@ export interface components {
             code: string;
         };
         PasswordResetRequest: {
-            /** Format: email */
+            /** @description 账号名（历史上为邮箱）。与登录一致，不强制邮箱格式。 */
             email: string;
         };
         PasswordResetCompleteRequest: {
@@ -4142,12 +4165,14 @@ export interface components {
             newPassword: string;
         };
         AdminUserInviteRequest: {
-            /** Format: email */
+            /** @description 账号名。可省略邮箱格式；带 password 时为直建账号，否则按邀请流程处理。 */
             email: string;
             displayName: string;
             roleIds: string[];
             /** @enum {string} */
             locale: "zh-CN" | "zh-HK" | "en";
+            /** @description 初始密码。提供时直接建为可登录账号并置 mustChangePassword；省略时走邮件邀请。 */
+            password?: string;
         };
         AdminUserPatchRequest: {
             displayName?: string;
@@ -7359,6 +7384,26 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    changeAdminPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminPasswordChangeRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["AdminSessionSuccess"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };

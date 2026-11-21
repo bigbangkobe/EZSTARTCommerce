@@ -16,6 +16,7 @@ NOW = "2026-10-19T10:00:00Z"
 def admin_user():
     return {"id": UUID, "email": "staff@example.com", "displayName": "Staff", "locale": "en",
             "status": "active", "roleIds": [UUID], "mfaRequired": True, "mfaEnabled": True,
+            "mustChangePassword": False,
             "version": 1, "lastLoginAt": None, "createdAt": NOW, "updatedAt": NOW}
 
 
@@ -1137,5 +1138,30 @@ class ContractTests(unittest.TestCase):
         self.assertEqual([], errors("ThemeDocView", published))
         self.assertEqual([], errors("PublicThemeView", {"version": 3, "config": config}))
         self.assertTrue(errors("PublicThemeView", {"version": 3}))
+    def test_staff_can_be_created_with_initial_password_and_must_change_it(self):
+        # 直建账号：账号名不再要求邮箱格式，初始密码可选；省略密码则回落到邮件邀请。
+        invite = {"email": "zhangsan", "displayName": "张三", "locale": "zh-HK", "roleIds": [UUID]}
+        self.assertEqual([], errors("AdminUserInviteRequest", invite))
+        self.assertEqual([], errors("AdminUserInviteRequest", dict(invite, password="init-pass-123")))
+        self.assertTrue(errors("AdminUserInviteRequest", dict(invite, password="short")))
+        self.assertTrue(errors("AdminUserInviteRequest", dict(invite, email="")))
+        self.assertTrue(errors("AdminUserInviteRequest", dict(invite, roleIds=[])))
+
+        operation = SPEC["paths"]["/admin/auth/password"]["post"]
+        self.assertEqual([{"AdminSession": [], "CsrfToken": []}], operation["security"])
+        self.assertNotIn("x-permission", operation)
+        change = {"currentPassword": "init-pass-123", "newPassword": "own-secret-456"}
+        self.assertEqual([], errors("AdminPasswordChangeRequest", change))
+        self.assertTrue(errors("AdminPasswordChangeRequest", dict(change, newPassword="short")))
+        self.assertTrue(errors("AdminPasswordChangeRequest", {"newPassword": "own-secret-456"}))
+
+        # 强制改密标记是会话视图的必填字段，界面据此跳转到改密页。
+        self.assertIn("mustChangePassword", SPEC["components"]["schemas"]["AdminUser"]["required"])
+        session = {"user": admin_user(), "permissionCodes": ["catalog.read"], "mfaVerified": True,
+                   "idleExpiresAt": NOW, "absoluteExpiresAt": NOW, "csrfToken": "x" * 40}
+        self.assertEqual([], errors("AdminSessionData", session))
+        pending = copy.deepcopy(session)
+        pending["user"]["mustChangePassword"] = True
+        self.assertEqual([], errors("AdminSessionData", pending))
 if __name__ == "__main__":
     unittest.main()

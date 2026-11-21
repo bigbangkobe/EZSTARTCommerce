@@ -24,10 +24,10 @@ test('自由账号名登录，且 ADMIN_REQUIRE_MFA=false 时密码通过即发�
   let app: INestApplication | undefined;
   let relaxedApp: INestApplication | undefined;
   const jar = new Map<string, string>();
-  const call = async (server: string, path: string, body?: unknown) => {
+  const call = async (server: string, path: string, body?: unknown, extra: Record<string, string> = {}) => {
     const response = await fetch(server + '/api/v1/' + path, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { Origin: origin, 'Content-Type': 'application/json',
+      headers: { Origin: origin, 'Content-Type': 'application/json', ...extra,
         Cookie: [...jar].map(([key, value]) => `${key}=${value}`).join('; ') },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -71,6 +71,48 @@ test('自由账号名登录，且 ADMIN_REQUIRE_MFA=false 时密码通过即发�
     await t.test('密码错误仍拒绝，关闭 MFA 不等于放开鉴权', async () => {
       const result = await call(await relaxedApp!.getUrl(), 'admin/auth/login', { email: 'admin', password: 'wrong-password' });
       assert.equal(result.status, 401);
+    });
+
+    await t.test('店主直建账号：账号名非邮箱、带初始密码、首次登录必须先改密', async () => {
+      const url = await relaxedApp!.getUrl();
+      const owner = await call(url, 'admin/auth/login', { email: 'admin', password: 'admin@12' });
+      assert.equal(owner.status, 200);
+      const ownerCsrf = String(owner.body!.data.csrfToken);
+      // 非 owner 角色只要具备 staff.read，就能验证「改密前被拦、改密后放行」。
+      const role = await db.adminRole.create({ data: { name: '前台客服', kind: 'custom', description: '测试用', permissionCodes: ['staff.read'] } });
+      const created = await call(url, 'admin/users', { email: 'ZhangSan', displayName: '张三', locale: 'zh-HK',
+        roleIds: [role.id], password: 'init-pass-123' }, { 'X-CSRF-Token': ownerCsrf });
+      assert.equal(created.status, 201);
+      assert.equal(created.body!.data.email, 'zhangsan');
+      assert.equal(created.body!.data.status, 'active');
+      assert.equal(created.body!.data.mustChangePassword, true);
+
+      jar.clear();
+      const staff = await call(url, 'admin/auth/login', { email: 'zhangsan', password: 'init-pass-123' });
+      assert.equal(staff.status, 200);
+      assert.equal(staff.body!.data.user.mustChangePassword, true);
+      const staffCsrf = { 'X-CSRF-Token': String(staff.body!.data.csrfToken) };
+
+      // 改密之前，除会话/登出/改密外的接口一律被拒。
+      const blocked = await call(url, 'admin/users');
+      assert.equal(blocked.status, 403);
+      assert.equal(blocked.body!.error.code, 'PASSWORD_CHANGE_REQUIRED');
+      const session = await call(url, 'admin/auth/session');
+      assert.equal(session.status, 200);
+
+      const wrong = await call(url, 'admin/auth/password', { currentPassword: 'not-my-password', newPassword: 'own-secret-456' }, staffCsrf);
+      assert.equal(wrong.status, 401);
+      const changed = await call(url, 'admin/auth/password', { currentPassword: 'init-pass-123', newPassword: 'own-secret-456' }, staffCsrf);
+      assert.equal(changed.status, 200);
+      assert.equal(changed.body!.data.user.mustChangePassword, false);
+
+      const allowed = await call(url, 'admin/users');
+      assert.equal(allowed.status, 200);
+
+      // 初始密码用过即作废：旧密码登不进，新密码能登。
+      jar.clear();
+      assert.equal((await call(url, 'admin/auth/login', { email: 'zhangsan', password: 'init-pass-123' })).status, 401);
+      assert.equal((await call(url, 'admin/auth/login', { email: 'zhangsan', password: 'own-secret-456' })).status, 200);
     });
   } finally {
     if (relaxedApp) await relaxedApp.close();

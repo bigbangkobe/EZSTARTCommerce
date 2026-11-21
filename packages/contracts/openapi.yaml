@@ -533,6 +533,23 @@ paths:
         '204': { description: Session revoked }
         '401': { $ref: '#/components/responses/Unauthorized' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /admin/auth/password:
+    post:
+      tags: [AdminAuth]
+      operationId: changeAdminPassword
+      summary: 已登录成员修改自己的密码（首次登录强制改密也走这里）
+      security: [{ AdminSession: [], CsrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminPasswordChangeRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/AdminSessionSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /admin/auth/password-reset:
     post:
       tags: [AdminAuth]
@@ -5221,6 +5238,23 @@ components:
           minLength: 8
           maxLength: 256
           writeOnly: true
+    AdminPasswordChangeRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - currentPassword
+      - newPassword
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+          maxLength: 256
+          writeOnly: true
+        newPassword:
+          type: string
+          minLength: 8
+          maxLength: 256
+          writeOnly: true
     AdminMfaSetupChallenge:
       type: object
       additionalProperties: false
@@ -5466,6 +5500,7 @@ components:
       - roleIds
       - mfaRequired
       - mfaEnabled
+      - mustChangePassword
       - version
       - lastLoginAt
       - createdAt
@@ -5476,8 +5511,9 @@ components:
           format: uuid
         email:
           type: string
-          format: email
+          minLength: 1
           maxLength: 254
+          description: 登录账号名。历史上存邮箱，实例可改用任意账号名（如 admin、zhangsan）。
         displayName:
           type: string
           minLength: 1
@@ -5504,6 +5540,9 @@ components:
           type: boolean
         mfaEnabled:
           type: boolean
+        mustChangePassword:
+          type: boolean
+          description: 直建账号使用一次性初始密码时为真；除改密与登出外的后台接口一律 403。
         version:
           type: integer
           minimum: 1
@@ -6947,7 +6986,11 @@ components:
       additionalProperties: false
       required: [email]
       properties:
-        email: { type: string, format: email, maxLength: 254 }
+        email:
+          type: string
+          minLength: 1
+          maxLength: 254
+          description: 账号名（历史上为邮箱）。与登录一致，不强制邮箱格式。
     PasswordResetCompleteRequest:
       type: object
       additionalProperties: false
@@ -6960,10 +7003,20 @@ components:
       additionalProperties: false
       required: [email, displayName, roleIds, locale]
       properties:
-        email: { type: string, format: email, maxLength: 254 }
+        email:
+          type: string
+          minLength: 1
+          maxLength: 254
+          description: 账号名。可省略邮箱格式；带 password 时为直建账号，否则按邀请流程处理。
         displayName: { type: string, minLength: 1, maxLength: 120 }
         roleIds: { type: array, minItems: 1, uniqueItems: true, items: { type: string, format: uuid } }
         locale: { type: string, enum: [zh-CN, zh-HK, en] }
+        password:
+          type: string
+          minLength: 8
+          maxLength: 256
+          writeOnly: true
+          description: 初始密码。提供时直接建为可登录账号并置 mustChangePassword；省略时走邮件邀请。
     AdminUserPatchRequest:
       type: object
       additionalProperties: false

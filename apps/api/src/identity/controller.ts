@@ -81,6 +81,12 @@ export class IdentityController {
     const result = await service.acceptStaffInvitation(body, this.context(request));
     this.send(response, request, result.status, result.data, result.status === 202 ? this.challengeCookies(result) : this.sessionCookies(result.sessionToken));
   }
+  @Post('password')
+  async changePassword(@Body() body: { currentPassword: string; newPassword: string }, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    const service = await this.write(request, 'AdminPasswordChangeRequest', body);
+    const data = await service.changePassword(cookie(request, 'ez_admin_session'), header(request, 'x-csrf-token'), body, this.context(request));
+    this.send(response, request, 200, data);
+  }
   @Post('password-reset')
   async reset(@Body() body: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     const completing = typeof body === 'object' && body !== null && 'resetToken' in body;

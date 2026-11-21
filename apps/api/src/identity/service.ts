@@ -108,7 +108,8 @@ export class IdentityService {
   private userSummary(user: User) {
     return { id: user.id, email: user.email, displayName: user.displayName, locale: user.locale,
       status: user.status, roleIds: user.roles.map(link => link.roleId), mfaRequired: this.needsMfa(user),
-      mfaEnabled: user.factor !== null, version: user.version, lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
+      mfaEnabled: user.factor !== null, mustChangePassword: user.mustChangePassword,
+      version: user.version, lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
       createdAt: user.createdAt.toISOString(), updatedAt: user.updatedAt.toISOString() };
   }
   private sessionData(user: User, session: { mfaVerified: boolean; idleExpiresAt: Date; absoluteExpiresAt: Date }, sessionToken: string) {
@@ -288,7 +289,7 @@ export class IdentityService {
       return { value: await this.newSession(tx, user, now, true) };
     });
   }
-  private async authenticated<T>(supplied: string, csrfValue: string | null, fn: (tx: Tx, user: User, session: Prisma.AdminSessionGetPayload<{}>, now: Date) => Promise<T>, serializeAccess = false) {
+  private async authenticated<T>(supplied: string, csrfValue: string | null, fn: (tx: Tx, user: User, session: Prisma.AdminSessionGetPayload<{}>, now: Date) => Promise<T>, serializeAccess = false, allowPendingPassword = false) {
     const candidate = await this.db.adminSession.findUnique({ where: { tokenDigest: digest(supplied) } });
     if (!candidate) throw new AuthError(401, 'UNAUTHORIZED');
     return this.withUser(candidate.userId, async (tx, user, now) => {
@@ -296,6 +297,9 @@ export class IdentityService {
       if (!session || session.revokedAt || session.idleExpiresAt <= now || session.absoluteExpiresAt <= now ||
         (this.needsMfa(user) && (!user.factor || !session.mfaVerified))) throw new AuthError(401, 'UNAUTHORIZED');
       if (csrfValue !== null && !equal(csrfValue, csrf(supplied, this.config))) throw new AuthError(403, 'FORBIDDEN');
+      // 直建账号的一次性初始密码：除了「看会话 / 改密 / 登出」，其余后台接口一律拒绝，
+      // 避免初始密码在改密前就能改价、发货或导出顾客资料。
+      if (user.mustChangePassword && !allowPendingPassword) throw new AuthError(403, 'PASSWORD_CHANGE_REQUIRED');
       const updated = await tx.adminSession.update({ where: { id: session.id }, data: {
         lastSeenAt: now, idleExpiresAt: new Date(Math.min(expiresAt(now, policy.idleSessionSeconds).getTime(), session.absoluteExpiresAt.getTime())),
       } });
@@ -303,13 +307,32 @@ export class IdentityService {
     }, serializeAccess);
   }
   async session(supplied: string) {
-    return this.authenticated(supplied, null, async (_tx, user, session) => this.sessionData(user, session, supplied));
+    return this.authenticated(supplied, null, async (_tx, user, session) => this.sessionData(user, session, supplied), false, true);
   }
   async logout(supplied: string, csrfValue: string, ctx: RequestContext) {
     await this.authenticated(supplied, csrfValue, async (tx, user, session, now) => {
       await tx.adminSession.update({ where: { id: session.id }, data: { revokedAt: now } });
       await this.audit(tx, ctx, user.id, 'admin.session.revoked', session.id);
-    });
+    }, false, true);
+  }
+  /** 已登录成员修改自己的密码；首次登录强制改密也走这条路径。 */
+  async changePassword(supplied: string, csrfValue: string, body: { currentPassword: string; newPassword: string }, ctx: RequestContext) {
+    // 哈希在事务外完成，避免占用连接池；授权在事务内复核。
+    const encoded = await passwordHash(body.newPassword);
+    return this.authenticated(supplied, csrfValue, async (tx, user, session, now) => {
+      await this.checkAccountIn(tx, user.email, now);
+      if (!await passwordMatches(user.passwordHash, body.currentPassword)) {
+        await this.audit(tx, ctx, user.id, 'admin.password.changed', user.id, 'denied');
+        throw new AuthError(401, 'UNAUTHORIZED');
+      }
+      const updated = await tx.adminUser.update({ where: { id: user.id }, data: {
+        passwordHash: encoded, mustChangePassword: false, version: { increment: 1 } }, include: includeUser });
+      // 其他设备上的旧会话随之失效；当前会话保留，否则员工刚改完密码就被踢回登录页。
+      await tx.adminSession.updateMany({ where: { userId: user.id, id: { not: session.id }, revokedAt: null }, data: { revokedAt: now } });
+      await tx.adminChallenge.updateMany({ where: { userId: user.id, consumedAt: null }, data: { consumedAt: now } });
+      await this.audit(tx, ctx, user.id, 'admin.password.changed', user.id);
+      return this.sessionData(updated, session, supplied);
+    }, false, true);
   }
   async sessions(supplied: string, limit: number, cursor: string | null) {
     return this.authenticated(supplied, null, async (tx, user, current, now) => {
@@ -381,16 +404,24 @@ export class IdentityService {
       encryptedPayload: encrypt(secret, invitation.userId, this.config, `invitation:${id}:${invitation.version}`), expiresAt: invitation.expiresAt } });
     return id;
   }
-  async inviteStaff(supplied: string, csrfValue: string, body: { email: string; displayName: string; locale: string; roleIds: string[] }, ctx: RequestContext) {
+  async inviteStaff(supplied: string, csrfValue: string, body: { email: string; displayName: string; locale: string; roleIds: string[]; password?: string }, ctx: RequestContext) {
     // Perform expensive hashing outside the transaction; authorization is rechecked within it.
-    const encoded = await passwordHash(token());
+    // 带 password = 店主直建账号（不需要 SMTP），否则沿用邮件邀请流程。
+    const direct = body.password !== undefined;
+    const encoded = await passwordHash(body.password ?? token());
     return this.authenticated(supplied, csrfValue, async (tx, actor, _session, now) => {
       await this.checkDelegation(tx, actor, body.roleIds);
       const email = body.email.trim().toLowerCase();
       await this.lock(tx, `staff-email:${email}`);
       if (await tx.adminUser.findUnique({ where: { email } })) throw new AuthError(409, 'STATE_CONFLICT');
-      const user = await tx.adminUser.create({ data: { email, displayName: body.displayName, locale: body.locale, status: 'invited', passwordHash: encoded,
-        mfaRequired: true, roles: { create: body.roleIds.map(roleId => ({ roleId })) } }, include: includeUser });
+      const user = await tx.adminUser.create({ data: { email, displayName: body.displayName, locale: body.locale,
+        status: direct ? 'active' : 'invited', passwordHash: encoded, mfaRequired: true, mustChangePassword: direct,
+        roles: { create: body.roleIds.map(roleId => ({ roleId })) } }, include: includeUser });
+      if (direct) {
+        // 初始密码经微信/口头传递，必须由本人改密后才能使用后台。
+        await this.audit(tx, ctx, actor.id, 'admin.staff.created', user.id);
+        return this.userSummary(user);
+      }
       const issued = issueInvitation(randomUUID(), user.id, now);
       await tx.adminInvitation.create({ data: { ...issued.invitation, inviterId: actor.id } });
       const notificationJobId = await this.queueInvitation(tx, issued.invitation, issued.token);

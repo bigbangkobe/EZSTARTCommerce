@@ -41,6 +41,9 @@ export function IdentityForm({ initialMode }: { initialMode: 'invite' | 'login' 
           challenge.current = data.challengeId;
           if (data.nextAction === 'enroll_mfa') { setMode('enroll'); await startEnrollment(); }
           else setMode('verify');
+        } else if (data.user?.mustChangePassword) {
+          // 店主直建账号的初始密码：先改密，再进后台。
+          location.assign('/admin/password');
         } else setMode('done');
       } else if (mode === 'enroll') {
         if (!enrollment.current) { await startEnrollment(); return; }

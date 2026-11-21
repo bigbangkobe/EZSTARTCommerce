@@ -18,6 +18,9 @@ model AdminUser {
   status String @default("active")
   passwordHash String
   mfaRequired Boolean @default(true)
+  /// 店主直建账号时设置的一次性初始密码标记：为真时除改密/登出外的后台接口一律拒绝，
+  /// 员工设好自己的密码后清除。邀请流程创建的账号靠邀请链接设密码，不置此标记。
+  mustChangePassword Boolean @default(false)
   version Int @default(1)
   lastLoginAt DateTime? @db.Timestamptz(3)
   createdAt DateTime @default(now()) @db.Timestamptz(3)

@@ -32,7 +32,7 @@ export class StaffController extends ManagementHttp {
     this.send(response, request, 200, await service.revokeStaffSessions(cookie(request, 'ez_admin_session'), header(request, 'x-csrf-token'), uuid(id), body.reason, this.context(request)));
   }
   @Post()
-  async invite(@Body() body: { email: string; displayName: string; locale: string; roleIds: string[] }, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+  async invite(@Body() body: { email: string; displayName: string; locale: string; roleIds: string[]; password?: string }, @Req() request: ApiRequest, @Res() response: ServerResponse) {
     const service = await this.write(request, 'AdminUserInviteRequest', body);
     const data = await service.inviteStaff(cookie(request, 'ez_admin_session'), header(request, 'x-csrf-token'), body, this.context(request));
     this.send(response, request, 201, data);
