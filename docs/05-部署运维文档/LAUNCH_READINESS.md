@@ -14,6 +14,9 @@
 
 > **2026-11-20 更新**：前半句已执行——生产 `mrinhk.com` 已升级到 `61682e8`（36 条迁移），
 > 详情见 [4.4 生产发布记录](#44-生产发布记录2026-11-20)。线上渠道仍未启用，待客户给凭证与类目批复。
+>
+> **2026-11-21 更新**：生产已升级到 `3384086`（37 条迁移），新增**商品级收款方式**（先付款 / 货到付款按商品区分），
+> 详见 [4.5 生产发布记录](#45-生产发布记录2026-11-21商品级收款方式)。存量商品默认不限，行为不变。
 
 ---
 
@@ -135,6 +138,28 @@ docker compose up -d --no-build
 `ezstart-reconcile.timer` 每 10 分钟跑一次（`Result=success`）。
 
 开通线上支付剩余顺序：后台填渠道凭证 → 测试连接 `ok` → 下一笔真实小额单 → 退款演练（第 5 节第 3 项）。
+
+### 4.5 生产发布记录（2026-11-21）商品级收款方式
+
+`8c9d6f8 → 3384086`，5 个提交、25 文件、1 条迁移（`202611210100_product_payment_channels`）。执行 `deploy.sh` 全程 **2 分 58 秒**。
+
+| 阶段 | 事实 |
+|---|---|
+| 回滚点 | `ezstart-mrinhk-{api,admin,storefront}:prev`（重打为 `8c9d6f8` 镜像） |
+| 备份 | `ezstart-20261121-071419.sql.gz` |
+| 迁移 | `migrate` 容器退出码 0，36 → **37**；日志仅应用 `product_payment_channels` 一条 |
+| 停机窗口 | 构建期间旧容器继续服务，实际不可用窗口约 25 秒 |
+| 健康 | `live` / `ready` 200，`api.started` 正常，API 日志无 error/fatal，三容器 restarts=0 |
+| 页面复核 | 前台 `/zh-HK` `/zh-HK/products` `/cart` `/checkout`、`/zh-CN`、`/en` 全 200；后台 `/admin/login` `/admin/orders` `/admin/catalog` 全 200 |
+| 结构复核 | `Product.allowedPaymentChannels`（`TEXT[]`，默认 `{}`）、`ShopOrder.requiresPrepayment`（默认 false）、`dispatchOverrideReason/At` 均已建；`Product_allowedPaymentChannels_check` 存在 |
+| 约束实测 | 事务内写入 `ARRAY['cod','manual']` 成功、写入 `ARRAY['stripe']` 被 CHECK 拒绝，回滚后受限商品数仍为 0（无脏数据） |
+| 行为兼容 | 生产受限商品 0 件、预付订单 0 笔 → 结账与发货逻辑对现有商品**完全等价**；未配渠道的线上支付仍为空 |
+
+设计口径（本功能）：渠道本身仍由后台按站点配置（线下 `cod` / `manual_bank_transfer` 与环境无关，线上按 `sandbox`/`production` 隔离）；
+新增的是**商品级白名单**——商品可限定 `cod`/`manual`/`online` 的子集，空数组表示不限。
+购物车混单按**整单最严格**取交集：任一件商品不允许 COD，则整单无 COD。
+`requiresPrepayment` 在下单时快照；未收款发货返回 409 `PAYMENT_REQUIRED_BEFORE_DISPATCH`，
+管理员可填理由强制放行并写审计 `order.shipment.dispatch_override`。
 
 ---
 
