@@ -79,13 +79,17 @@ try {
   const market = await db.marketProfile.findFirst({ where: { enabled: true, reviewStatus: 'approved' } });
   const marketCode = market?.marketCode ?? 'HK';
 
+  // 按站点实际支付环境取配置行：staging 是 sandbox，生产是 production。
+  const environment = process.env.PAYMENTS_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'production';
   const manual = await db.paymentMethodConfig.findFirst({
-    where: { providerCode: 'manual_bank_transfer', environment: 'production' } });
+    where: { providerCode: 'manual_bank_transfer', environment } });
   if (!manual) fail('缺少转账渠道配置行');
-  if (!manual.enabled) {
+  let manualRow = manual;
+  if (!manualRow.enabled) {
     await db.paymentMethodConfig.update({ where: { id: manual.id }, data: { enabled: true,
-      approvalReference: manual.approvalReference ?? 'smoke-verification',
+      approvalReference: manual.approvalReference ?? 'smoke-verification', approvedAt: manual.approvedAt ?? new Date(),
       publicConfig: { accountSummary: 'FPS 12345678 / 轉賬後請 WhatsApp 通知' } } });
+    manualRow = { ...manual, enabled: true };
     console.log('• 已临时启用转账渠道（仅本机验收）');
   }
 

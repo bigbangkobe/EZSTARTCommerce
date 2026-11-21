@@ -187,7 +187,21 @@ export class PaymentsService {
     return paymentEnvironment();
   }
 
+  /**
+   * 取某个渠道在本站点的配置行。
+   *
+   * 线下渠道（COD / 人工转账）与支付环境无关：同一套配置在沙箱站点和正式站点都生效，
+   * 存储上也只播种在 production。此前一律按站点环境精确匹配，导致 PAYMENTS_ENVIRONMENT=sandbox
+   * 的实例查不到 cod 行——结账页只剩 mock，货到付款凭空消失。线上渠道仍严格按环境隔离，
+   * 沙箱密钥绝不能泄漏到生产。
+   */
   private async methodRow(tx: Tx, code: string, environment = this.environment()) {
+    const definition = providers.find(entry => entry.code === code);
+    if (definition && definition.channel !== 'online') {
+      // 万一将来两行都存在，固定取 production：与既有配置保持一致。
+      return tx.paymentMethodConfig.findFirst({ where: { providerCode: code },
+        orderBy: { environment: 'asc' } });
+    }
     return tx.paymentMethodConfig.findUnique({ where: { providerCode_environment: { providerCode: code, environment } } });
   }
 
@@ -278,16 +292,23 @@ export class PaymentsService {
     if (!allowed.size) return [];
     await this.ensureDefaults(tx);
     const environment = this.environment();
-    const rows = await tx.paymentMethodConfig.findMany({ where: { environment, enabled: true },
-      orderBy: { providerCode: 'asc' } });
+    const rows = await tx.paymentMethodConfig.findMany({
+      // 线下渠道与环境无关（只播种在 production），线上渠道严格按站点环境取。
+      where: { enabled: true, OR: [{ environment },
+        { providerCode: { in: providers.filter(entry => entry.channel !== 'online').map(entry => entry.code) } }] },
+      orderBy: [{ providerCode: 'asc' }, { environment: 'asc' }] });
     const output: Array<{ code: string; channel: PaymentChannel; label: string; instructions: string | null }> = [];
+    const seen = new Set<string>();
     for (const row of rows) {
+      // 同一渠道理论上只有一行；真出现两行也只展示一次，避免收银台出现两个一样的选项。
+      if (seen.has(row.providerCode)) continue;
       const definition = providers.find(entry => entry.code === row.providerCode);
       if (!definition || !allowed.has(definition.channel) || !row.approvalReference) continue;
       if (definition.channel === 'cod' && !codEnabledByRate) continue;
       if (definition.channel === 'online' && !checkoutVisible({ enabled: row.enabled,
         connectionStatus: row.connectionStatus, environment: row.environment,
         requestEnvironment: environment })) continue;
+      seen.add(row.providerCode);
       const config = row.publicConfig as Record<string, string>;
       output.push({ code: definition.code, channel: definition.channel, label: row.displayName,
         // 顾客看到的付款指引：COD 由确认页按语言生成，转账渠道就是这一段原文。

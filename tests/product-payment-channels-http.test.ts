@@ -262,4 +262,23 @@ test('product payment channels narrow checkout and gate dispatch until paid', { 
       { 'If-Match': `"${shipment.body.data.version}"`, 'Idempotency-Key': randomUUID() });
     assert.equal(dispatched.status, 200, JSON.stringify(dispatched.body));
   });
+
+  await t.test('sandbox site still sees cash on delivery: offline rows ignore environment', async () => {
+    await db.identityRateLimit.deleteMany();
+    // 线下渠道只播种在 production；以前按站点环境精确匹配，sandbox 站点会查不到 cod 行，
+    // 结账页只剩沙箱网关。这条用例锁住「线下渠道与环境无关」这个语义。
+    const previous = process.env.PAYMENTS_ENVIRONMENT;
+    process.env.PAYMENTS_ENVIRONMENT = 'sandbox';
+    try {
+      const cart = await front('POST', 'storefront/cart', undefined, 'SuccessEnvelope');
+      await front('POST', 'storefront/cart/items', { variantId: anyVariantId, quantity: 1 });
+      const quote = await front('POST', 'storefront/checkout/quote', quoteBody(cart.body.data.cartId, rateId));
+      assert.equal(quote.status, 200, JSON.stringify(quote.body));
+      const codes = (quote.body.data.paymentMethods as { code: string }[]).map(method => method.code);
+      assert.ok(codes.includes('cod'), `sandbox 站点也必须能看到货到付款：${codes.join(',') || '(空)'}`);
+    } finally {
+      if (previous === undefined) delete process.env.PAYMENTS_ENVIRONMENT;
+      else process.env.PAYMENTS_ENVIRONMENT = previous;
+    }
+  });
 });
