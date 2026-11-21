@@ -32,3 +32,14 @@ CARRIER_WEBHOOK_SECRETS=
 # 生成：openssl rand -base64 36
 # 配置后可用 `docker compose exec -T api node scripts/reconcile.mjs` 手动触发。
 INTERNAL_JOB_TOKEN=
+
+# ===== 线上支付 =====
+# 支付环境。生产实例不写此行（默认 production）。
+# 只有 staging / 演练实例才设 sandbox —— 设为 sandbox 才会注册 mock 网关。
+# PAYMENTS_ENVIRONMENT=sandbox
+
+# mock 网关签名密钥，仅 sandbox 环境生效，生产不要填。
+# MOCK_PAYMENT_SECRET=
+
+# 说明：PAYMENTS_BASE_URL 由 docker-compose 从 SITE_DOMAIN 自动推导为
+# https://<SITE_DOMAIN>，此处不需要配置。它决定"顾客付完从哪里回来"。

@@ -62,6 +62,16 @@ services:
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
       # 承运商签名回传密钥 JSON；留空时所有承运商回调返回 404（安全默认）
       CARRIER_WEBHOOK_SECRETS: ${CARRIER_WEBHOOK_SECRETS:-}
+      # 线上支付：这个地址是"顾客付完从哪里回来"的基址，缺了它整块线上支付不装配
+      # （webhook 路由不存在、发起支付直接失败），配好渠道也用不了。默认取站点域名。
+      PAYMENTS_BASE_URL: https://${SITE_DOMAIN:?请在 .env 设置 SITE_DOMAIN}
+      # production 实例固定 production，沙箱渠道（mock）只认 sandbox
+      PAYMENTS_ENVIRONMENT: ${PAYMENTS_ENVIRONMENT:-production}
+      # mock 网关签名密钥，仅 sandbox 环境使用；生产留空即可
+      MOCK_PAYMENT_SECRET: ${MOCK_PAYMENT_SECRET:-}
+      # 对账任务令牌：留空则 /internal/jobs/reconcile 返回 503（安全默认）。
+      # 开通线上支付前必须配置，否则"渠道已扣款但回调丢失"的单永远收敛不了。
+      INTERNAL_JOB_TOKEN: ${INTERNAL_JOB_TOKEN:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
