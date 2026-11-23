@@ -20,6 +20,7 @@ const NAV: NavGroup[] = [
   ] },
   { title: '商品', items: [
     { href: '/admin/catalog', label: '商品目录', permission: 'catalog.read', icon: 'box' },
+    { href: '/admin/catalog/import', label: '批量导入', permission: 'catalog.import', icon: 'file' },
     { href: '/admin/inventory', label: '库存', permission: 'inventory.read', icon: 'layers' },
     { href: '/admin/shipping', label: '配送与结账', permission: 'shipping.manage', icon: 'truck' },
     { href: '/admin/coupons', label: '优惠券', permission: 'coupons.read', icon: 'ticket' },

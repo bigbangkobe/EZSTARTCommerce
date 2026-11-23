@@ -834,10 +834,12 @@
 - `apps/api/src/catalog/import-service.ts`：两段式执行。第一段在事务里锁定任务并确认「执行的就是操作员看过的那份」（文件摘要、映射版本、有效行数三者都必须与预览一致），第二段按 `commitMode` 落库——`valid_rows` 每个商品一个事务、允许部分成功；`atomic` 共用一个事务、任一行失败整体回滚。预览快照（含计划）存 `preview` JSONB，执行阶段不重新解析文件。
 - `apps/api/src/media/storage.ts`：`MediaStorage` 增加 `read()`（本地驱动原本已有实现，S3 驱动补签名 GET 回读），导入用它取回 CSV 字节并由服务端自己算 SHA-256 与任务登记值比对。
 - `apps/api/src/catalog/import-controller.ts`：六条路由按契约实现，写动作走会话 + CSRF + Origin，读取只要 `catalog.import`。已在 `app.ts` 注册。
+- 上传通道：`POST /admin/import-files` 签发短时上传目标（键形 `imports/yyyy/mm/<uuid>.csv`，`isImportObjectKey` 与媒体键分开），与 `/media/objects` 同类属**内部通道**，不进 OpenAPI 业务契约，已记入 API_SPEC 3.3。
+- 后台页 `apps/admin/app/admin/catalog/import`：选文件 → 直传 → 建任务 → 预检报告（逐行动作/错误码/警告）→ 确认执行 → 错误报告下载；导航「批量导入」按 `catalog.import` 显示。执行请求只回传预检给出的三个值，前端拼不出绕过预检的执行；`atomic` 模式下若预检有拒绝行，页面直接拦住并提示改用「有效行」模式。
 - 顺带修一个本批引入的回归：读接口习惯用 `withPermission(supplied, null, 'x.read', …)` 表达只读，CSRF 显式化后会把 `null` 判成写路径而 403。`withPermission` 现在把 `null` 解释为只读（写路径由控制器保证不会传 `null`），`authenticated()` 内部的 `readOnly` 仍是显式参数。
 
-验证：根 `tsc` **0 错误**；无数据库单测 **273 项全绿**（新增 `tests/import.test.ts` 14 项：CSV 结构、映射、金额、分组、缺语言、首非空取值、SKU/币种/分类/品牌/市场拒绝、文件内重复 SKU、mode 判定、预览字段、状态机、自定义表头映射）。`prisma validate` 本机无法运行——沙箱禁止把 schema engine 复制进 `node_modules`（`EPERM copyfile … schema-engine-windows.exe`），需在有写权限的终端执行。
+验证：根 `tsc` **0 错误**、`apps/admin` 类型检查 **0 错误**；无数据库单测 **273 项全绿**（新增 `tests/import.test.ts` 14 项：CSV 结构、映射、金额、分组、缺语言、首非空取值、SKU/币种/分类/品牌/市场拒绝、文件内重复 SKU、mode 判定、预览字段、状态机、自定义表头映射）。`prisma validate` 本机无法运行——沙箱禁止把 schema engine 复制进 `node_modules`（`EPERM copyfile … schema-engine-windows.exe`），需在有写权限的终端执行。
 
-边界：**只支持 CSV**，`format=xlsx` 在创建时返回 422 `IMPORT_FORMAT_UNSUPPORTED`（解析 xlsx 需要额外依赖，客户交付模板本就是 CSV）；`stock_qty` 与 `image_urls` 只产生警告，不写库存、不下载图片——库存要走 `inventory.adjust`、图片要走媒体三步上传，各有自己的权限与流水，导入器不能替它们做决定；后台导入页尚未实现，目前需经 API 调用；`atomic` 只保证本轮导入整体回滚，不撤销此前已存在的商品改动。升级已有实例须先备份再跑 `pnpm db:migrate`（本次为第 39 条迁移）。
+边界：**只支持 CSV**，`format=xlsx` 在创建时返回 422 `IMPORT_FORMAT_UNSUPPORTED`（解析 xlsx 需要额外依赖，客户交付模板本就是 CSV）；`stock_qty` 与 `image_urls` 只产生警告，不写库存、不下载图片——库存要走 `inventory.adjust`、图片要走媒体三步上传，各有自己的权限与流水，导入器不能替它们做决定；`atomic` 只保证本轮导入整体回滚，不撤销此前已存在的商品改动；导入文件不做病毒扫描与内容抽样审核，审核责任仍在商家。真实客户 CSV 的全链路验收（建→校验→执行→前台可见）待客户回传合规表与商品清单后进行；升级已有实例须先备份再跑 `pnpm db:migrate`（本次为第 39 条迁移）。
 
 

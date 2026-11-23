@@ -70,6 +70,14 @@ export function isMediaObjectKey(value: string): boolean {
   return /^media\/\d{4}\/\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)$/.test(value);
 }
 
+/**
+ * 导入文件的对象键（M05）：与媒体共用一套签名上传通道，但前缀与扩展名独立，
+ * 避免 CSV 混进媒体库、也避免媒体确认流程把导入文件当成「未确认图片」。
+ */
+export function isImportObjectKey(value: string): boolean {
+  return /^imports\/\d{4}\/\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.csv$/.test(value);
+}
+
 function uint16be(bytes: Uint8Array, offset: number) { return (bytes[offset]! << 8) | bytes[offset + 1]!; }
 function uint32be(bytes: Uint8Array, offset: number) {
   return ((bytes[offset]! << 24) | (bytes[offset + 1]! << 16) | (bytes[offset + 2]! << 8) | bytes[offset + 3]!) >>> 0;

@@ -16,9 +16,19 @@ export class ImportController extends ManagementHttp {
     @Inject('IDENTITY') identity: IdentityService | null) { super(identity); }
   private importService() { if (!this.imports) throw new AuthError(503, 'SERVICE_NOT_READY'); return this.imports; }
 
+  /**
+   * 导入文件的短时上传目标。与 /media/objects 同类的内部通道，不进 OpenAPI 业务契约
+   * （业务契约描述的是任务与结果，不描述上传细节），权限仍是 catalog.import + CSRF + Origin。
+   */
+  @Post('import-files')
+  async fileTarget(@Req() request: ApiRequest, @Res() response: ServerResponse) {
+    await this.guardWrite(request);
+    this.send(response, request, 201, await this.importService().createFileTarget(cookie(request, 'ez_admin_session'),
+      header(request, 'x-csrf-token')));
+  }
+
   @Post('import-jobs')
-  async create(@Body() body: CreateBody, @Req() request: ApiRequest, @Res() response: ServerResponse) {
-    await this.write(request, 'ImportCreateRequest', body);
+  async create(@Body() body: CreateBody, @Req() request: ApiRequest, @Res() response: ServerResponse) {    await this.write(request, 'ImportCreateRequest', body);
     const key = header(request, 'idempotency-key') || undefined;
     this.send(response, request, 201, await this.importService().create(cookie(request, 'ez_admin_session'),
       header(request, 'x-csrf-token'), key, body, this.context(request)));

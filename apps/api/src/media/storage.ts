@@ -10,7 +10,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
-import { isMediaObjectKey, MAX_MEDIA_BYTES } from '../../../../packages/domain/src/media.js';
+import { isImportObjectKey, isMediaObjectKey, MAX_MEDIA_BYTES } from '../../../../packages/domain/src/media.js';
 import { presign } from './s3-signature.js';
 
 export interface TargetUrl { url: string; method: 'PUT' | 'GET'; headers: Record<string, string>; expiresAt: string }
@@ -59,7 +59,8 @@ export class LocalMediaStorage implements MediaStorage {
   constructor(private readonly config: LocalStorageConfig) { this.root = resolve(config.root); }
 
   private path(key: string): string {
-    if (!isMediaObjectKey(key)) throw new Error('Invalid media object key');
+    // 导入用的对象键与媒体键共用这套路径校验：两者都只能落在实例自己的存储根内。
+    if (!isMediaObjectKey(key) && !isImportObjectKey(key)) throw new Error('Invalid media object key');
     const target = resolve(this.root, key);
     // 双重校验：key 语法已限定字符集，这里再确认解析结果仍在根目录内。
     if (!target.startsWith(this.root + sep)) throw new Error('Invalid media object key');

@@ -78,6 +78,18 @@ export class ImportService {
     }, true);
   }
 
+  /** 导入文件的上传目标：与媒体共用签名通道，但前缀是 imports/、权限是 catalog.import。 */
+  async createFileTarget(supplied: string, csrfValue: string) {
+    if (!this.storage) throw new AuthError(503, 'SERVICE_NOT_READY');
+    return this.identity.withPermission(supplied, csrfValue, 'catalog.import', async () => {
+      const now = new Date();
+      const key = `imports/${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${randomUUID()}.csv`;
+      const target = this.storage!.createUploadTarget(key, 'text/csv', new Date(now.getTime() + 15 * 60_000));
+      return { objectKey: key, uploadUrl: target.url, method: target.method, headers: target.headers,
+        expiresAt: target.expiresAt, maxSizeBytes: MAX_IMPORT_BYTES };
+    }, true);
+  }
+
   async get(supplied: string, id: string) {
     return this.identity.withPermission(supplied, null, 'catalog.import', async tx => jobView(await this.load(tx, id)));
   }
