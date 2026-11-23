@@ -98,7 +98,7 @@ export class ImportService {
   async validateJob(supplied: string, csrfValue: string, id: string, ctx: RequestContext) {
     return this.identity.withPermission(supplied, csrfValue, 'catalog.import', async (tx, actor) => {
       const job = await this.load(tx, id, true);
-      assertTransition(job.status, 'validating');
+      this.stateRule(() => assertTransition(job.status, 'validating'));
       if (!this.storage) throw new AuthError(503, 'SERVICE_NOT_READY');
       const bytes = await this.storage.read(job.fileObjectKey);
       if (!bytes) throw new AuthError(422, 'IMPORT_FILE_NOT_FOUND');
@@ -135,8 +135,13 @@ export class ImportService {
 
   async execute(supplied: string, csrfValue: string, id: string, idempotencyKey: string | undefined, body: ExecuteBody, ctx: RequestContext) {
     // 第一段：确认执行的就是操作员看过的那份，并把任务推进到 processing（单独事务提交）。
-    const job = await this.identity.withPermission(supplied, csrfValue, 'catalog.import', async (tx, actor) => {
+    const started = await this.identity.withPermission(supplied, csrfValue, 'catalog.import', async (tx, actor) => {
       const row = await this.load(tx, id, true);
+      // 同一幂等键的重放直接回放结果：网络重试不该看到一个"已完成"的 409。
+      if (idempotencyKey !== undefined && row.idempotencyKey === idempotencyKey
+        && ['processing', 'completed', 'completed_with_errors'].includes(row.status)) {
+        return { row, replay: true };
+      }
       if (row.status === 'completed' || row.status === 'completed_with_errors' || row.status === 'failed') {
         throw new AuthError(409, 'IMPORT_STATE_CONFLICT');
       }
@@ -147,8 +152,10 @@ export class ImportService {
       if (body.expectedValidRows !== row.validRows) throw new AuthError(409, 'IMPORT_VALID_ROWS_MISMATCH');
       await tx.$executeRaw`UPDATE "ImportJob" SET "status" = 'processing', "idempotencyKey" = ${idempotencyKey ?? row.idempotencyKey} WHERE "id" = ${id}::uuid`;
       await this.identity.recordAudit(tx, ctx, actor.id, 'catalog.import.started', id);
-      return row;
+      return { row, replay: false };
     }, true);
+    const job = started.row;
+    if (started.replay) return jobView(job);
 
     const preview = job.preview as StoredPreview | null;
     if (!preview || preview.version !== PREVIEW_VERSION) throw new AuthError(409, 'IMPORT_PREVIEW_MISSING');
@@ -239,7 +246,7 @@ export class ImportService {
   async cancel(supplied: string, csrfValue: string, id: string, reason: string, ctx: RequestContext) {
     return this.identity.withPermission(supplied, csrfValue, 'catalog.import', async (tx, actor) => {
       const job = await this.load(tx, id, true);
-      assertTransition(job.status, 'cancelled');
+      this.stateRule(() => assertTransition(job.status, 'cancelled'));
       await tx.$executeRaw`UPDATE "ImportJob" SET "status" = 'cancelled', "completedAt" = now() WHERE "id" = ${id}::uuid`;
       await this.identity.recordAudit(tx, ctx, actor.id, 'catalog.import.cancelled', id, 'success', reason);
       return { cancelled: true };
@@ -263,6 +270,16 @@ export class ImportService {
     catch (error) {
       const code = (error as { code?: unknown }).code;
       if (typeof code === 'string') throw new AuthError(422, code.replace(/:[a-z_]+$/i, ''));
+      throw error;
+    }
+  }
+
+  /** 状态机冲突是 409（和订单、结算的既有口径一致），不能混进「字段不合法」的 422。 */
+  private stateRule<T>(fn: () => T): T {
+    try { return fn(); }
+    catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === 'string') throw new AuthError(409, code);
       throw error;
     }
   }

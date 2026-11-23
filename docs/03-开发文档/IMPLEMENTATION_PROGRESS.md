@@ -836,9 +836,11 @@
 - `apps/api/src/catalog/import-controller.ts`：六条路由按契约实现，写动作走会话 + CSRF + Origin，读取只要 `catalog.import`。已在 `app.ts` 注册。
 - 上传通道：`POST /admin/import-files` 签发短时上传目标（键形 `imports/yyyy/mm/<uuid>.csv`，`isImportObjectKey` 与媒体键分开），与 `/media/objects` 同类属**内部通道**，不进 OpenAPI 业务契约，已记入 API_SPEC 3.3。
 - 后台页 `apps/admin/app/admin/catalog/import`：选文件 → 直传 → 建任务 → 预检报告（逐行动作/错误码/警告）→ 确认执行 → 错误报告下载；导航「批量导入」按 `catalog.import` 显示。执行请求只回传预检给出的三个值，前端拼不出绕过预检的执行；`atomic` 模式下若预检有拒绝行，页面直接拦住并提示改用「有效行」模式。
+- 幂等与状态码：执行带同一 `Idempotency-Key` 重放时回放原结果（202 + 原计数），不再回「已完成」的 409；状态机冲突（已在执行/已完成的任务再校验或取消）统一 409 `IMPORT_STATE_CONFLICT`，不与字段不合法的 422 混在一起。
+- 回归用例 `tests/import-http.test.ts`（+1 项，本机无法运行——需真实 PostgreSQL）：覆盖上传目标键形状、建任务幂等、预检三项确认值（摘要/映射版本/有效行数）不符即 409、执行后商品与规格落库、发布标记生效、同键重放、`create_only` 全跳过、缺语言整单拒绝且不落库、错误报告、已完成任务不可取消、只读账号 403、缺 CSRF 403。
 - 顺带修一个本批引入的回归：读接口习惯用 `withPermission(supplied, null, 'x.read', …)` 表达只读，CSRF 显式化后会把 `null` 判成写路径而 403。`withPermission` 现在把 `null` 解释为只读（写路径由控制器保证不会传 `null`），`authenticated()` 内部的 `readOnly` 仍是显式参数。
 
-验证：根 `tsc` **0 错误**、`apps/admin` 类型检查 **0 错误**；无数据库单测 **273 项全绿**（新增 `tests/import.test.ts` 14 项：CSV 结构、映射、金额、分组、缺语言、首非空取值、SKU/币种/分类/品牌/市场拒绝、文件内重复 SKU、mode 判定、预览字段、状态机、自定义表头映射）。`prisma validate` 本机无法运行——沙箱禁止把 schema engine 复制进 `node_modules`（`EPERM copyfile … schema-engine-windows.exe`），需在有写权限的终端执行。
+验证：根 `tsc` **0 错误**、`apps/admin` 类型检查 **0 错误**；无数据库单测 **277 项全绿**（新增 `tests/import.test.ts` 14 项：CSV 结构、映射、金额、分组、缺语言、首非空取值、SKU/币种/分类/品牌/市场拒绝、文件内重复 SKU、mode 判定、预览字段、状态机、自定义表头映射；新增 `tests/import-shapes.test.ts` 4 项：用 AJV 把预检响应对 `ImportPreviewEnvelope` 逐字段校验，含 FieldError 形状与「多一个字段就拒绝」）。`prisma validate` 本机无法运行——沙箱禁止把 schema engine 复制进 `node_modules`（`EPERM copyfile … schema-engine-windows.exe`），需在有写权限的终端执行。
 
 边界：**只支持 CSV**，`format=xlsx` 在创建时返回 422 `IMPORT_FORMAT_UNSUPPORTED`（解析 xlsx 需要额外依赖，客户交付模板本就是 CSV）；`stock_qty` 与 `image_urls` 只产生警告，不写库存、不下载图片——库存要走 `inventory.adjust`、图片要走媒体三步上传，各有自己的权限与流水，导入器不能替它们做决定；`atomic` 只保证本轮导入整体回滚，不撤销此前已存在的商品改动；导入文件不做病毒扫描与内容抽样审核，审核责任仍在商家。真实客户 CSV 的全链路验收（建→校验→执行→前台可见）待客户回传合规表与商品清单后进行；升级已有实例须先备份再跑 `pnpm db:migrate`（本次为第 39 条迁移）。
 
