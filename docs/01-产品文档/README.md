@@ -16,6 +16,7 @@
 | [DELIVERY_TOOLCHAIN_SPEC.md](DELIVERY_TOOLCHAIN_SPEC.md) | 交付工具链规范：标准部署包 + 一键起实例 + 批量升级 |
 | [COMMERCIAL_MODEL.md](COMMERCIAL_MODEL.md) | 商业分层与报价模型 v1.0（定稿）：计价项与口径、报价单模板、折扣审批与留痕、关键度量 |
 | [CLIENT_LAUNCH_INPUTS.md](CLIENT_LAUNCH_INPUTS.md) | 客户上线参数表（升级为实例配置源）：逐店需确认的输入 |
+| [PRODUCT_CATALOG_INTAKE.md](PRODUCT_CATALOG_INTAKE.md) | 商品目录导入信息包：合规预检、CSV 字段与校验、批量导入能力规格、验收标准（mrinhk 在用） |
 | [DECISIONS.md](DECISIONS.md) | 首店输入与决策记录 |
 | [REQUIREMENT_RESOLUTION.md](REQUIREMENT_RESOLUTION.md) | 需求处理决议 |
 | [PROJECT_PLAN.md](PROJECT_PLAN.md) | 项目实施方案：阶段、里程碑、团队、工作量、风险与验收门槛 |
