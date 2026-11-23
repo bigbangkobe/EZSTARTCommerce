@@ -745,10 +745,14 @@ export class IdentityService {
 
   async withPermission<T>(supplied: string, csrfValue: string | null, permission: string,
     fn: (tx: Tx, actor: User, session: Prisma.AdminSessionGetPayload<{}>, now: Date) => Promise<T>, serializeAccess = false): Promise<T> {
+    // 各业务模块的读取习惯用 `withPermission(supplied, null, 'x.read', ...)` 表达「只读」，
+    // 写操作则传控制器送来的令牌（缺失时是 ''，不是 null）。
+    // 这里把 null 解释成只读：写路径永远不会传 null，因此不存在"传 null 绕过校验"的入口；
+    // authenticated() 内部的 readOnly 仍然是显式参数，不再有隐式放行。
     return this.authenticated(supplied, csrfValue, async (tx, user, session, now) => {
       this.requirePermission(user, permission);
       return fn(tx, user, session, now);
-    }, serializeAccess);
+    }, serializeAccess, false, csrfValue === null);
   }
 
   async recordAudit(tx: Tx, ctx: RequestContext, actorId: string | null, action: string, objectId: string | null, result = 'success', reason?: string) {

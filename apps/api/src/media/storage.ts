@@ -29,6 +29,8 @@ export interface MediaStorage {
   createUploadTarget(key: string, contentType: string, expiresAt: Date): TargetUrl;
   createReadTarget(key: string, expiresAt: Date): TargetUrl;
   stat(key: string): Promise<StoredObject | null>;
+  /** 服务端回读字节：导入解析与摘要复核要用，缺对象返回 null，不抛 ENOENT。 */
+  read(key: string): Promise<Buffer | null>;
 }
 
 export interface LocalStorageConfig { driver: 'local'; root: string; signingKey: Buffer; basePath: string }
@@ -147,6 +149,17 @@ export class S3MediaStorage implements MediaStorage {
     return { sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'),
       contentType: response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? null,
       prefix: bytes.subarray(0, PREFIX_BYTES) };
+  }
+
+  /** 与 stat 同一条签名 GET 通路；导入用它取回 CSV 字节，上限同样取媒体上限。 */
+  async read(key: string): Promise<Buffer | null> {
+    const target = this.url('GET', key, new Date(Date.now() + 60_000));
+    const response = await fetch(target.url);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error('Media object read failed');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > MAX_MEDIA_BYTES) throw new Error('Media object exceeds limit');
+    return bytes;
   }
 }
 

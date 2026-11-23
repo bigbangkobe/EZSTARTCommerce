@@ -9,6 +9,8 @@ import { RolesController } from './identity/roles-controller.js';
 import { StoreController } from './identity/store-controller.js';
 import { CatalogController } from './catalog/controller.js';
 import { CatalogService } from './catalog/service.js';
+import { ImportController } from './catalog/import-controller.js';
+import { ImportService } from './catalog/import-service.js';
 import { CartController, CheckoutController } from './checkout/controller.js';
 import { CartService } from './checkout/cart-service.js';
 import { CheckoutService } from './checkout/service.js';
@@ -159,13 +161,14 @@ export async function createApp(identity: IdentityService | null = null, options
   const collections = identity ? new CollectionService(identity) : null;
   const workbench = identity ? new WorkbenchService(identity) : null;
   @Module({ controllers: [HealthController, IdentityController, StaffController, RolesController, AuditController, StoreController,
-    CatalogController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
+    CatalogController, ImportController, MediaController, MediaObjectsController, StorefrontController, ShippingController, CartController, CheckoutController,
     OrdersController, PaymentsController, AfterSalesController, InventoryController, PromotionsController, MemberController, CustomersController, PrivacyController,
     MailTestController, ReportsController, AnalyticsController, CarrierWebhookController, ContentController,
     MerchandisingController, ThemeController, CollectionsController, PaymentWebhookController,
     InternalJobsController, WorkbenchController],
     providers: [{ provide: 'IDENTITY', useValue: identity },
       { provide: 'CATALOG', useValue: identity ? new CatalogService(identity) : null },
+      { provide: 'IMPORT', useValue: identity ? new ImportService(identity, mediaStorage) : null },
       { provide: 'MEDIA', useValue: identity && mediaStorage ? new MediaService(identity, mediaStorage) : null },
       { provide: 'CONTENT', useValue: content },
       { provide: 'MERCHANDISING', useValue: merchandising },

@@ -36,6 +36,7 @@ model AdminUser {
   privacyVerifications CustomerPrivacyRequest[] @relation("PrivacyVerifier")
   privacyOwned CustomerPrivacyRequest[] @relation("PrivacyOwner")
   privacyReviewed CustomerPrivacyRequest[] @relation("PrivacyReviewer")
+  importJobs ImportJob[]
 }
 
 model AdminRole {
@@ -1703,4 +1704,36 @@ model ThemeVersion {
   publishedBy String?     @db.Uuid
   @@unique([themeId, version])
   @@index([themeId, publishedAt])
+}
+
+/// 商品批量导入任务（M05）。状态闭集、文件摘要、列映射、预览与逐行错误都在这里，
+/// 执行阶段只认已确认的预览，不重新解析文件，避免"确认了一份、落库另一份"。
+model ImportJob {
+  id             String    @id @db.Uuid
+  status         String    @default("uploaded")
+  format         String
+  mode           String
+  commitMode     String
+  fileObjectKey  String
+  fileSha256     String    @db.Char(64)
+  columnMapping  Json
+  localeSet      String[]
+  mappingVersion Int       @default(1)
+  totalRows      Int       @default(0)
+  validRows      Int       @default(0)
+  invalidRows    Int       @default(0)
+  createdCount   Int       @default(0)
+  updatedCount   Int       @default(0)
+  skippedCount   Int       @default(0)
+  failedCount    Int       @default(0)
+  preview        Json?
+  errorReport    Json?
+  idempotencyKey String?   @unique
+  createdBy      String    @db.Uuid
+  createdByUser  AdminUser @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  validatedAt    DateTime? @db.Timestamptz(3)
+  completedAt    DateTime? @db.Timestamptz(3)
+  @@index([status, createdAt])
+  @@index([createdBy])
 }

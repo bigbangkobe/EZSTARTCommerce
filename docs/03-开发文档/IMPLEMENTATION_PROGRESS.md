@@ -824,3 +824,20 @@
 
 边界：HTTP 契约、状态码、错误码均未变化（写接口缺 CSRF 仍是 403），未连接真实 SMTP 或支付渠道，未发版。本机 `pnpm install` 现在要求 pnpm 8.15.9（`corepack use pnpm@8.15.9`；确需旧版本时用 `pnpm install --config.engine-strict=false`）。旧 `.local-tools` 需用 3.11 重装后 `pnpm check` 的 Python 契约校验才可运行：`py -3.11 -m pip install --force-reinstall --target .local-tools/contract-validation -r packages/contracts/requirements-validation.txt`。
 
+## 2026-11-23：M05 商品批量导入后端（契约已冻结，本次补落地）
+
+范围：`/admin/import-jobs` 六条路由此前只有契约、没有实现（无表、无服务、无 UI）。本批补上后端全链路：建任务 → 校验出预览 → 确认执行 → 取消 / 错误报告。前端导入页与真实客户 CSV 验收留到下一批。
+
+- 领域 `packages/domain/src/import.ts`：CSV 解析（引号、`""` 转义、CRLF、BOM、字段内换行）、列映射校验（值只能是 32 个目标列且不得重复、必填列缺席即拒）、金额解析（只接受 `元` + 最多两位小数，`1,680` / `1e3` / `1.999` 一律拒绝）、按 `product_key` 分组成商品（多行合并多规格）、逐行与商品级校验、动作判定（create / update / skip 由 mode 与既有 SKU 决定）、状态机（uploaded→validating→ready→processing→completed(_with_errors)/failed，早期状态可 cancel）。
+- 第 39 条迁移 `202611231200_import_jobs`：`ImportJob` 表，状态/格式/模式/摘要形状/计数非负/语言闭集/「完成态必须带 completedAt」全部由 CHECK 兜底；`idempotencyKey` 唯一索引让重复提交拿到同一任务。
+- `packages/database/schema.prisma` 同步 `ImportJob` 与 `AdminUser.importJobs` 反向关系。
+- `apps/api/src/catalog/import-service.ts`：两段式执行。第一段在事务里锁定任务并确认「执行的就是操作员看过的那份」（文件摘要、映射版本、有效行数三者都必须与预览一致），第二段按 `commitMode` 落库——`valid_rows` 每个商品一个事务、允许部分成功；`atomic` 共用一个事务、任一行失败整体回滚。预览快照（含计划）存 `preview` JSONB，执行阶段不重新解析文件。
+- `apps/api/src/media/storage.ts`：`MediaStorage` 增加 `read()`（本地驱动原本已有实现，S3 驱动补签名 GET 回读），导入用它取回 CSV 字节并由服务端自己算 SHA-256 与任务登记值比对。
+- `apps/api/src/catalog/import-controller.ts`：六条路由按契约实现，写动作走会话 + CSRF + Origin，读取只要 `catalog.import`。已在 `app.ts` 注册。
+- 顺带修一个本批引入的回归：读接口习惯用 `withPermission(supplied, null, 'x.read', …)` 表达只读，CSRF 显式化后会把 `null` 判成写路径而 403。`withPermission` 现在把 `null` 解释为只读（写路径由控制器保证不会传 `null`），`authenticated()` 内部的 `readOnly` 仍是显式参数。
+
+验证：根 `tsc` **0 错误**；无数据库单测 **273 项全绿**（新增 `tests/import.test.ts` 14 项：CSV 结构、映射、金额、分组、缺语言、首非空取值、SKU/币种/分类/品牌/市场拒绝、文件内重复 SKU、mode 判定、预览字段、状态机、自定义表头映射）。`prisma validate` 本机无法运行——沙箱禁止把 schema engine 复制进 `node_modules`（`EPERM copyfile … schema-engine-windows.exe`），需在有写权限的终端执行。
+
+边界：**只支持 CSV**，`format=xlsx` 在创建时返回 422 `IMPORT_FORMAT_UNSUPPORTED`（解析 xlsx 需要额外依赖，客户交付模板本就是 CSV）；`stock_qty` 与 `image_urls` 只产生警告，不写库存、不下载图片——库存要走 `inventory.adjust`、图片要走媒体三步上传，各有自己的权限与流水，导入器不能替它们做决定；后台导入页尚未实现，目前需经 API 调用；`atomic` 只保证本轮导入整体回滚，不撤销此前已存在的商品改动。升级已有实例须先备份再跑 `pnpm db:migrate`（本次为第 39 条迁移）。
+
+
