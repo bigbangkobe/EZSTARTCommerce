@@ -218,13 +218,50 @@ docker run --rm --network ezstart-staging_default \
 
 实测：318 KB / 备份 <1s / 恢复 2s / 95 表一致 / 新迁移应用成功（35 → 36）。
 
-### 6.4 备份
+### 6.4 备份（2026-11-23 起每日自动）
+
+**现状**：生产由 systemd timer 每天 03:10 自动备份，不再依赖"部署时才备份"。
+
+| 项 | 值 |
+|---|---|
+| 脚本 | `/home/ec2-user/ezstart-backup.sh`（`chmod 750`） |
+| 单元 | `/etc/systemd/system/ezstart-backup.{service,timer}`，`Persistent=true` |
+| 输出 | `/opt/ezstart-backups/ezstart-<日期>-<时分>.dump`（`pg_dump -Fc`，`chmod 600`） |
+| 校验 | 回读 `pg_restore -l`，列出 95 个 `TABLE DATA` 才算成功；截断的 dump 算失败 |
+| 保留 | 默认 14 份，自动裁剪（`KEEP_BACKUPS` 可调） |
+| 日志 | `/opt/ezstart-backups/backup.log` |
+
+手动触发与核验：
 
 ```bash
-docker exec ezstart-mrinhk-postgres-1 pg_dump -U <user> <db> | gzip > /home/ec2-user/backup-$(date +%F).sql.gz
+sudo systemctl start ezstart-backup.service
+tail -3 /opt/ezstart-backups/backup.log
+systemctl list-timers ezstart-backup.timer
 ```
 
-需记录：备份文件名、大小、行数抽查结果、存放位置（**建议异机/异桶，当前为同机，属风险**）。
+```bash
+# 兜底：不走脚本，直接恢复成 SQL 文本看内容是否完整
+gunzip -c /opt/ezstart-backups/ezstart-20261121-101945.sql.gz | head -20
+```
+
+**异机备份仍未完成（仍是同盘）**。脚本已支持对象存储，配好这两样即生效，无需改代码：
+
+```bash
+sudo tee /etc/ezstart-backup.env >/dev/null <<'EOF'
+BACKUP_BUCKET=s3://<桶名>/ezstart-mrinhk
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=ap-northeast-1
+EOF
+sudo chmod 600 /etc/ezstart-backup.env
+sudo systemctl start ezstart-backup.service && tail -2 /opt/ezstart-backups/backup.log
+```
+
+> 服务器上的 `aws` CLI 已安装但**没有凭据、也没有 IAM role**（`aws sts get-caller-identity` 返回 `NoCredentials`）。
+> 最小权限：该 IAM 用户只需 `s3:PutObject`（恢复演练再加 `s3:GetObject`），桶开版本控制 + 生命周期。
+> 另外建议在 Lightsail 控制台打开每日自动快照——那是控制台操作，CLI 同样需要凭据。
+
+需记录：备份文件名、大小、`pg_restore -l` 表数、存放位置（本机 / 桶前缀）。
 
 ### 6.5 回滚
 
@@ -411,7 +448,7 @@ docker rmi ezstart-staging-api                          # 删镜像
 | D3 | compose 模板头部硬编码 `35.79.20.20` | 新客户实例带出旧服务器信息 | W9 |
 | D4 | Caddy 端口硬编码 80/443 | 同机多实例冲突 | W9 |
 | D5 | 无独立 staging | 支付/迁移演练有生产风险 | W4 |
-| D6 | 备份与数据同机 | 主机故障即同时丢失 | W4 |
+| D6 | 备份与数据同机 | 主机故障即同时丢失 | W4；2026-11-23 已加每日自动备份与校验，**异机部分仍待桶与凭据** |
 
 ---
 
@@ -436,6 +473,9 @@ docker rmi ezstart-staging-api                          # 删镜像
 | 2026-11-18 | 生产部署 `7c1b569`（25 条迁移），报表模块上线 | — |
 | 2026-11-20 | 本文档建立；实测连通与状态快照；代码 `234c746`（35 条迁移） | — |
 | 2026-11-20 | staging 库重建并部署支付版本 `c8c6760`；36 条迁移从零应用；支付冒烟 25/25；记录迁移校验和换行符坑 | — |
+| 2026-11-23 | 安全收口：超管密码轮换为一次性临时密码（`mustChangePassword=true`，28 个旧会话全部吊销）；`ADMIN_REQUIRE_MFA` 由 `false` 恢复为 `true` 并重建 api（正确密码应答 200→202）；操作程序写入 [ADMIN_RECOVERY_RUNBOOK.md](ADMIN_RECOVERY_RUNBOOK.md) | — |
+| 2026-11-23 | 备份闭环：安装 `/home/ec2-user/ezstart-backup.sh` 与 `ezstart-backup.timer`（每日 03:10、`pg_restore -l` 校验、保留 14 份）；首跑 356,939 bytes / 95 张表；异机上传待 `BACKUP_BUCKET` 与凭据 | — |
+| 2026-11-23 | 代码侧新增 M05 批量导入（第 39 条迁移 `202611231200_import_jobs`）与 CSRF 硬化，**尚未部署到本实例**；发布步骤见 [RELEASE_M05_IMPORT.md](RELEASE_M05_IMPORT.md) | — |
 | 2026-11-20 | **生产升级到 `61682e8`**（36 条迁移），线上支付编排/退款/对账代码上线；渠道仍未启用；停机约 30 秒；备份 `ezstart-20261120-151337.sql.gz` | — |
 
 ---
