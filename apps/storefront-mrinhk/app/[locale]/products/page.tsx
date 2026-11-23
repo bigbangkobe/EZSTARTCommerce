@@ -5,6 +5,7 @@ import { altPaths, copyFor, isLocale, type Locale } from '../../../lib/i18n';
 import { fetchContentRelease } from '../../../lib/content';
 import { fetchProducts } from '../../../lib/products';
 import { ProductList } from '../../product-list';
+import { ScrollProgress } from '../../scroll-progress';
 import AnalyticsTracker from '../../analytics-tracker';
 import SectionTracker from '../../section-tracker';
 
@@ -37,6 +38,8 @@ export default async function ProductsPage({ params }: { params: Promise<{ local
       <div className="container">
         <AnalyticsTracker pageKey="products" locale={locale} />
         <SectionTracker pageKey="products" publishVersionId={contentRelease} locale={locale} />
+        {/* 右侧滑动进度条：列表会自动续载，客人滑到哪、还剩多少，有个位置感。 */}
+        <ScrollProgress label={t.products.progressLabel} />
         <div className="red-line" />
         <div className="section-head">
           <span className="num">壱</span>
@@ -56,8 +59,8 @@ export default async function ProductsPage({ params }: { params: Promise<{ local
             </div>
           </div>
         ) : (
-          // 首屏走服务端渲染，其余批次由客户端带游标续取：一页只铺 24 张，
-          // 但「全部商品」必须真的能看全 269 件（之前丢掉了 nextCursor，只到 25 件）。
+          // 首屏走服务端渲染，其余批次滑到底部附近自动续取：一页只铺 24 张，
+          // 但「全部商品」必须真的能看全（之前丢掉了 nextCursor，只到 25 件）。
           <ProductList locale={locale} initial={products} initialCursor={result.nextCursor} />
         )}
       </div>

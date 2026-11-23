@@ -317,6 +317,33 @@ img { max-width: 100%; }
 .product-card:hover .product-more { color: var(--red); gap: 7px; }
 .product-stock { font-size: 0.78rem; color: var(--muted); }
 
+/* ---------- 商品流：滑到底自动续载 ---------- */
+/* 这个是「哨兵 + 状态区」：IntersectionObserver 盯着它，进入视口前 900px 就取下一批。 */
+.product-feed {
+  display: grid; justify-items: center; gap: 12px;
+  padding: 26px 0 6px; min-height: 72px;
+}
+.product-feed-loading {
+  font-size: 0.78rem; letter-spacing: 0.14em; color: var(--muted);
+  animation: feed-pulse 1.2s ease-in-out infinite;
+}
+@keyframes feed-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.9; } }
+.product-feed-note { font-size: 0.78rem; letter-spacing: 0.08em; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .product-feed-loading { animation: none; opacity: 0.7; } }
+
+/* ---------- 右侧滑动进度条 ---------- */
+/* 3px 细条贴在视口右缘：不占位、不吃点击，只在滚动时给出「读到哪了」的位置感。 */
+.scroll-rail {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 3px; z-index: 60;
+  pointer-events: none; background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+.scroll-rail-fill {
+  width: 100%; height: 100%; transform-origin: top center; transform: scaleY(var(--p, 0));
+  background: linear-gradient(180deg, var(--red) 0%, var(--red-deep) 100%);
+  will-change: transform;
+}
+@media (max-width: 720px) { .scroll-rail { width: 2px; } }
+
 /* ---------- 服务承诺 ---------- */
 .promise-grid { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(212px, 1fr)); gap: 12px; }
 .promise {
