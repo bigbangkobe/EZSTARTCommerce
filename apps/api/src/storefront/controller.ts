@@ -1,9 +1,10 @@
 import { Controller, Get, Inject, Param, Query, Req, Res } from '@nestjs/common';
 import type { ServerResponse } from 'node:http';
 import { PREVIEW_ROBOTS_HEADER, PREVIEW_TOKEN_PATTERN } from '../../../../packages/domain/src/preview.js';
-import type { ApiRequest } from '../identity/controller.js';
+import { header, uuid, type ApiRequest } from '../identity/controller.js';
 import { ManagementHttp } from '../identity/management-http.js';
 import { AuthError, IdentityService } from '../identity/service.js';
+import { MediaService } from '../media/service.js';
 import { StorefrontService } from './service.js';
 
 /** 查询参数一律当作不可信输入：长度先收敛，语义再交给服务层判断。 */
@@ -17,6 +18,7 @@ function text(value: unknown, max: number): string | null {
 @Controller('storefront')
 export class StorefrontController extends ManagementHttp {
   constructor(@Inject('STOREFRONT') private readonly storefront: StorefrontService | null,
+    @Inject('MEDIA') private readonly media: MediaService | null,
     @Inject('IDENTITY') identity: IdentityService | null) { super(identity); }
   private front() { if (!this.storefront) throw new AuthError(503, 'SERVICE_NOT_READY'); return this.storefront; }
 
@@ -26,9 +28,36 @@ export class StorefrontController extends ManagementHttp {
     this.send(response, request, 200, await this.front().config(text(locale, 10), text(marketCode, 8)));
   }
 
+  /**
+   * 商品图：前台用相对路径 /api/v1/storefront/media/<mediaId> 引用（Next 重写到本服务）。
+   * 只放 ready 对象；ETag 用内容摘要，命中 If-None-Match 直接 304。
+   * 内容按摘要寻址、不可变，所以可以长缓存——避免每次列表渲染都回源读盘。
+   */
+  @Get('media/:id')
+  async image(@Param('id') id: string, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    if (!this.media) throw new AuthError(503, 'SERVICE_NOT_READY');
+    const asset = await this.media.publicImage(uuid(id));
+    const etag = `"${asset.sha256}"`;
+    const ifNoneMatch = header(request, 'if-none-match');
+    if (ifNoneMatch && ifNoneMatch.split(',').some(value => value.trim() === etag)) {
+      response.statusCode = 304;
+      response.setHeader('ETag', etag);
+      response.end();
+      return;
+    }
+    response.statusCode = 200;
+    response.setHeader('Content-Type', asset.contentType);
+    response.setHeader('Content-Length', String(asset.bytes.length));
+    response.setHeader('ETag', etag);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    response.end(asset.bytes);
+  }
+
   @Get('products')
   async products(@Query('locale') locale: unknown, @Query('marketCode') marketCode: unknown, @Query('limit') limit: unknown,
-    @Query('cursor') cursor: unknown, @Query('q') query: unknown, @Req() request: ApiRequest, @Res() response: ServerResponse) {
+    @Query('cursor') cursor: unknown, @Query('q') query: unknown,
+    @Req() request: ApiRequest, @Res() response: ServerResponse) {
     const page = this.pagination(limit, cursor);
     this.send(response, request, 200, await this.front().listProducts(text(locale, 10), text(marketCode, 8),
       page.limit, page.cursor, text(query, 200)));

@@ -37,6 +37,13 @@ const apiBase = process.env.API_INTERNAL_ORIGIN ?? 'http://127.0.0.1:3001';
 /** 与后台店铺设置的市场码一致；报价、目录都要带，否则服务端按默认市场处理。 */
 const SITE_MARKET = 'HK';
 
+/**
+ * 商品图走同源相对路径：浏览器请求 /api/v1/storefront/media/<id>，
+ * 由 next.config 的 rewrite 转给 API（服务端只放 ready 对象，ETag 用内容摘要）。
+ * 不拼绝对域名，避免本地预览与线上各写一份。
+ */
+const MEDIA_PATH = '/api/v1/storefront/media';
+
 type ApiVariant = {
   id: string;
   sku: string;
@@ -130,6 +137,13 @@ export async function fetchProduct(slug: string, locale?: string): Promise<Produ
   return first.item ? toProduct(first.item) : null;
 }
 
+/** 主图 = 排位最靠前的那张；没有媒体时返回 undefined，卡片退回首字母占位。 */
+function primaryImage(media: { mediaId: string; position?: number }[] | undefined): string | undefined {
+  const ordered = [...(media ?? [])].sort((left, right) => (left.position ?? 0) - (right.position ?? 0));
+  const first = ordered[0];
+  return first?.mediaId ? `${MEDIA_PATH}/${first.mediaId}` : undefined;
+}
+
 export function toProduct(item: ApiProduct): Product {
   const price = startingPrice(item.variants ?? []);
   return {
@@ -142,6 +156,7 @@ export function toProduct(item: ApiProduct): Product {
       currency: variant.currency, available: variant.available })),
     price: price?.price ?? 0,
     currency: price?.currency ?? 'HKD',
+    image: primaryImage(item.media),
     inStock: item.inStock,
   };
 }

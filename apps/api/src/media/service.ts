@@ -115,4 +115,22 @@ export class MediaService {
     if (!row?.sha256) return null;
     return { contentType: row.contentType, sha256: row.sha256 };
   }
+
+  /**
+   * 前台展示：按 mediaId 读取已确认（ready）的图片字节。
+   *
+   * 只放 ready 行，摘要同时用作 ETag——内容按摘要寻址，所以可以长缓存。
+   * 只有本地驱动才有 read()；S3 驱动请继续用签名 GET（MediaObjectsController），
+   * 这里显式 404 而不是悄悄回退，避免配错存储时前台拿到半截响应。
+   */
+  async publicImage(id: string): Promise<{ bytes: Buffer; contentType: string; sha256: string }> {
+    const row = await this.db.mediaAsset.findUnique({ where: { id },
+      select: { objectKey: true, contentType: true, sha256: true, status: true } });
+    if (!row || row.status !== 'ready' || !row.sha256) throw new AuthError(404, 'NOT_FOUND');
+    const reader = this.storage as MediaStorage & { read?: (key: string) => Promise<Buffer | null> };
+    if (typeof reader.read !== 'function') throw new AuthError(404, 'NOT_FOUND');
+    const bytes = await reader.read(row.objectKey);
+    if (!bytes) throw new AuthError(404, 'NOT_FOUND');
+    return { bytes, contentType: row.contentType, sha256: row.sha256 };
+  }
 }
