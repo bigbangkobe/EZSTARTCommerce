@@ -228,9 +228,10 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   const waLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappGreeting)}`;
   const sections = theme?.homeSections?.length ? theme.homeSections : DEFAULT_SECTIONS;
   const categories = categoryResult.items.filter(item => item.slug);
-  // 首页角标不再假装这是总数：接口按页给，拿不到真实总条数，翻页未到底时补一个「+」。
+  // 首页角标用接口给的真实总数；拿不到时才退回「第一页条数」并标个 +。
   const productCount = result.ok ? result.products.length : 0;
-  const productCountLabel = result.ok && result.nextCursor ? `${productCount}+` : productCount > 0 ? `${productCount}` : '—';
+  const productTotal = result.ok ? result.total : null;
+  const productCountLabel = productTotal ? `${productTotal}` : productCount > 0 ? `${productCount}+` : '—';
   const marks = sectionMarks(sections);
 
   return (

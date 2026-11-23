@@ -108,6 +108,10 @@ test('storefront reads only published, market-eligible data', { timeout: 120_000
     const firstPage = await storefront.listProducts('en', 'HK', 1, null, null);
     assert.equal(firstPage.hasMore, true);
     assert.equal(firstPage.items.length, 1);
+    // total 与 items 同一套可售过滤：分页只切页，总数不跟着变（前台进度条靠它算分母）。
+    assert.equal(firstPage.total, 2);
+    assert.equal((await storefront.listProducts('en', 'TW', 25, null, null)).total, 1, '审核市场只计清单内商品');
+    assert.equal((await storefront.listProducts('en', 'HK', 25, null, 'no-such-product')).total, 0, '搜索条件同样进 total');
     const nextPage = await storefront.listProducts('en', 'HK', 1, firstPage.nextCursor, null);
     assert.deepEqual(nextPage.items.map(entry => entry.id), [live, soldOut].filter(id => id !== firstPage.items[0]!.id));
 

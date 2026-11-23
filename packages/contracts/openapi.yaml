@@ -6141,11 +6141,13 @@ components:
         data:
           type: object
           additionalProperties: false
-          required: [items, nextCursor, hasMore]
+          required: [items, nextCursor, hasMore, total]
           properties:
             items: { type: array, items: { $ref: '#/components/schemas/PublicProduct' } }
             nextCursor: { type: [string, 'null'] }
             hasMore: { type: boolean }
+            # 与 items 同一套可售过滤下的总数：前台用它显示「已出现 N / 总数」的进度，避免只靠 hasMore 猜。
+            total: { type: integer, minimum: 0 }
         meta: { $ref: '#/components/schemas/ResponseMeta' }
     PublicCategoryEnvelope:
       type: object

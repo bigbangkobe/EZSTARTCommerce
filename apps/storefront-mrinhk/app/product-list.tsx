@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { copyFor, fill, type Locale } from '../lib/i18n';
 import { toProduct, type ApiProduct, type Product } from '../lib/product-view';
 import { ProductCards } from './product-cards';
+import { ProductProgress } from './product-progress';
 
 /** 每批追加的数量：接口单页上限 100，取 24 是为了首屏与后续批次的行数都对齐网格。 */
 const BATCH = 24;
@@ -16,20 +17,22 @@ type Status = 'idle' | 'loading' | 'error';
 /**
  * 商品列表：首屏由服务端渲染（SEO 有内容），之后滑到底部附近自动续取下一批，像一页铺到底。
  *
- * 为什么要这样：/products 是「全部商品」的唯一入口，接口默认只给一页；之前把 nextCursor 丢掉，
- * 269 件商品里客人只看得到最新 24 件。点击「载入更多」能救，但多一步操作就少一批人看到。
+ * 右侧进度条的数字与填充都来自「已出现 / 总数」：总数用接口返回的 total，
+ * 与分页同一套可售过滤，所以不会出现「条满了但还差几件」。
  *
  * /api/v1/* 已被 next.config 的 rewrite 转到 API，所以这里用同源相对路径，
  * 不需要把 API 内网地址暴露给浏览器。
  */
-export function ProductList({ locale, initial, initialCursor }: {
+export function ProductList({ locale, initial, initialCursor, initialTotal }: {
   locale: Locale;
   initial: Product[];
   initialCursor: string | null;
+  initialTotal: number | null;
 }) {
   const t = copyFor[locale].products;
   const [products, setProducts] = useState<Product[]>(initial);
   const [cursor, setCursor] = useState<string | null>(initialCursor);
+  const [total, setTotal] = useState<number | null>(initialTotal);
   const [status, setStatus] = useState<Status>('idle');
   const [mounted, setMounted] = useState(false);
   const sentinel = useRef<HTMLDivElement | null>(null);
@@ -46,9 +49,11 @@ export function ProductList({ locale, initial, initialCursor }: {
       const query = new URLSearchParams({ locale, marketCode: MARKET, limit: String(BATCH), cursor });
       const res = await fetch(`/api/v1/storefront/products?${query.toString()}`, { headers: { accept: 'application/json' } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.json() as { data?: { items?: ApiProduct[]; nextCursor?: string | null } };
+      const body = await res.json() as { data?: { items?: ApiProduct[]; nextCursor?: string | null; total?: number | null } };
       const items = (body.data?.items ?? []).map(toProduct);
       // 商品在翻页途中被下架时游标边界会移动，按 id 去重，宁可少一张也不重复。
+      // 每次续取都刷新总数：老板在这期间上架/下架，进度条跟着重算才对。
+      if (typeof body.data?.total === 'number') setTotal(body.data.total);
       setProducts((prev) => {
         const seen = new Set(prev.map((item) => item.id));
         return [...prev, ...items.filter((item) => !seen.has(item.id))];
@@ -80,8 +85,15 @@ export function ProductList({ locale, initial, initialCursor }: {
 
   return (
     <>
+      <ProductProgress loaded={products.length} total={total} label={t.progressLabel} />
       <ProductCards products={products} locale={locale} />
       <div className="product-feed" ref={sentinel}>
+        {/* 手机窄屏浮层会和卡片打架，进度数字改在这里显示；桌面由图定浮层显示。 */}
+        {total ? (
+          <p className="product-progress-inline" role="status">
+            {fill(t.shownOf, { loaded: products.length, total })}
+          </p>
+        ) : null}
         {status === 'loading' && <span className="product-feed-loading" aria-hidden="true">{t.loadingMore}</span>}
         {status === 'error' && (
           <>

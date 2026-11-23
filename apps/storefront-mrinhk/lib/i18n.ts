@@ -140,7 +140,8 @@ const zhHK = {
     loadFailed: '載入更多商品失敗，請稍後再試。',
     retry: '重試',
     allLoaded: '已顯示全部 {count} 件商品',
-    progressLabel: '滑動進度',
+    progressLabel: '已顯示商品進度',
+    shownOf: '已顯示 {loaded} / {total} 件',
     thumbFallback: '商品圖片',
   },
   categories: {
@@ -461,7 +462,8 @@ const zhCN: Copy = {
     loadFailed: '加载更多商品失败，请稍后再试。',
     retry: '重试',
     allLoaded: '已显示全部 {count} 件商品',
-    progressLabel: '滑动进度',
+    progressLabel: '已显示商品进度',
+    shownOf: '已显示 {loaded} / {total} 件',
     thumbFallback: '商品图片',
   },
   categories: {
@@ -780,7 +782,8 @@ const en: Copy = {
     loadFailed: 'Could not load more products. Please try again.',
     retry: 'Try again',
     allLoaded: 'All {count} products shown',
-    progressLabel: 'Scroll progress',
+    progressLabel: 'Products shown progress',
+    shownOf: '{loaded} / {total} products shown',
     thumbFallback: 'Product photo',
   },
   categories: {

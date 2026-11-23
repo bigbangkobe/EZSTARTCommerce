@@ -241,7 +241,7 @@ export class StorefrontService {
       const locale = this.locale(settings, localeInput);
       const market = this.market(settings, marketInput);
       // 没有可售市场时前台是关闭的：返回空集合，而不是把全站商品都抛出去。
-      if (!market) return { items: [], hasMore: false, nextCursor: null };
+      if (!market) return { items: [], hasMore: false, nextCursor: null, total: 0 };
       if (cursor && !await tx.product.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
       const now = new Date();
       const where: Prisma.ProductWhereInput = {
@@ -253,11 +253,16 @@ export class StorefrontService {
           { translations: { some: { slug: { contains: query, mode: 'insensitive' } } } },
         ] } : {}),
       };
-      const rows = await tx.product.findMany({ where, include: includeProduct, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: limit + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
+      // 总数必须与列表同一套 where：前台用它显示「已出现 N / 总数」，
+      // 两套口径不一致的话进度条会永远差几件或者提前满格。
+      const [rows, total] = await Promise.all([
+        tx.product.findMany({ where, include: includeProduct, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: limit + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) }),
+        tx.product.count({ where }),
+      ]);
       const items = rows.slice(0, limit).map(row => this.publicView(row, locale, settings.defaultLocale));
       const hasMore = rows.length > limit;
-      return { items, hasMore, nextCursor: hasMore ? items.at(-1)!.id : null };
+      return { items, hasMore, nextCursor: hasMore ? items.at(-1)!.id : null, total };
     });
   }
 

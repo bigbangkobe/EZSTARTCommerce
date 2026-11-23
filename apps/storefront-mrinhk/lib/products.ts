@@ -1,9 +1,9 @@
 // 商品数据获取：接 EZSTARTCommerce 核心 API（apps/api）的公开前台接口。
-// 对应接口：GET /api/v1/storefront/products（返回 envelope：{ data: { items, hasMore, nextCursor }, meta }）
+// 对应接口：GET /api/v1/storefront/products（返回 envelope：{ data: { items, hasMore, nextCursor, total }, meta }）
 // 字段契约见 packages/contracts/openapi.yaml 的 StorefrontProduct。
 //
 // 类型与纯展示函数在 lib/product-view.ts：那边不碰 fetch，客户端组件才能复用。
-// 这里的职责只有「取数 + 透出游标」，列表渲染不在这里做决定。
+// 这里的职责只有「取数 + 透出游标与总数」，列表渲染不在这里做决定。
 
 import { toProduct, type ApiProduct, type Product } from './product-view';
 
@@ -12,7 +12,7 @@ export type { Product, ProductVariant } from './product-view';
 export { formatPrice, toProduct } from './product-view';
 
 export type ProductResult =
-  | { ok: true; products: Product[]; nextCursor: string | null }
+  | { ok: true; products: Product[]; nextCursor: string | null; total: number | null }
   | { ok: false; error: 'unavailable' };
 
 // 语言是服务端接口的必填业务参数（不传就落到店铺默认语言）：
@@ -22,17 +22,17 @@ const apiBase = process.env.API_INTERNAL_ORIGIN ?? 'http://127.0.0.1:3001';
 /** 与后台店铺设置的市场码一致；报价、目录都要带，否则服务端按默认市场处理。 */
 const SITE_MARKET = 'HK';
 
-type ListPage = { items: ApiProduct[]; nextCursor: string | null };
+type ListPage = { items: ApiProduct[]; nextCursor: string | null; total: number | null };
 
 /**
  * 拉取在售商品列表。
- * cursor 为空时取第一页；返回的 nextCursor 交给页面做「载入更多」，不在这里替它翻完——
- * 前台一次铺 269 张卡既拖慢首屏，也让运营排序失去意义。
+ * cursor 为空时取第一页；返回的 nextCursor 交给页面续取，total 用来显示「已出现 N / 总数」。
+ * 不在这里替页面翻完——一次铺几百张卡既拖慢首屏，也让运营排序失去意义。
  */
 export async function fetchProducts(locale?: string, limit?: number, cursor?: string | null): Promise<ProductResult> {
   const page = await requestList(locale, limit, cursor);
   if (!page) return { ok: false, error: 'unavailable' };
-  return { ok: true, products: page.items.map(toProduct), nextCursor: page.nextCursor };
+  return { ok: true, products: page.items.map(toProduct), nextCursor: page.nextCursor, total: page.total };
 }
 
 /**
@@ -55,15 +55,22 @@ async function requestList(locale?: string, limit?: number, cursor?: string | nu
 }
 
 async function getList(query: URLSearchParams): Promise<{ status: number; page: ListPage }> {
-  const empty: ListPage = { items: [], nextCursor: null };
+  const empty: ListPage = { items: [], nextCursor: null, total: null };
   try {
     const res = await fetch(`${apiBase}/api/v1/storefront/products?${query.toString()}`, {
       next: { revalidate: 60 },
     });
     if (!res.ok) return { status: res.status, page: empty };
     // 服务端统一返回 { data, meta } envelope，不能直接在根上取 items
-    const body = (await res.json()) as { data?: { items?: ApiProduct[]; nextCursor?: string | null } };
-    return { status: 200, page: { items: body.data?.items ?? [], nextCursor: body.data?.nextCursor ?? null } };
+    const body = (await res.json()) as { data?: { items?: ApiProduct[]; nextCursor?: string | null; total?: number | null } };
+    return {
+      status: 200,
+      page: {
+        items: body.data?.items ?? [],
+        nextCursor: body.data?.nextCursor ?? null,
+        total: typeof body.data?.total === 'number' ? body.data.total : null,
+      },
+    };
   } catch {
     // 本地未启动 API（3001）或生产 API 不可用时降级
     return { status: 0, page: empty };

@@ -5,7 +5,6 @@ import { altPaths, copyFor, isLocale, type Locale } from '../../../lib/i18n';
 import { fetchContentRelease } from '../../../lib/content';
 import { fetchProducts } from '../../../lib/products';
 import { ProductList } from '../../product-list';
-import { ScrollProgress } from '../../scroll-progress';
 import AnalyticsTracker from '../../analytics-tracker';
 import SectionTracker from '../../section-tracker';
 
@@ -29,17 +28,16 @@ export default async function ProductsPage({ params }: { params: Promise<{ local
   if (!isLocale(raw)) notFound();
   const locale: Locale = raw;
   const t = copyFor[locale];
-  // 24 件一批：接口默认只给 25 且上限 100，首屏取满一整批，剩下的交给「载入更多」带游标续取。
+  // 24 件一批：接口默认只给 25 且上限 100，首屏取满一整批，剩下的交给无缝续载带游标取。
   const [result, contentRelease] = await Promise.all([fetchProducts(locale, 24), fetchContentRelease(locale)]);
   const products = result.ok ? result.products : [];
+  const total = result.ok ? result.total : null;
 
   return (
     <section className="section" data-ez-section="products.list" data-ez-section-id="products:list">
       <div className="container">
         <AnalyticsTracker pageKey="products" locale={locale} />
         <SectionTracker pageKey="products" publishVersionId={contentRelease} locale={locale} />
-        {/* 右侧滑动进度条：列表会自动续载，客人滑到哪、还剩多少，有个位置感。 */}
-        <ScrollProgress label={t.products.progressLabel} />
         <div className="red-line" />
         <div className="section-head">
           <span className="num">壱</span>
@@ -61,7 +59,7 @@ export default async function ProductsPage({ params }: { params: Promise<{ local
         ) : (
           // 首屏走服务端渲染，其余批次滑到底部附近自动续取：一页只铺 24 张，
           // 但「全部商品」必须真的能看全（之前丢掉了 nextCursor，只到 25 件）。
-          <ProductList locale={locale} initial={products} initialCursor={result.nextCursor} />
+          <ProductList locale={locale} initial={products} initialCursor={result.nextCursor} initialTotal={total} />
         )}
       </div>
     </section>

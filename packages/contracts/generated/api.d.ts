@@ -3461,6 +3461,7 @@ export interface components {
                 items: components["schemas"]["PublicProduct"][];
                 nextCursor: string | null;
                 hasMore: boolean;
+                total: number;
             };
             meta: components["schemas"]["ResponseMeta"];
         };

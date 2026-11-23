@@ -331,18 +331,35 @@ img { max-width: 100%; }
 .product-feed-note { font-size: 0.78rem; letter-spacing: 0.08em; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .product-feed-loading { animation: none; opacity: 0.7; } }
 
-/* ---------- 右侧滑动进度条 ---------- */
-/* 3px 细条贴在视口右缘：不占位、不吃点击，只在滚动时给出「读到哪了」的位置感。 */
-.scroll-rail {
+/* ---------- 右侧商品进度条 ---------- */
+/* 填多少 = 已出现 / 总数（不是滚动进度）：3px 细条贴视口右缘，不占位、不吃点击。 */
+.product-progress {
   position: fixed; top: 0; right: 0; bottom: 0; width: 3px; z-index: 60;
-  pointer-events: none; background: color-mix(in srgb, var(--ink) 7%, transparent);
+  pointer-events: none; background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
-.scroll-rail-fill {
-  width: 100%; height: 100%; transform-origin: top center; transform: scaleY(var(--p, 0));
+.product-progress-fill {
+  width: 100%; height: 100%; transform-origin: top center; transform: scaleY(0);
   background: linear-gradient(180deg, var(--red) 0%, var(--red-deep) 100%);
+  transition: transform 0.5s cubic-bezier(0.22, 0.7, 0.2, 1);
   will-change: transform;
 }
-@media (max-width: 720px) { .scroll-rail { width: 2px; } }
+/* 已出现 / 总数：竖排在右缘中部，滚动时一直看得见。 */
+.product-progress-count {
+  position: fixed; top: 50%; right: 13px; transform: translateY(-50%); z-index: 60;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  font-size: 0.64rem; letter-spacing: 0.06em; color: var(--muted);
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.product-progress-count b { font-size: 0.78rem; font-weight: 700; color: var(--ink); }
+.product-progress-count i { display: block; width: 11px; height: 1px; background: var(--line-strong); }
+/* 窄屏隐藏浮层，数字改由列表底部显示，避免压住卡片。 */
+.product-progress-inline { display: none; font-size: 0.76rem; letter-spacing: 0.06em; color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .product-progress { width: 2px; }
+  .product-progress-count { display: none; }
+  .product-progress-inline { display: block; }
+}
+@media (prefers-reduced-motion: reduce) { .product-progress-fill { transition: none; } }
 
 /* ---------- 服务承诺 ---------- */
 .promise-grid { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(212px, 1fr)); gap: 12px; }
