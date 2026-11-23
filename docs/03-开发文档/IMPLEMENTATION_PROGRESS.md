@@ -844,4 +844,6 @@
 
 边界：**只支持 CSV**，`format=xlsx` 在创建时返回 422 `IMPORT_FORMAT_UNSUPPORTED`（解析 xlsx 需要额外依赖，客户交付模板本就是 CSV）；`stock_qty` 与 `image_urls` 只产生警告，不写库存、不下载图片——库存要走 `inventory.adjust`、图片要走媒体三步上传，各有自己的权限与流水，导入器不能替它们做决定；`atomic` 只保证本轮导入整体回滚，不撤销此前已存在的商品改动；导入文件不做病毒扫描与内容抽样审核，审核责任仍在商家。真实客户 CSV 的全链路验收（建→校验→执行→前台可见）待客户回传合规表与商品清单后进行；升级已有实例须先备份再跑 `pnpm db:migrate`（本次为第 39 条迁移）。
 
+部署（2026-11-23 22:42）：`e2bc225` 已发布到 mrinhk（38 → **39 条迁移**）。部署前备份 `/opt/ezstart-backups/ezstart-2026-11-23-1439.dump`（357,253 B / 95 表，`pg_restore -l` 通过）；`migrate` 容器退出 0；重建三镜像停机约 30 秒；冒烟 `ready/site/products/adminlogin/importpage = 200`、导入端点无会话 401、缺 Origin 与伪造 Origin 403、登录 202（MFA 生效）；`ImportJob` 表 24 列 / 30 个约束；API 错误日志 0 条。**店主侧 UI 验收（上传模板 → 预检 3/3/0 → 执行后新建 2）仍需店主用过一次才可勾选**，步骤见 [RELEASE_M05_IMPORT.md](../05-部署运维文档/RELEASE_M05_IMPORT.md)。
+
 

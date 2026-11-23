@@ -475,7 +475,7 @@ docker rmi ezstart-staging-api                          # 删镜像
 | 2026-11-20 | staging 库重建并部署支付版本 `c8c6760`；36 条迁移从零应用；支付冒烟 25/25；记录迁移校验和换行符坑 | — |
 | 2026-11-23 | 安全收口：超管密码轮换为一次性临时密码（`mustChangePassword=true`，28 个旧会话全部吊销）；`ADMIN_REQUIRE_MFA` 由 `false` 恢复为 `true` 并重建 api（正确密码应答 200→202）；操作程序写入 [ADMIN_RECOVERY_RUNBOOK.md](ADMIN_RECOVERY_RUNBOOK.md) | — |
 | 2026-11-23 | 备份闭环：安装 `/home/ec2-user/ezstart-backup.sh` 与 `ezstart-backup.timer`（每日 03:10、`pg_restore -l` 校验、保留 14 份）；首跑 356,939 bytes / 95 张表；异机上传待 `BACKUP_BUCKET` 与凭据 | — |
-| 2026-11-23 | 代码侧新增 M05 批量导入（第 39 条迁移 `202611231200_import_jobs`）与 CSRF 硬化，**尚未部署到本实例**；发布步骤见 [RELEASE_M05_IMPORT.md](RELEASE_M05_IMPORT.md) | — |
+| 2026-11-23 | 发布 `e2bc225`（**39 条迁移**）：M05 批量导入后端与后台页、CSRF 判定显式化；部署前备份 357,253 B / 95 表；migrate 退出 0；停机约 30 秒；冒烟 `ready/site/products/adminlogin/importpage=200`、导入端点无会话 401、伪造 Origin 403、登录 202。步骤与结果见 [RELEASE_M05_IMPORT.md](RELEASE_M05_IMPORT.md) | — |
 | 2026-11-20 | **生产升级到 `61682e8`**（36 条迁移），线上支付编排/退款/对账代码上线；渠道仍未启用；停机约 30 秒；备份 `ezstart-20261120-151337.sql.gz` | — |
 
 ---

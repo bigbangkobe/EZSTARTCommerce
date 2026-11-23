@@ -67,9 +67,22 @@ docker exec ezstart-mrinhk-postgres-1 psql -U ezstart -d ezstart -tAc \
 curl -s -o /dev/null -w 'ready=%{http_code}\n' https://mrinhk.com/api/v1/health/ready
 curl -s -o /dev/null -w 'site=%{http_code}\n'  https://mrinhk.com/zh-HK
 curl -s -o /dev/null -w 'admin=%{http_code}\n' https://admin.mrinhk.com/admin/login
+curl -s -o /dev/null -w 'importpage=%{http_code}\n' https://admin.mrinhk.com/admin/catalog/import
 
-# 导入端点不带会话必须 401（权限边界，不能是 200 也不能是 500）
-curl -s -o /dev/null -w 'imports=%{http_code}\n' https://admin.mrinhk.com/api/v1/admin/import-jobs
+# 权限边界：导入端点不带会话必须 401（契约里没有「列任务」的 GET，裸 GET 是 404，别当失败）
+SHA=$(printf 'a%.0s' $(seq 1 64))
+curl -s -o /dev/null -w 'create=%{http_code}\n' -X POST https://admin.mrinhk.com/api/v1/admin/import-jobs \
+  -H 'Origin: https://admin.mrinhk.com' -H 'content-type: application/json' \
+  -d "{\"fileObjectKey\":\"imports/2026/11/00000000-0000-0000-0000-000000000000.csv\",\"fileSha256\":\"$SHA\",\"format\":\"csv\",\"mode\":\"create_or_update_by_sku\",\"commitMode\":\"valid_rows\",\"columnMapping\":{\"product_key\":\"product_key\"},\"localeSet\":[\"zh-HK\"]}"
+curl -s -o /dev/null -w 'getjob=%{http_code}\n' https://admin.mrinhk.com/api/v1/admin/import-jobs/00000000-0000-0000-0000-000000000000
+curl -s -o /dev/null -w 'files=%{http_code}\n' -X POST https://admin.mrinhk.com/api/v1/admin/import-files \
+  -H 'Origin: https://admin.mrinhk.com' -H 'content-type: application/json' -d '{}'
+
+# 来源校验：缺 Origin 与伪造 Origin 都必须 403
+curl -s -o /dev/null -w 'no-origin=%{http_code}\n' -X POST https://admin.mrinhk.com/api/v1/admin/import-files \
+  -H 'content-type: application/json' -d '{}'
+curl -s -o /dev/null -w 'bad-origin=%{http_code}\n' -X POST https://admin.mrinhk.com/api/v1/admin/import-files \
+  -H 'Origin: https://evil.example.test' -H 'content-type: application/json' -d '{}'
 
 # 登录仍需 TOTP：正确密码应 202（不要在这里试错密码，会触发限流）
 curl -s -o /dev/null -w 'login=%{http_code}\n' -X POST https://admin.mrinhk.com/api/v1/admin/auth/login \
@@ -77,7 +90,7 @@ curl -s -o /dev/null -w 'login=%{http_code}\n' -X POST https://admin.mrinhk.com/
   -d '{"email":"admin","password":"<店主密码>"}'
 ```
 
-期望：`200 / 307或200 / 200 / 401 / 202`。
+期望：`200 / 200 / 200 / 200`，`create=getjob=files=401`，`no-origin=bad-origin=403`，`login=202`。
 
 ## 5. 真实验收（必须由店主在后台完成）
 
@@ -116,6 +129,22 @@ docker exec ezstart-staging-postgres-1 pg_restore -U ezstart -d restore_drill --
 - [ ] `AWS_ENVIRONMENTS.md` 第 10 节变更记录补一行（日期、提交号、迁移总数）
 - [ ] `IMPLEMENTATION_PROGRESS.md` 的 M05 段补"已部署 + 冒烟结果"
 - [ ] 工单记录：备份文件名、回滚点 commit、冒烟五项返回码、店主验收结论
+
+### 7.1 2026-11-23 22:42 首次执行记录
+
+| 项 | 实际值 |
+|---|---|
+| 发布前版本 | `3e26844`（38 条迁移） |
+| 发布后版本 | `e2bc225`（**39 条迁移**） |
+| 部署前备份 | `/opt/ezstart-backups/ezstart-2026-11-23-1439.dump`（357,253 B / 95 张表，`pg_restore -l` 通过） |
+| deploy.sh 自备份 | `/opt/ezstart-backups/ezstart-20261123-143912.sql.gz` |
+| 构建 | api / admin / storefront 三个镜像重建，约 3 分钟 |
+| migrate 容器 | `Exited` 0，迁移 39 条 |
+| 停机窗口 | admin/storefront/api 重建期间约 30 秒 |
+| 冒烟 | `ready=200 / site=200 / products=200 / adminlogin=200 / importpage=200`；`create=getjob=files=401`；`no-origin=bad-origin=403`；`login=202` |
+| API 错误日志 | 0 条 |
+| 新表 | `ImportJob`：24 列 / 30 个约束 |
+| 回滚点 | 三镜像 `:prev` 已打（迁移不撤销，多一张空表无害） |
 
 ## 8. 这批**不能**宣称的事
 
