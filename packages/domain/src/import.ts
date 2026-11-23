@@ -14,6 +14,8 @@
  *    库存要经 inventory.adjust、图片要经媒体三步上传，各有自己的权限与流水。
  */
 
+import { normalizeSlug } from './catalog.js';
+
 /** 与交付模板表头一致的闭集。`columnMapping` 的「值」只能取这些键。 */
 export const IMPORT_TARGETS = [
   'product_key', 'base_sku', 'category_path', 'brand', 'market_codes',
@@ -48,7 +50,6 @@ export const MAX_IMPORT_ROWS = 5_000;
 export const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_CELL_LENGTH = 2_000;
 const SKU = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PRODUCT_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
 export class ImportRuleError extends Error {
@@ -219,6 +220,14 @@ const cell = (csv: ParsedCsv, row: CsvRow, mapping: ReadonlyMap<ImportTarget, st
 const errorOf = (field: string, code: string, message: string, locale: string | null = null): FieldError => ({ field, locale, code, message });
 
 /**
+ * slug 的规则只有一处定义：目录模块的 normalizeSlug（允许大小写混排与中文，禁止空白、`/`、首尾 `-`/`_`）。
+ * 导入不能比后台编辑更严——否则客户按交付模板填的 `toBe-cup` 会被导入器判成非法，而手填后台却能存。
+ */
+function validSlug(value: string): boolean {
+  try { normalizeSlug(value); return true; } catch { return false; }
+}
+
+/**
  * 由 CSV 生成执行计划。
  *
  * 分组规则：`product_key` 相同即同一商品，第一行决定商品级字段（名称/分类/品牌/市场/发布），
@@ -324,7 +333,8 @@ export function buildImportPlan(input: ImportPlanInput): ImportPlan {
       const slug = pick(columns.slug);
       if (!name) errors.push(errorOf(columns.name, 'REQUIRED', `语言 ${locale} 缺少商品名称`, locale));
       if (!slug) errors.push(errorOf(columns.slug, 'REQUIRED', `语言 ${locale} 缺少 slug`, locale));
-      else if (!SLUG.test(slug)) errors.push(errorOf(columns.slug, 'INVALID_SLUG', 'slug 只允许小写字母、数字与短横线', locale));
+      else if (!validSlug(slug)) errors.push(errorOf(columns.slug, 'INVALID_SLUG',
+        'slug 不能含空白或 /，不能以 - / _ 开头或结尾，长度 1–180（与目录模块同一规则）', locale));
       if (name && slug) {
         translations.push({ locale, name, slug,
           shortDescription: pick(columns.short) || null,

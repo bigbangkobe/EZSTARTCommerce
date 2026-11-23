@@ -1,0 +1,363 @@
+/**
+ * 优惠引擎（M11）纯规则层。
+ *
+ * 只做“这张券能不能用、优惠多少、怎么分摊到行”，不碰数据库与网络：
+ * 码格式、有效区间、最低消费、范围、次数上限、金额计算与分摊余数都在这里收敛。
+ * 金额一律整数最小货币单位；百分比用整数 basis points（100 bps = 1%）。
+ */
+export class PromotionRuleError extends Error {
+    code;
+    constructor(code) {
+        super(code);
+        this.code = code;
+    }
+}
+function fail(code) { throw new PromotionRuleError(code); }
+export const DISCOUNT_TYPES = ['fixed', 'percent'];
+export const COUPON_STATUSES = ['active', 'disabled'];
+export const REDEMPTION_STATUSES = ['reserved', 'redeemed', 'released', 'expired'];
+export const REFUND_POLICIES = ['none', 'restore'];
+export const MAX_PERCENT_BPS = 10_000;
+/** 固定额上限 1,000,000.00（最小货币单位），防止一次输错把整店毛利打穿。 */
+export const MAX_FIXED_DISCOUNT_MINOR = 100_000_000;
+export const MAX_COUPON_TOTAL_LIMIT = 1_000_000;
+export const MAX_PER_CUSTOMER_LIMIT = 1_000;
+export const MAX_SCOPE_ITEMS = 200;
+export const MAX_TIER_ITEMS = 50;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CURRENCY = /^[A-Z]{3}$/;
+const CODE = /^[A-Z0-9][A-Z0-9_-]{0,79}$/;
+const CONTROL = /[\u0000-\u001f\u007f]/;
+function integer(value, code, min, max) {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max)
+        fail(code);
+    return value;
+}
+function optionalInteger(value, code, min, max) {
+    if (value === undefined || value === null)
+        return null;
+    return integer(value, code, min, max);
+}
+function timestamp(value, code) {
+    if (typeof value !== 'string')
+        fail(code);
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime()))
+        fail(code);
+    return date;
+}
+function uuidList(value, code, limit) {
+    if (value === undefined || value === null)
+        return [];
+    if (!Array.isArray(value) || value.length > limit)
+        fail(code);
+    const seen = new Set();
+    for (const item of value) {
+        if (typeof item !== 'string' || !UUID.test(item))
+            fail(code);
+        if (seen.has(item))
+            fail(code); // 重复项没有业务含义，说明客户端在拼凑范围
+        seen.add(item);
+    }
+    return [...seen];
+}
+/** 优惠码 trim + uppercase；空串按“未使用”处理。 */
+export function normalizeCouponCode(value) {
+    if (value === undefined || value === null)
+        return null;
+    if (typeof value !== 'string')
+        fail('couponCode');
+    const code = value.trim().toUpperCase();
+    if (!code.length)
+        return null;
+    if (!CODE.test(code))
+        fail('couponCode');
+    return code;
+}
+/** 只用于展示与日志：保住首尾各 2 位，中间打码；短码只留最后一位。 */
+export function maskCouponCode(code) {
+    if (code.length <= 4)
+        return `${'*'.repeat(Math.max(0, code.length - 1))}${code.slice(-1)}`;
+    return `${code.slice(0, 2)}${'*'.repeat(Math.min(8, code.length - 4))}${code.slice(-2)}`;
+}
+/** 创建券：所有字段必须一次性给全；币种取自店铺基础币种，不接受客户端指定。 */
+export function normalizeCoupon(input, currency) {
+    if (!CURRENCY.test(currency))
+        fail('currency');
+    const code = normalizeCouponCode(input['code']);
+    if (code === null)
+        fail('code');
+    const discountType = input['discountType'];
+    if (typeof discountType !== 'string' || !DISCOUNT_TYPES.includes(discountType))
+        fail('discountType');
+    const discountValue = discountType === 'percent'
+        ? integer(input['discountValue'], 'discountValue', 1, MAX_PERCENT_BPS)
+        : integer(input['discountValue'], 'discountValue', 1, MAX_FIXED_DISCOUNT_MINOR);
+    const validFrom = timestamp(input['validFrom'], 'validFrom');
+    const validUntil = timestamp(input['validUntil'], 'validUntil');
+    if (validUntil.getTime() <= validFrom.getTime())
+        fail('validity');
+    const status = input['status'] ?? 'active';
+    if (typeof status !== 'string' || !COUPON_STATUSES.includes(status))
+        fail('status');
+    const refundPolicy = input['refundPolicy'] ?? 'none';
+    if (typeof refundPolicy !== 'string' || !REFUND_POLICIES.includes(refundPolicy))
+        fail('refundPolicy');
+    return {
+        code, status: status, discountType: discountType, discountValue, currency,
+        validFrom, validUntil,
+        minSubtotalMinor: optionalInteger(input['minSubtotalMinor'], 'minSubtotalMinor', 0, MAX_FIXED_DISCOUNT_MINOR),
+        totalLimit: optionalInteger(input['totalLimit'], 'totalLimit', 1, MAX_COUPON_TOTAL_LIMIT),
+        perCustomerLimit: optionalInteger(input['perCustomerLimit'], 'perCustomerLimit', 1, MAX_PER_CUSTOMER_LIMIT),
+        eligibleProductIds: uuidList(input['eligibleProductIds'], 'eligibleProductIds', MAX_SCOPE_ITEMS),
+        eligibleCategoryIds: uuidList(input['eligibleCategoryIds'], 'eligibleCategoryIds', MAX_SCOPE_ITEMS),
+        memberTierIds: uuidList(input['memberTierIds'], 'memberTierIds', MAX_TIER_ITEMS),
+        refundPolicy: refundPolicy,
+    };
+}
+/**
+ * PATCH 只改给出的字段，但类型/面值必须成对校验：
+ * 单独把 percent 的额度留在 50000 bps 而只改类型为 fixed，会得到一张五万元的券。
+ */
+export function mergeCouponPatch(current, patch) {
+    const merged = {
+        code: current.code, status: current.status, discountType: current.discountType,
+        discountValue: current.discountValue, validFrom: current.validFrom.toISOString(),
+        validUntil: current.validUntil.toISOString(), minSubtotalMinor: current.minSubtotalMinor,
+        totalLimit: current.totalLimit, perCustomerLimit: current.perCustomerLimit,
+        eligibleProductIds: current.eligibleProductIds, eligibleCategoryIds: current.eligibleCategoryIds,
+        memberTierIds: current.memberTierIds, refundPolicy: current.refundPolicy,
+    };
+    for (const key of Object.keys(patch)) {
+        if (patch[key] === undefined)
+            continue;
+        merged[key] = patch[key];
+    }
+    // 清空可空字段必须显式传 null；undefined 保留原值（上面的循环已经跳过）。
+    return normalizeCoupon(merged, current.currency);
+}
+/** 有效区间为 validFrom <= now < validUntil；停用优先于时间。 */
+export function couponState(coupon, now) {
+    if (coupon.status === 'disabled')
+        return 'disabled';
+    if (now.getTime() < coupon.validFrom.getTime())
+        return 'not_started';
+    if (now.getTime() >= coupon.validUntil.getTime())
+        return 'expired';
+    return 'active';
+}
+export function assertCouponUsable(coupon, now, currency) {
+    const state = couponState(coupon, now);
+    if (state === 'disabled')
+        fail('COUPON_DISABLED');
+    if (state === 'not_started')
+        fail('COUPON_NOT_STARTED');
+    if (state === 'expired')
+        fail('COUPON_EXPIRED');
+    if (coupon.currency !== currency)
+        fail('COUPON_CURRENCY_MISMATCH');
+}
+export function assertMinSubtotal(coupon, subtotalMinor) {
+    if (coupon.minSubtotalMinor !== null && subtotalMinor < coupon.minSubtotalMinor)
+        fail('COUPON_MIN_SUBTOTAL_NOT_MET');
+}
+/** 范围为空 = 全部商品；商品与分类是“或”关系，任一命中即可。 */
+export function couponLineEligible(coupon, line) {
+    if (!coupon.eligibleProductIds.length && !coupon.eligibleCategoryIds.length)
+        return true;
+    if (coupon.eligibleProductIds.includes(line.productId))
+        return true;
+    return line.categoryIds.some(id => coupon.eligibleCategoryIds.includes(id));
+}
+export function eligibleLines(coupon, lines) {
+    return lines.filter(line => couponLineEligible(coupon, line));
+}
+/**
+ * 优惠金额：固定额取 min(面值, 符合条件金额)；百分比按最小货币单位 half-up 舍入，
+ * 且不超过符合条件金额——任何情况下都不能把商品金额打成负数。
+ */
+export function couponDiscount(coupon, eligibleSubtotalMinor) {
+    if (!Number.isSafeInteger(eligibleSubtotalMinor) || eligibleSubtotalMinor < 0)
+        fail('subtotal');
+    if (eligibleSubtotalMinor === 0)
+        return 0;
+    if (coupon.discountType === 'fixed')
+        return Math.min(coupon.discountValue, eligibleSubtotalMinor);
+    if (coupon.discountType !== 'percent')
+        fail('discountType');
+    const scaled = BigInt(eligibleSubtotalMinor) * BigInt(coupon.discountValue);
+    // (x + 5000) / 10000 的整数版本即 half-up。
+    const rounded = (scaled + 5000n) / 10000n;
+    const value = Number(rounded);
+    if (!Number.isSafeInteger(value))
+        fail('discount');
+    return Math.min(value, eligibleSubtotalMinor);
+}
+/**
+ * 固定额与百分比都按行金额比例分摊；整数余数按订单行创建顺序逐行 +1。
+ * 调用方必须按订单行创建顺序传入（报价/订单写入都使用这个顺序）。
+ */
+export function allocateDiscount(lines, discountMinor) {
+    if (!Number.isSafeInteger(discountMinor) || discountMinor < 0)
+        fail('discount');
+    const total = lines.reduce((sum, line) => sum + line.amountMinor, 0);
+    if (discountMinor === 0)
+        return new Map(lines.map(line => [line.key, 0]));
+    if (!lines.length)
+        fail('discount');
+    if (discountMinor > total)
+        fail('DISCOUNT_EXCEEDS_SUBTOTAL');
+    const shares = lines.map(line => {
+        const share = (BigInt(line.amountMinor) * BigInt(discountMinor)) / BigInt(total);
+        return Number(share);
+    });
+    let remainder = discountMinor - shares.reduce((sum, value) => sum + value, 0);
+    for (let index = 0; index < lines.length && remainder > 0; index += 1) {
+        if (shares[index] < lines[index].amountMinor) {
+            shares[index] = shares[index] + 1;
+            remainder -= 1;
+        }
+    }
+    if (remainder !== 0)
+        fail('DISCOUNT_ALLOCATION_FAILED');
+    return new Map(lines.map((line, index) => [line.key, shares[index]]));
+}
+/** 总次数与单顾客次数都只统计“预占 + 已核销”，返还过的额度已经扣回。 */
+export function assertUsageLimits(coupon, usedTotal, usedByCustomer) {
+    if (coupon.totalLimit !== null && usedTotal >= coupon.totalLimit)
+        fail('COUPON_LIMIT_REACHED');
+    if (coupon.perCustomerLimit !== null && usedByCustomer !== null && usedByCustomer >= coupon.perCustomerLimit)
+        fail('COUPON_CUSTOMER_LIMIT_REACHED');
+}
+/** 核销状态机只进不退：reserved 只能去 redeemed / released / expired，其余为终态。 */
+export function assertRedemptionTransition(from, to) {
+    const allowed = {
+        reserved: ['redeemed', 'released', 'expired'],
+        redeemed: [], released: [], expired: [],
+    };
+    if (!allowed[from].includes(to))
+        fail('STATE_CONFLICT');
+}
+/** 订单/报价里的券快照：规则后续被改也不能改变这张单的金额与解释。 */
+export function couponSnapshot(coupon, discountMinor) {
+    return {
+        couponId: coupon.id, code: coupon.code, codeMasked: maskCouponCode(coupon.code),
+        discountType: coupon.discountType, discountValue: coupon.discountValue, discountMinor,
+        currency: coupon.currency, minSubtotalMinor: coupon.minSubtotalMinor,
+        totalLimit: coupon.totalLimit, perCustomerLimit: coupon.perCustomerLimit,
+        validFrom: coupon.validFrom.toISOString(), validUntil: coupon.validUntil.toISOString(),
+        eligibleProductIds: coupon.eligibleProductIds, eligibleCategoryIds: coupon.eligibleCategoryIds,
+        refundPolicy: coupon.refundPolicy, ruleVersion: coupon.version,
+    };
+}
+/** 规则说明只用于审计详情，不含任何顾客联系方式。 */
+export function describeCoupon(coupon) {
+    const value = coupon.discountType === 'percent'
+        ? `${(coupon.discountValue / 100).toFixed(2)}%`
+        : `${coupon.discountValue} minor units`;
+    return `${coupon.code} (${value})`.slice(0, 200);
+}
+/** 控制字符会把日志/CSV 导出撑坏；码与备注都拒绝。 */
+export function assertPrintable(value, code = 'VALIDATION_ERROR') {
+    if (CONTROL.test(value))
+        fail(code);
+}
+// ---- 会员专属券与会员侧限额（M11 解锁，依赖 M10 会员目录）-----------------------
+/**
+ * 会员专属券资格：券声明了 memberTierIds 时，只有会员当前等级命中其一才能使用。
+ * 等级为空数组表示不限会员（公开券），此时任何人都可用（仍需通过其他限额）。
+ * tierId 为空表示访客或会员无等级——专属券明确拒绝，不静默放行。
+ */
+export function assertMemberTierEligible(coupon, tierId) {
+    if (!coupon.memberTierIds.length)
+        return;
+    if (tierId === null || !coupon.memberTierIds.includes(tierId))
+        fail('COUPON_MEMBER_ONLY');
+}
+/**
+ * 顾客限额键的会员口径。会员走「instanceId:member:<不可逆 memberId 摘要>」，
+ * 与访客的 HMAC(联系方式) 形状一致（都是 64 位十六进制），可共存于同一列。
+ * 摘要由调用方用实例密钥生成（domain 不持有密钥），这里只定义材料串形状，
+ * 保证同一会员跨邮箱/电话改动仍是同一限额主体。
+ */
+export function memberLimitMaterial(instanceId, memberId) {
+    if (typeof instanceId !== 'string' || !instanceId.length)
+        fail('instanceId');
+    if (!UUID.test(memberId))
+        fail('memberId');
+    return `${instanceId}:coupon:member:${memberId}`;
+}
+/** 批次发放的收件人数复核：确认数必须与建批时计算的人数完全一致，不一致要求重建批次。 */
+export function assertBatchRecipientCount(actual, confirmed) {
+    if (!Number.isSafeInteger(actual) || actual < 0)
+        fail('recipientCount');
+    if (!Number.isSafeInteger(confirmed) || confirmed < 0)
+        fail('confirmedRecipientCount');
+    if (confirmed !== actual)
+        fail('BATCH_RECIPIENT_COUNT_CHANGED');
+}
+/**
+ * 建批请求归一化：couponId 必须是 UUID，渠道取自闭集；显式名单与筛选条件互斥且至少一个。
+ * 名单上限 10,000（一次发放的合理上限），重复成员直接拒绝（与券范围口径一致），筛选条件只允许带 memberTierIds 白名单键。
+ */
+export const BATCH_CHANNELS = ['account_only', 'email', 'sms'];
+export const MAX_BATCH_RECIPIENTS = 10_000;
+export function normalizeCouponBatch(input) {
+    const couponId = input['couponId'];
+    if (typeof couponId !== 'string' || !UUID.test(couponId))
+        fail('couponId');
+    const channel = input['channel'];
+    if (typeof channel !== 'string' || !BATCH_CHANNELS.includes(channel))
+        fail('channel');
+    const members = input['recipientMemberIds'];
+    const filter = input['recipientFilter'];
+    if (members !== undefined && members !== null && !Array.isArray(members))
+        fail('recipientMemberIds');
+    if (members !== undefined && Array.isArray(members) && (members.length > MAX_BATCH_RECIPIENTS))
+        fail('recipientMemberIds');
+    const seen = new Set();
+    for (const item of (Array.isArray(members) ? members : [])) {
+        if (typeof item !== 'string' || !UUID.test(item))
+            fail('recipientMemberIds');
+        if (seen.has(item))
+            fail('recipientMemberIds');
+        seen.add(item);
+    }
+    const hasMembers = seen.size > 0;
+    const hasFilter = filter !== undefined && filter !== null;
+    if (hasMembers === hasFilter)
+        fail('recipientSource'); // 必须二选一
+    let normalizedFilter = null;
+    if (hasFilter) {
+        if (typeof filter !== 'object' || Array.isArray(filter))
+            fail('recipientFilter');
+        const allowed = new Set(['memberTierIds']);
+        for (const key of Object.keys(filter))
+            if (!allowed.has(key))
+                fail('recipientFilter');
+        const tierIds = filter['memberTierIds'];
+        if (!Array.isArray(tierIds) || !tierIds.length || tierIds.length > MAX_TIER_ITEMS)
+            fail('recipientFilter');
+        for (const id of tierIds)
+            if (typeof id !== 'string' || !UUID.test(id))
+                fail('recipientFilter');
+        normalizedFilter = { memberTierIds: [...new Set(tierIds)] };
+    }
+    const templateId = input['templateId'];
+    if (templateId !== undefined && templateId !== null
+        && (typeof templateId !== 'string' || !UUID.test(templateId)))
+        fail('templateId');
+    return { couponId, channel: channel,
+        recipientMemberIds: [...seen], recipientFilter: normalizedFilter,
+        templateId: templateId ?? null };
+}
+/** 发放请求只接受一个确认数，拒绝夹带名单——名单在建批时已冻结。 */
+export function normalizeBatchIssue(input) {
+    const count = input['confirmedRecipientCount'];
+    if (!Number.isSafeInteger(count) || count < 0)
+        fail('confirmedRecipientCount');
+    for (const key of Object.keys(input))
+        if (key !== 'confirmedRecipientCount')
+            fail('VALIDATION_ERROR');
+    return { confirmedRecipientCount: count };
+}

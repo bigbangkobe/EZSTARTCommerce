@@ -128,6 +128,23 @@ test('product-level fields come from the first non-empty row of the group', () =
   assert.equal(en?.slug, 'hinoki-aroma-candle');
 });
 
+test('slug validation matches the catalog rule, not a stricter one', () => {
+  // 交付模板里的示例 slug 就是 `toBe-cup`（大小写混排）：导入不能把它判成非法。
+  const mixed = plan([row({ ...base, slug_zh_HK: 'toBe-cup', product_key: 'CUP-014', variant_sku: 'CUP-014-STD' })]);
+  assert.equal(mixed.counters.invalidRows, 0);
+  assert.equal(mixed.products[0]!.translations[0]!.slug, 'toBe-cup');
+
+  // 目录规则允许中文 slug（前台按百分号编码访问）：导入同样放行。
+  const chinese = plan([row({ ...base, slug_zh_HK: '香薰蠟燭', product_key: 'X-1', variant_sku: 'X-1' })]);
+  assert.equal(chinese.counters.invalidRows, 0);
+
+  for (const bad of ['has space', 'path/segment', '-leading', 'trailing_']) {
+    const rejected = plan([row({ ...base, slug_zh_HK: bad })]);
+    assert.equal(rejected.counters.invalidRows, 1, `应拒绝 ${bad}`);
+    assert.ok(rejected.rows[0]!.errors.some(error => error.code === 'INVALID_SLUG'), `${bad} 应报 INVALID_SLUG`);
+  }
+});
+
 test('sku shape, currency and unknown references are rejected with row-level codes', () => {
   const bad = plan([row({ ...base, variant_sku: '含中文SKU' })]);
   assert.equal(bad.counters.invalidRows, 1);
