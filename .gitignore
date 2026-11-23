@@ -30,3 +30,6 @@ deploy/instances/*/
 
 # Windows 文件权限（ACL）修复工具留下的备份与报告：属本机运行痕迹，非项目内容
 .dsh-acl-recovery/
+
+# 本机校验用的编译产物（tsc --outDir _verify）：属构建输出，绝不入库
+_verify/
