@@ -810,3 +810,17 @@
 - `scripts/lib/instance-bundle.mjs` + `build-instance-bundle.mjs`：从 `deploy/templates/instance/*.tpl` 生成 7 件制品（compose/Caddyfile/deploy.sh/.env.example/DEPLOY.md/instance.yaml/bundle-manifest.json），目标目录非空默认拒绝覆盖。`init-instance.mjs` 默认 dry-run，`--execute` 才起容器；`upgrade-instances.mjs` 按 pilot→canary→standard 生成升级计划。密钥由工具本地生成写入 `.env`（chmod 600），不进 Git、不落 manifest。
 
 验证：契约 **54 项**（新增 1 项覆盖主题权限/CSRF、区块闭集、颜色白名单、草稿可空与公开视图必填）、`contracts:check` 生成物一致、Prisma schema 有效；领域单测 **27 项**（theme 6 + instance-manifest 11 + deployment 10）；全量 `node --test --test-concurrency=4` **359 项全绿**；根 tsc、后台 tsc、前台 tsc 均通过；`instance:validate` 对示例 manifest 输出「结构校验通过 / 阻断 0-10 未签字 / 未就绪」，退出码 0；`instance:bundle` 对示例 manifest 生成 7 件制品（配置哈希 `780d0344…`）。
+
+## 2026-11-23：CSRF 判定显式化 + 工程环境可复现
+
+范围：两项只影响"漏校验不会再悄悄发生"和"本机/CI 的工具链版本不再靠人记"的收尾，不改业务行为，不发版。
+
+- `apps/api/src/identity/csrf.ts`（新）：`csrfSatisfied(supplied, expected, readOnly)` 成为 CSRF 判定的唯一出口。写路径缺头（`null` 或 `''`）一律拒绝；只读路径允许省略，但带了错令牌仍拒绝。抽成纯函数的原因：原判定写在 `authenticated()` 里形如 `csrfValue !== null && !equal(...)`，缺头之所以没被放行，是因为 `header()` 把缺失的头正规化成了 `''`，与 64 位期望值长度不等才失败——这是巧合而不是设计，任何新接口只要传 `null`，校验就静默跳过。
+- `apps/api/src/identity/service.ts`：`authenticated()` 增加显式 `readOnly` 参数；新增 `authenticatedRead()`，10 个只读方法（`session` / `sessions` / `getInvitation` / `listStaff` / `getStaff` / `staffSessions` / `listAuditLogs` / `listRoles` / `getRole` / `storeConfiguration`）改走它。写路径从此不可能通过传 `null` 绕过校验，只读与可写是两种方法而不是一个空值。
+- `package.json`：`engines.pnpm` 固定 `8.15.9`（`.npmrc` 已有 `engine-strict=true`，版本不符时 `pnpm install` 直接 `ERR_PNPM_UNSUPPORTED_ENGINE`，不再只是警告；已用 `pnpm@12.21.0` 实测复现该报错）；`test` 脚本加 `--test-concurrency=2`，对应历史记录里 `identity-http` 在默认并发下反复出现的 `ECONNRESET` / `P2028` 噪音。
+- `.python-version`（新）：`3.11`，与 CI 的 `setup-python`、`requirements-validation.txt` 对齐。本机此前用 3.13 装出的 `.local-tools/contract-validation`（`rpds.cp313-win_amd64.pyd`）在 3.11 下无法导入，`contracts:validate` 直接抛 `ModuleNotFoundError: rpds.rpds`。
+
+验证：根 `tsc` 编译 **0 错误**（含两个新增文件）；`tests/csrf-guard.test.ts` **4 项**全绿（覆盖写路径缺头/空头/错令牌/正确令牌、只读路径缺头/空头/错令牌/正确令牌、长度不等、期望值为空共 7 类组合）；无数据库单测 **254 项全绿、0 断言失败**；`contracts:check` 输出生成物一致。30 个需要真实 PostgreSQL 的套件本机未运行——沙箱禁止启动 embedded postgres 子进程（`spawn EPERM`），与代码无关。
+
+边界：HTTP 契约、状态码、错误码均未变化（写接口缺 CSRF 仍是 403），未连接真实 SMTP 或支付渠道，未发版。本机 `pnpm install` 现在要求 pnpm 8.15.9（`corepack use pnpm@8.15.9`；确需旧版本时用 `pnpm install --config.engine-strict=false`）。旧 `.local-tools` 需用 3.11 重装后 `pnpm check` 的 Python 契约校验才可运行：`py -3.11 -m pip install --force-reinstall --target .local-tools/contract-validation -r packages/contracts/requirements-validation.txt`。
+

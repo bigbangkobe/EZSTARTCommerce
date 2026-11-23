@@ -9,6 +9,7 @@ import { DEFAULT_FEATURE_FLAGS, StoreRuleError, SUPPORTED_LOCALES, assertMarketC
 import { expiresAt, securityPolicy as policy } from '../../../../packages/config/src/security-policy.js';
 import { resolveRolePresets } from '../../../../packages/config/src/role-presets.js';
 import { csrf, decrypt, encrypt, equal, newTotpSecret, passwordHash, passwordMatches, recoveryCodes, token, totp, totpStep } from './crypto.js';
+import { csrfSatisfied } from './csrf.js';
 import type { IdentityConfig } from './config.js';
 
 type Tx = Prisma.TransactionClient;
@@ -289,14 +290,22 @@ export class IdentityService {
       return { value: await this.newSession(tx, user, now, true) };
     });
   }
-  private async authenticated<T>(supplied: string, csrfValue: string | null, fn: (tx: Tx, user: User, session: Prisma.AdminSessionGetPayload<{}>, now: Date) => Promise<T>, serializeAccess = false, allowPendingPassword = false) {
+  /**
+   * 会话校验的唯一入口。
+   *
+   * `readOnly=false`（默认，写路径）：必须带匹配的 CSRF 令牌。
+   * `readOnly=true`（只读路径）：允许省略令牌，但带了错的仍然拒绝。
+   * 只读方法一律通过下面的 authenticatedRead() 调用，不要直接传 null。
+   */
+  private async authenticated<T>(supplied: string, csrfValue: string | null, fn: (tx: Tx, user: User, session: Prisma.AdminSessionGetPayload<{}>, now: Date) => Promise<T>, serializeAccess = false, allowPendingPassword = false, readOnly = false) {
     const candidate = await this.db.adminSession.findUnique({ where: { tokenDigest: digest(supplied) } });
     if (!candidate) throw new AuthError(401, 'UNAUTHORIZED');
     return this.withUser(candidate.userId, async (tx, user, now) => {
       const session = await tx.adminSession.findUnique({ where: { id: candidate.id } });
       if (!session || session.revokedAt || session.idleExpiresAt <= now || session.absoluteExpiresAt <= now ||
         (this.needsMfa(user) && (!user.factor || !session.mfaVerified))) throw new AuthError(401, 'UNAUTHORIZED');
-      if (csrfValue !== null && !equal(csrfValue, csrf(supplied, this.config))) throw new AuthError(403, 'FORBIDDEN');
+      // CSRF：写路径必须带匹配令牌；只读路径允许省略。判定与理由见 identity/csrf.ts。
+      if (!csrfSatisfied(csrfValue, csrf(supplied, this.config), readOnly)) throw new AuthError(403, 'FORBIDDEN');
       // 直建账号的一次性初始密码：除了「看会话 / 改密 / 登出」，其余后台接口一律拒绝，
       // 避免初始密码在改密前就能改价、发货或导出顾客资料。
       if (user.mustChangePassword && !allowPendingPassword) throw new AuthError(403, 'PASSWORD_CHANGE_REQUIRED');
@@ -306,8 +315,15 @@ export class IdentityService {
       return fn(tx, user, updated, now);
     }, serializeAccess);
   }
+  /**
+   * 只读路径：GET 不改状态，因此不要求 CSRF；带了错令牌仍拒绝。
+   * 写路径必须走 authenticated()，这样「漏校验」在代码里是显式的而不是隐式的。
+   */
+  private async authenticatedRead<T>(supplied: string, fn: (tx: Tx, user: User, session: Prisma.AdminSessionGetPayload<{}>, now: Date) => Promise<T>, allowPendingPassword = false) {
+    return this.authenticated(supplied, null, fn, false, allowPendingPassword, true);
+  }
   async session(supplied: string) {
-    return this.authenticated(supplied, null, async (_tx, user, session) => this.sessionData(user, session, supplied), false, true);
+    return this.authenticatedRead(supplied, async (_tx, user, session) => this.sessionData(user, session, supplied), true);
   }
   async logout(supplied: string, csrfValue: string, ctx: RequestContext) {
     await this.authenticated(supplied, csrfValue, async (tx, user, session, now) => {
@@ -335,7 +351,7 @@ export class IdentityService {
     }, false, true);
   }
   async sessions(supplied: string, limit: number, cursor: string | null) {
-    return this.authenticated(supplied, null, async (tx, user, current, now) => {
+    return this.authenticatedRead(supplied, async (tx, user, current, now) => {
       if (cursor && !await tx.adminSession.findFirst({ where: { id: cursor, userId: user.id } })) throw new AuthError(422, 'VALIDATION_ERROR');
       const rows = await tx.adminSession.findMany({ where: { userId: user.id, revokedAt: null, idleExpiresAt: { gt: now }, absoluteExpiresAt: { gt: now } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
@@ -431,7 +447,7 @@ export class IdentityService {
     }, true);
   }
   async getInvitation(supplied: string, userId: string) {
-    return this.authenticated(supplied, null, async (tx, actor, _session, now) => {
+    return this.authenticatedRead(supplied, async (tx, actor, _session, now) => {
       this.requirePermission(actor, 'staff.read');
       const invitation = await tx.adminInvitation.findUnique({ where: { userId } });
       if (!invitation) throw new AuthError(404, 'NOT_FOUND');
@@ -597,7 +613,7 @@ export class IdentityService {
     }
   }
   async listStaff(supplied: string, limit: number, cursor: string | null) {
-    return this.authenticated(supplied, null, async (tx, actor) => {
+    return this.authenticatedRead(supplied, async (tx, actor) => {
       this.requirePermission(actor, 'staff.read');
       if (cursor && !await tx.adminUser.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
       const rows = await tx.adminUser.findMany({ include: includeUser, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1,
@@ -607,7 +623,7 @@ export class IdentityService {
     });
   }
   async getStaff(supplied: string, id: string) {
-    return this.authenticated(supplied, null, async (tx, actor) => {
+    return this.authenticatedRead(supplied, async (tx, actor) => {
       this.requirePermission(actor, 'staff.read');
       const user = await tx.adminUser.findUnique({ where: { id }, include: includeUser });
       if (!user) throw new AuthError(404, 'NOT_FOUND');
@@ -643,7 +659,7 @@ export class IdentityService {
     }, true);
   }
   async staffSessions(supplied: string, id: string, limit: number, cursor: string | null) {
-    return this.authenticated(supplied, null, async (tx, actor, current, now) => {
+    return this.authenticatedRead(supplied, async (tx, actor, current, now) => {
       this.requirePermission(actor, 'staff.read');
       if (!await tx.adminUser.findUnique({ where: { id } })) throw new AuthError(404, 'NOT_FOUND');
       if (cursor && !await tx.adminSession.findFirst({ where: { id: cursor, userId: id } })) throw new AuthError(422, 'VALIDATION_ERROR');
@@ -673,7 +689,7 @@ export class IdentityService {
    * 返回字段刻意不含任何请求体或凭据，摘要只保留既有的 reason。
    */
   async listAuditLogs(supplied: string, limit: number, cursor: string | null) {
-    return this.authenticated(supplied, null, async (tx, actor) => {
+    return this.authenticatedRead(supplied, async (tx, actor) => {
       this.requirePermission(actor, 'audit.read');
       if (cursor && !await tx.auditLog.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
       const rows = await tx.auditLog.findMany({ orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], take: limit + 1,
@@ -685,7 +701,7 @@ export class IdentityService {
     });
   }
   async listRoles(supplied: string, limit: number, cursor: string | null) {
-    return this.authenticated(supplied, null, async (tx, actor) => {
+    return this.authenticatedRead(supplied, async (tx, actor) => {
       this.requirePermission(actor, 'roles.manage');
       if (cursor && !await tx.adminRole.findUnique({ where: { id: cursor } })) throw new AuthError(422, 'VALIDATION_ERROR');
       const rows = await tx.adminRole.findMany({ orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
@@ -694,7 +710,7 @@ export class IdentityService {
     });
   }
   async getRole(supplied: string, id: string) {
-    return this.authenticated(supplied, null, async (tx, actor) => {
+    return this.authenticatedRead(supplied, async (tx, actor) => {
       this.requirePermission(actor, 'roles.manage');
       const role = await tx.adminRole.findUnique({ where: { id } });
       if (!role) throw new AuthError(404, 'NOT_FOUND');
@@ -770,7 +786,7 @@ export class IdentityService {
   }
 
   async storeConfiguration(supplied: string) {
-    return this.authenticated(supplied, null, async (tx, actor) => {
+    return this.authenticatedRead(supplied, async (tx, actor) => {
       this.requirePermission(actor, 'store.settings.manage');
       return this.storeView(tx, await this.now(tx));
     });
