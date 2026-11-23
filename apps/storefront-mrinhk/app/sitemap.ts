@@ -2,9 +2,37 @@ import type { MetadataRoute } from 'next';
 import { site } from '../lib/site';
 import { LOCALES, altPaths, isLocale, localePath, type Locale } from '../lib/i18n';
 import { fetchProducts } from '../lib/products';
+import type { Product } from '../lib/product-view';
 import { fetchPages } from '../lib/content';
 import { fetchCategories } from '../lib/categories';
 import { fetchCollections } from '../lib/collections';
+
+/**
+ * 站点地图按请求生成。
+ *
+ * 默认它是构建期定稿的：镜像构建时 API 还没起，取数静默失败，烘出来的就是一份「只有 15 条静态地址
+ * 的空站点地图」，而且要等到下次部署才刷新（线上就踩过这个坑）。crawler 随时进来都该看到完整清单。
+ * 单次生成约十几个内部取数，都带 60 秒数据缓存，爬虫连打不会把 API 打穿。
+ */
+export const dynamic = 'force-dynamic';
+
+/**
+ * 取某语言下的全部在售商品。
+ * 列表接口单页上限 100，必须用游标翻到底——只取第一页会让第 101 件以后的老商品永远进不了站点地图。
+ */
+async function allProducts(locale: string): Promise<Product[]> {
+  const collected: Product[] = [];
+  let cursor: string | null = null;
+  // 30 页 = 3000 件，远超单店铺体量；仅作防跑飞的保险。
+  for (let page = 0; page < 30; page += 1) {
+    const result = await fetchProducts(locale, 100, cursor);
+    if (!result.ok) break;
+    collected.push(...result.products);
+    cursor = result.nextCursor;
+    if (!cursor) break;
+  }
+  return collected;
+}
 
 /**
  * 站点地图：只收已发布、明确可索引的页面。
@@ -30,14 +58,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     alternates: { languages: absoluteAlternates(path) },
   })));
 
-  // 商品：三次列表请求（读缓存）。API 不可用时静默跳过商品，不让整个 sitemap 失败。
-  // 上限 100 是接口分页的硬上限，超过会 422，所以这里不猜更大的数字。
-  const perLocale = await Promise.all(LOCALES.map(locale => fetchProducts(locale, 100)));
+  // 商品：每种语言都翻完游标取全量（读缓存）。API 不可用时静默跳过商品，不让整个 sitemap 失败。
+  const perLocale = await Promise.all(LOCALES.map((locale) => allProducts(locale)));
   const slugsById = new Map<string, Map<Locale, string>>();
   LOCALES.forEach((locale, index) => {
-    const result = perLocale[index];
-    if (!result.ok) return;
-    for (const product of result.products) {
+    for (const product of perLocale[index]) {
       const map = slugsById.get(product.id) ?? new Map<Locale, string>();
       map.set(locale, product.slug);
       slugsById.set(product.id, map);

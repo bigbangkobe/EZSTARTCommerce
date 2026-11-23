@@ -75,7 +75,7 @@ function ordinal(base: string, offset: number) {
   return index >= 0 ? MARKS[index + offset] ?? String(index + offset + 1) : base;
 }
 
-function renderHero(locale: Locale, brandName: string, tagline: string, waLink: string, productCount: number) {
+function renderHero(locale: Locale, brandName: string, tagline: string, waLink: string, productCountLabel: string) {
   const t = copyFor[locale];
   const productsHref = localePath(locale, '/products');
   return (
@@ -102,7 +102,7 @@ function renderHero(locale: Locale, brandName: string, tagline: string, waLink: 
           </div>
           <div className="hero-tag">
             <span className="hero-tag-label">{t.nav.products}</span>
-            <strong>{productCount > 0 ? `${productCount}` : '—'}</strong>
+            <strong>{productCountLabel}</strong>
             <span className="hero-tag-note">{t.shell.heroVisualNote}</span>
           </div>
         </div>
@@ -228,7 +228,9 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   const waLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappGreeting)}`;
   const sections = theme?.homeSections?.length ? theme.homeSections : DEFAULT_SECTIONS;
   const categories = categoryResult.items.filter(item => item.slug);
+  // 首页角标不再假装这是总数：接口按页给，拿不到真实总条数，翻页未到底时补一个「+」。
   const productCount = result.ok ? result.products.length : 0;
+  const productCountLabel = result.ok && result.nextCursor ? `${productCount}+` : productCount > 0 ? `${productCount}` : '—';
   const marks = sectionMarks(sections);
 
   return (
@@ -239,7 +241,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         // 注册表之外的类型（历史配置）跳过，不影响其余区块渲染。
         switch (section.type) {
           case 'hero':
-            return <Fragment key={`hero-${index}`}>{renderHero(locale, brandName, tagline, waLink, productCount)}</Fragment>;
+            return <Fragment key={`hero-${index}`}>{renderHero(locale, brandName, tagline, waLink, productCountLabel)}</Fragment>;
           case 'category_grid':
             return <Fragment key={`cat-${index}`}>{renderCategoryGrid(locale, categories, marks.get(index) ?? '')}</Fragment>;
           case 'promises':

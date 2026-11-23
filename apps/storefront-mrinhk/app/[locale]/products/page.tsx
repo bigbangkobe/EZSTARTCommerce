@@ -4,7 +4,7 @@ import { whatsappLink } from '../../../lib/site';
 import { altPaths, copyFor, isLocale, type Locale } from '../../../lib/i18n';
 import { fetchContentRelease } from '../../../lib/content';
 import { fetchProducts } from '../../../lib/products';
-import { ProductCards } from '../../product-cards';
+import { ProductList } from '../../product-list';
 import AnalyticsTracker from '../../analytics-tracker';
 import SectionTracker from '../../section-tracker';
 
@@ -28,7 +28,8 @@ export default async function ProductsPage({ params }: { params: Promise<{ local
   if (!isLocale(raw)) notFound();
   const locale: Locale = raw;
   const t = copyFor[locale];
-  const [result, contentRelease] = await Promise.all([fetchProducts(locale), fetchContentRelease(locale)]);
+  // 24 件一批：接口默认只给 25 且上限 100，首屏取满一整批，剩下的交给「载入更多」带游标续取。
+  const [result, contentRelease] = await Promise.all([fetchProducts(locale, 24), fetchContentRelease(locale)]);
   const products = result.ok ? result.products : [];
 
   return (
@@ -55,7 +56,9 @@ export default async function ProductsPage({ params }: { params: Promise<{ local
             </div>
           </div>
         ) : (
-          <ProductCards products={products} locale={locale} />
+          // 首屏走服务端渲染，其余批次由客户端带游标续取：一页只铺 24 张，
+          // 但「全部商品」必须真的能看全 269 件（之前丢掉了 nextCursor，只到 25 件）。
+          <ProductList locale={locale} initial={products} initialCursor={result.nextCursor} />
         )}
       </div>
     </section>

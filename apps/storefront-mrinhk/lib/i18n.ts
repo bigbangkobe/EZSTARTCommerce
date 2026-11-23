@@ -135,6 +135,9 @@ const zhHK = {
     error: '商品暫時無法載入，請稍後再試，或直接透過 WhatsApp 查詢。',
     inquiry: 'WhatsApp 查詢',
     viewDetail: '查看詳情',
+    loadMore: '載入更多商品',
+    loadingMore: '載入中…',
+    loadFailed: '載入更多商品失敗，請稍後再試。',
     thumbFallback: '商品圖片',
   },
   categories: {
@@ -450,6 +453,9 @@ const zhCN: Copy = {
     error: '商品暂时无法加载，请稍后重试，或直接通过 WhatsApp 查询。',
     inquiry: 'WhatsApp 查询',
     viewDetail: '查看详情',
+    loadMore: '加载更多商品',
+    loadingMore: '加载中…',
+    loadFailed: '加载更多商品失败，请稍后再试。',
     thumbFallback: '商品图片',
   },
   categories: {
@@ -763,6 +769,9 @@ const en: Copy = {
     error: 'Products could not be loaded right now. Please try again later, or message us on WhatsApp.',
     inquiry: 'Ask on WhatsApp',
     viewDetail: 'View details',
+    loadMore: 'Load more products',
+    loadingMore: 'Loading…',
+    loadFailed: 'Could not load more products. Please try again.',
     thumbFallback: 'Product photo',
   },
   categories: {

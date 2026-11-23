@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { copyFor, localePath, type Locale } from '../lib/i18n';
-import { formatPrice, type Product } from '../lib/products';
+// 展示逻辑走 product-view：那是纯函数模块，客户端组件（product-list）也能安全引用。
+import { formatPrice, type Product } from '../lib/product-view';
 
 /**
  * 商品卡片：首页精选、陈列区块、分类页与商品列表共用一套结构与埋点字段。
