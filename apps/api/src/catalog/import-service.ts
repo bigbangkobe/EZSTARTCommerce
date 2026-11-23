@@ -62,7 +62,9 @@ export class ImportService {
     if (!/^[a-f0-9]{64}$/.test(sha)) throw new AuthError(422, 'VALIDATION_ERROR');
     if (body.format !== 'csv') throw new AuthError(422, 'IMPORT_FORMAT_UNSUPPORTED');
     return this.identity.withPermission(supplied, csrfValue, 'catalog.import', async (tx, actor) => {
-      const key = idempotencyKey ?? null;
+      // 幂等键带作用域前缀：同一列同时服务「建任务」与「执行任务」两种请求，
+      // 不区分作用域会让「建任务用的 key」在第一次执行时被当成冲突。
+      const key = idempotencyKey === undefined ? null : `create:${idempotencyKey}`;
       if (key) {
         const existing = await tx.$queryRaw<JobRow[]>`SELECT * FROM "ImportJob" WHERE "idempotencyKey" = ${key}`;
         if (existing[0]) return jobView(existing[0]);
@@ -137,20 +139,22 @@ export class ImportService {
     // 第一段：确认执行的就是操作员看过的那份，并把任务推进到 processing（单独事务提交）。
     const started = await this.identity.withPermission(supplied, csrfValue, 'catalog.import', async (tx, actor) => {
       const row = await this.load(tx, id, true);
+      const execKey = idempotencyKey === undefined ? null : `execute:${idempotencyKey}`;
+      const stored = row.idempotencyKey ?? '';
       // 同一幂等键的重放直接回放结果：网络重试不该看到一个"已完成"的 409。
-      if (idempotencyKey !== undefined && row.idempotencyKey === idempotencyKey
-        && ['processing', 'completed', 'completed_with_errors'].includes(row.status)) {
+      if (execKey !== null && stored === execKey && ['processing', 'completed', 'completed_with_errors'].includes(row.status)) {
         return { row, replay: true };
       }
       if (row.status === 'completed' || row.status === 'completed_with_errors' || row.status === 'failed') {
         throw new AuthError(409, 'IMPORT_STATE_CONFLICT');
       }
       if (row.status !== 'ready') throw new AuthError(409, 'IMPORT_NOT_VALIDATED');
-      if (row.idempotencyKey !== null && idempotencyKey !== undefined && row.idempotencyKey !== idempotencyKey) throw new AuthError(409, 'IDEMPOTENCY_CONFLICT');
+      // 只有「已有另一个执行键」才算冲突；建任务时写入的 create:… 与执行无关，不参与比较。
+      if (execKey !== null && stored.startsWith('execute:') && stored !== execKey) throw new AuthError(409, 'IDEMPOTENCY_CONFLICT');
       if (body.confirmedFileSha256.toLowerCase() !== row.fileSha256) throw new AuthError(409, 'IMPORT_FILE_DIGEST_MISMATCH');
       if (body.confirmedMappingVersion !== row.mappingVersion) throw new AuthError(409, 'IMPORT_MAPPING_VERSION_STALE');
       if (body.expectedValidRows !== row.validRows) throw new AuthError(409, 'IMPORT_VALID_ROWS_MISMATCH');
-      await tx.$executeRaw`UPDATE "ImportJob" SET "status" = 'processing', "idempotencyKey" = ${idempotencyKey ?? row.idempotencyKey} WHERE "id" = ${id}::uuid`;
+      await tx.$executeRaw`UPDATE "ImportJob" SET "status" = 'processing', "idempotencyKey" = ${execKey ?? row.idempotencyKey} WHERE "id" = ${id}::uuid`;
       await this.identity.recordAudit(tx, ctx, actor.id, 'catalog.import.started', id);
       return { row, replay: false };
     }, true);
