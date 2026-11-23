@@ -146,15 +146,17 @@ test('product import runs create → validate → execute with confirmation and 
         confirmedMappingVersion: preview.body.data.mappingVersion, expectedValidRows: preview.body.data.validRows };
 
       // 4. 执行前必须证明「就是那份文件」：摘要 / 有效行数不符都拒绝。
-      assert.equal((await owner('POST', `admin/import-jobs/${jobId}/execute`,
-        { ...confirmed, confirmedFileSha256: 'f'.repeat(64) })).status, 409);
-      assert.equal((await owner('POST', `admin/import-jobs/${jobId}/execute`,
-        { ...confirmed, expectedValidRows: 99 })).status, 409);
+      const badSha = await owner('POST', `admin/import-jobs/${jobId}/execute`,
+        { ...confirmed, confirmedFileSha256: 'f'.repeat(64) });
+      assert.equal(badSha.status, 409, `摘要不符应 409：${JSON.stringify(badSha.body)}`);
+      const badRows = await owner('POST', `admin/import-jobs/${jobId}/execute`,
+        { ...confirmed, expectedValidRows: 99 });
+      assert.equal(badRows.status, 409, `行数不符应 409：${JSON.stringify(badRows.body)}`);
 
       // 5. 正常执行：两个商品、三个规格，发布标记为 Y 的商品直接可售。
       const executed = await owner('POST', `admin/import-jobs/${jobId}/execute`, confirmed,
         { schema: 'ImportJobEnvelope', headers: { 'Idempotency-Key': 'exec-1' } });
-      assert.equal(executed.status, 202);
+      assert.equal(executed.status, 202, `执行失败：${JSON.stringify(executed.body)}`);
       assert.equal(executed.body.data.status, 'completed');
       assert.equal(executed.body.data.createdCount, 2);
       assert.equal(executed.body.data.failedCount, 0);
