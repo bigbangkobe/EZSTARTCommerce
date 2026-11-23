@@ -146,6 +146,25 @@ docker exec ezstart-staging-postgres-1 pg_restore -U ezstart -d restore_drill --
 | 新表 | `ImportJob`：24 列 / 30 个约束 |
 | 回滚点 | 三镜像 `:prev` 已打（迁移不撤销，多一张空表无害） |
 
+### 7.2 2026-11-23 23:28 二次发布（修复两个导入缺陷）
+
+发布后在 **API 镜像内**跑全量回归（441 项 / 439 通过），抓到两个本地环境暴露不出的缺陷，修复后再次发布：
+
+| 缺陷 | 现象 | 修复 |
+|---|---|---|
+| slug 校验比目录模块更严 | 交付模板里的 `toBe-cup`（大小写混排）与中文 slug 被判 `INVALID_SLUG`，客户数据整单进不来 | 复用 `normalizeSlug`（`1a47a3f`） |
+| 建任务与执行共用同一幂等键列 | 用 `Idempotency-Key` 建任务后首次执行被判 `IDEMPOTENCY_CONFLICT` | `create:` / `execute:` 作用域前缀（`80acf8b`） |
+
+| 项 | 值 |
+|---|---|
+| 版本 | `e2bc225` → **`80acf8b`** |
+| 迁移 | 仍 39 条（无 schema 变更） |
+| 部署前备份 | `ezstart-20261123-152805.sql.gz`（deploy.sh 自动） |
+| 冒烟 | `ready/site=200`、导入端点无会话 401、登录 202、API 错误日志 0 |
+| 回归 | 全量 441 项 / **439 通过**；唯一失败为已知 `identity-http` 双实例竞态（`ECONNRESET`） |
+
+> 经验：这两个缺陷都**只能靠真库回归**暴露——本地沙箱起不了 PostgreSQL，纯单测也覆盖不到"模板里的真实 slug"与"两次不同幂等键"的组合。发布后的第一件事就是跑一次全量回归。
+
 ## 8. 这批**不能**宣称的事
 
 | 项 | 事实 |
