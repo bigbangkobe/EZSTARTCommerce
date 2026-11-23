@@ -27,3 +27,6 @@ test-results/
 # 从零起实例的演练产物：含自动生成的密钥与实例专属配置，用完应删，绝不入库
 deploy/merchants/scratch-*/
 deploy/instances/*/
+
+# Windows 文件权限（ACL）修复工具留下的备份与报告：属本机运行痕迹，非项目内容
+.dsh-acl-recovery/
