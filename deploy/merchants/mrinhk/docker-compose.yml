@@ -49,6 +49,11 @@ services:
     image: ezstart-mrinhk-api
     command: ["node", "dist/apps/api/src/main.js"]
     restart: unless-stopped
+    volumes:
+      # 媒体文件必须落在宿主目录：本地存储驱动默认写容器内的 /app/.data/media，
+      # 容器一重建（每次发布都会）文件就没了，而数据库里的 MediaAsset 记录还在，
+      # 结果是前台图片全部 404。这一行是数据持久化，不是可选项。
+      - /opt/ezstart-media:/app/.data/media
     environment:
       <<: *node-env
       NODE_ENV: production

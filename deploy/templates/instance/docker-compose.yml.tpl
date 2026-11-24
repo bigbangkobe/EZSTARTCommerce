@@ -49,6 +49,10 @@ services:
     image: ezstart-{{INSTANCE_ID}}-api
     command: ["node", "dist/apps/api/src/main.js"]
     restart: unless-stopped
+    volumes:
+      # 媒体文件落在宿主目录：本地驱动默认写容器内 /app/.data/media，容器重建即丢，
+      # 而数据库里的 MediaAsset 记录还在 → 前台图片全部 404。按实例隔离目录，便于单独备份。
+      - /opt/ezstart-{{INSTANCE_ID}}-media:/app/.data/media
     environment:
       <<: *node-env
       NODE_ENV: production

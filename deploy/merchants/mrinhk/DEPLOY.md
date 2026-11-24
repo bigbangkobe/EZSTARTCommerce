@@ -50,3 +50,19 @@ gunzip -c backup_YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -U ezs
 - `.env` 权限 `chmod 600`，不进 Git。
 - Lightsail 控制台开启每日自动快照；上线前做一次备份恢复演练。
 - 本商户实例数据只属于 IN先生，不得与其他商户实例交叉访问。
+
+## 媒体文件（容易丢，单独说一遍）
+
+商品图片存在宿主目录 **`/opt/ezstart-media`**，由 `docker-compose.yml` 的 `api.volumes` 挂载到容器的 `/app/.data/media`。
+不挂这个卷的话，每次发布重建容器都会把图片清空，而数据库里的 `MediaAsset` 记录还在——前台图片全部 404，且无法自愈。
+
+```bash
+du -sh /opt/ezstart-media                 # 当前约 25 MB / 543 个文件
+find /opt/ezstart-media -type f | wc -l   # 文件数应与 MediaAsset 表行数一致
+```
+
+**媒体与数据库要一起备份**：`/opt/ezstart-backups` 目前只有数据库 dump，媒体没有独立副本。迁机或重建时两条都要带走：
+
+```bash
+sudo tar czf /opt/ezstart-backups/media-$(date +%F).tar.gz -C /opt ezstart-media
+```

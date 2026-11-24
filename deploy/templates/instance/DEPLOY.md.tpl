@@ -76,4 +76,16 @@ sudo journalctl -u ezstart-reconcile.service -n 20   # 每轮只打印计数
 - `.env` 权限 `600`，密钥由工具链生成，禁止跨实例复用。
 - 本实例数据只属于当前商户，不得与其他实例交叉访问。
 
+## 媒体文件（与数据库同等重要）
+
+商品图片存在宿主目录 **`/opt/ezstart-{{INSTANCE_ID}}-media`**，由 `docker-compose.yml` 的
+`api.volumes` 挂载到容器 `/app/.data/media`。**没有这个卷，每次发布重建容器都会清空图片**，
+而数据库里的 `MediaAsset` 记录仍在——前台图片全部 404 且无法自愈。
+
+备份与迁机时**数据库和媒体目录要一起带走**（`/opt/ezstart-backups` 只存数据库 dump）：
+
+```bash
+sudo tar czf /opt/ezstart-backups/media-$(date +%F).tar.gz -C /opt ezstart-{{INSTANCE_ID}}-media
+```
+
 > 本手册为产品交付参考，具体实施请结合公司合规与法务要求确认。
