@@ -61,8 +61,16 @@ du -sh /opt/ezstart-media                 # 当前约 25 MB / 543 个文件
 find /opt/ezstart-media -type f | wc -l   # 文件数应与 MediaAsset 表行数一致
 ```
 
-**媒体与数据库要一起备份**：`/opt/ezstart-backups` 目前只有数据库 dump，媒体没有独立副本。迁机或重建时两条都要带走：
+**媒体已纳入每日自动备份**：systemd timer 每天 03:10 跑 `scripts/backup-instance.sh`，内容不变则跳过，
+产物在 `/opt/ezstart-backups/media-<日期>.tar.gz`（保留 4 份）。手工补一份：
 
 ```bash
 sudo tar czf /opt/ezstart-backups/media-$(date +%F).tar.gz -C /opt ezstart-media
+```
+
+恢复媒体：解包到 `/opt` 即可（包内路径前缀是 `ezstart-media/`）：
+
+```bash
+sudo tar xzf /opt/ezstart-backups/media-2026-11-24-0545.tar.gz -C /opt
+docker compose restart api   # 让驱动重新打开文件句柄
 ```

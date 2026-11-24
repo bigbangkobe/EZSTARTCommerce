@@ -82,10 +82,43 @@ sudo journalctl -u ezstart-reconcile.service -n 20   # 每轮只打印计数
 `api.volumes` 挂载到容器 `/app/.data/media`。**没有这个卷，每次发布重建容器都会清空图片**，
 而数据库里的 `MediaAsset` 记录仍在——前台图片全部 404 且无法自愈。
 
-备份与迁机时**数据库和媒体目录要一起带走**（`/opt/ezstart-backups` 只存数据库 dump）：
+备份与迁机时**数据库和媒体目录要一起带走**。仓库里的 `scripts/backup-instance.sh` 两者都备
+（媒体按指纹判断变化、保留 4 份），建议直接挂定时任务：
+
+```ini
+# /etc/systemd/system/ezstart-backup.service
+[Unit]
+Description={{INSTANCE_ID}} 每日备份
+After=docker.service
+Requires=docker.service
+[Service]
+Type=oneshot
+User=<实例属主>
+EnvironmentFile=-/etc/ezstart-backup.env
+ExecStart=<实例目录>/scripts/backup-instance.sh
+
+# /etc/systemd/system/ezstart-backup.timer
+[Timer]
+OnCalendar=*-*-* 03:10:00
+Persistent=true
+RandomizedDelaySec=300
+[Install]
+WantedBy=timers.target
+```
+
+```ini
+# /etc/ezstart-backup.env（chmod 600）——实例差异只在这里
+BACKUP_DIR=/opt/ezstart-backups
+MEDIA_DIR=/opt/ezstart-{{INSTANCE_ID}}-media
+PG_CONTAINER=ezstart-{{INSTANCE_ID}}-postgres-1
+KEEP_BACKUPS=14
+MEDIA_KEEP=4
+# BACKUP_BUCKET=s3://<桶名>/ezstart-{{INSTANCE_ID}}   # 配好对象存储即启用异机备份
+```
 
 ```bash
-sudo tar czf /opt/ezstart-backups/media-$(date +%F).tar.gz -C /opt ezstart-{{INSTANCE_ID}}-media
+sudo systemctl daemon-reload && sudo systemctl enable --now ezstart-backup.timer
+sudo systemctl start ezstart-backup.service && tail -n 4 /opt/ezstart-backups/backup.log
 ```
 
 > 本手册为产品交付参考，具体实施请结合公司合规与法务要求确认。

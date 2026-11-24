@@ -218,29 +218,39 @@ docker run --rm --network ezstart-staging_default \
 
 实测：318 KB / 备份 <1s / 恢复 2s / 95 表一致 / 新迁移应用成功（35 → 36）。
 
-### 6.4 备份（2026-11-23 起每日自动）
+### 6.4 备份（2026-11-23 起每日自动，含媒体）
 
-**现状**：生产由 systemd timer 每天 03:10 自动备份，不再依赖"部署时才备份"。
+**现状**：生产由 systemd timer 每天 03:10 自动备份**数据库与媒体**，不再依赖"部署时才备份"。
 
 | 项 | 值 |
 |---|---|
-| 脚本 | `/home/ec2-user/ezstart-backup.sh`（`chmod 750`） |
-| 单元 | `/etc/systemd/system/ezstart-backup.{service,timer}`，`Persistent=true` |
-| 输出 | `/opt/ezstart-backups/ezstart-<日期>-<时分>.dump`（`pg_dump -Fc`，`chmod 600`） |
-| 校验 | 回读 `pg_restore -l`，列出 95 个 `TABLE DATA` 才算成功；截断的 dump 算失败 |
-| 保留 | 默认 14 份，自动裁剪（`KEEP_BACKUPS` 可调） |
+| 脚本 | **`scripts/backup-instance.sh`（在仓库里，随代码发布）** |
+| 实例参数 | `/etc/ezstart-backup.env`（`chmod 600`）：`BACKUP_DIR` / `MEDIA_DIR` / `PG_CONTAINER` / `KEEP_BACKUPS` / `MEDIA_KEEP` / 可选 `BACKUP_BUCKET` |
+| 单元 | `/etc/systemd/system/ezstart-backup.{service,timer}`，`Persistent=true`，`User=ec2-user` |
+| 数据库产物 | `/opt/ezstart-backups/ezstart-<日期>-<时分>.dump`（`pg_dump -Fc`，`chmod 600`） |
+| 媒体产物 | `/opt/ezstart-backups/media-<日期>-<时分>.tar.gz`（`/opt/ezstart-media` 全量快照，`chmod 600`） |
+| 校验 | dump 回读 `pg_restore -l` 列出 96 个 `TABLE DATA`；媒体包 `tar tzf` 条目数 ≥2 且与文件数一致 |
+| 保留 | 数据库 14 份；媒体 4 份（均自动裁剪） |
+| 媒体频率 | 按「路径+大小」指纹判断：**内容不变则跳过**，变了就打；周日强制打一份兜底 |
 | 日志 | `/opt/ezstart-backups/backup.log` |
+
+> 媒体必须单独备份的理由：商品图存在宿主目录 `/opt/ezstart-media`，数据库只存 `MediaAsset` 元数据。
+> 只备数据库的话，恢复后图片全部 404 且无法自愈。2026-11-23 前这条是空的（25 MB / 543 张没有任何副本）。
 
 手动触发与核验：
 
 ```bash
 sudo systemctl start ezstart-backup.service
-tail -3 /opt/ezstart-backups/backup.log
+tail -4 /opt/ezstart-backups/backup.log
 systemctl list-timers ezstart-backup.timer
+
+# 媒体包内容抽查：条目数应与宿主文件数一致
+tar tzf "$(ls -1t /opt/ezstart-backups/media-*.tar.gz | head -1)" | grep -vc '/$'
+find /opt/ezstart-media -type f | wc -l
 ```
 
 ```bash
-# 兜底：不走脚本，直接恢复成 SQL 文本看内容是否完整
+# 兜底：不走脚本，直接恢复成 SQL 文本看内容是否完整（老版本备份是 .sql.gz）
 gunzip -c /opt/ezstart-backups/ezstart-20261121-101945.sql.gz | head -20
 ```
 
@@ -477,6 +487,8 @@ docker rmi ezstart-staging-api                          # 删镜像
 | 2026-11-23 | 备份闭环：安装 `/home/ec2-user/ezstart-backup.sh` 与 `ezstart-backup.timer`（每日 03:10、`pg_restore -l` 校验、保留 14 份）；首跑 356,939 bytes / 95 张表；异机上传待 `BACKUP_BUCKET` 与凭据 | — |
 | 2026-11-23 | 发布 `e2bc225`（**39 条迁移**）：M05 批量导入后端与后台页、CSRF 判定显式化；部署前备份 357,253 B / 95 表；migrate 退出 0；停机约 30 秒；冒烟 `ready/site/products/adminlogin/importpage=200`、导入端点无会话 401、伪造 Origin 403、登录 202。步骤与结果见 [RELEASE_M05_IMPORT.md](RELEASE_M05_IMPORT.md) | — |
 | 2026-11-23 | 二次发布 `80acf8b`：修两个仅在真库回归中暴露的导入缺陷（slug 校验过严 `1a47a3f`、建任务/执行幂等键串用 `80acf8b`）；迁移仍 39 条；服务器侧全量回归 441 项 / 439 通过（唯一失败为已知双实例竞态） | — |
+| 2026-11-24 | 媒体持久化入库（`ba018b9`）：`/opt/ezstart-media` 卷写进受版本管理的 compose，删除服务器上的未入库 override；实例模板同步为 `/opt/ezstart-<id>-media` | — |
+| 2026-11-24 | 备份覆盖媒体（`3bbe2fb`）：脚本移入仓库 `scripts/backup-instance.sh`，每日 03:10 同时备数据库与媒体；首跑 media 24,566,077 B / 543 文件，内容不变时自动跳过；旧脚本 `/home/ec2-user/ezstart-backup.sh` 已删除 | — |
 | 2026-11-20 | **生产升级到 `61682e8`**（36 条迁移），线上支付编排/退款/对账代码上线；渠道仍未启用；停机约 30 秒；备份 `ezstart-20261120-151337.sql.gz` | — |
 
 ---
