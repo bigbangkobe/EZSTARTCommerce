@@ -824,6 +824,19 @@
 
 边界：HTTP 契约、状态码、错误码均未变化（写接口缺 CSRF 仍是 403），未连接真实 SMTP 或支付渠道，未发版。本机 `pnpm install` 现在要求 pnpm 8.15.9（`corepack use pnpm@8.15.9`；确需旧版本时用 `pnpm install --config.engine-strict=false`）。旧 `.local-tools` 需用 3.11 重装后 `pnpm check` 的 Python 契约校验才可运行：`py -3.11 -m pip install --force-reinstall --target .local-tools/contract-validation -r packages/contracts/requirements-validation.txt`。
 
+## 2026-11-24：前台媒体路由进入契约
+
+范围：`GET /storefront/media/{id}`（前台商品图）自 2026-11-23 上线起就是公开路由，但一直不在 `openapi.yaml` 里——`contracts:check` 管不到它，重构删掉也不会红。本批把它补进契约，并把行为写死。
+
+- 路径与响应：新增 `/storefront/media/{id}`（`operationId: getStorefrontMedia`），响应组件 `PublicImageSuccess`（`image/webp|jpeg|png` 原始字节 + 摘要 ETag + 长缓存头）与 `NotModified`（304）。明确它不是 `data/meta` 信封：前端拿的是图片字节，不是业务对象。
+- 状态码与实测对齐：`200`（ETag `"<sha256>"`、`Cache-Control: public, max-age=31536000, immutable`）、带 `If-None-Match` 命中返回 `304`、未知 id `404`、非法 UUID `422`。
+- API_SPEC 3.2 记录它为何是「媒体字节不走业务契约」的唯一例外，并写下两条不可越过的边界：**只返回 `status=ready` 的对象**、**不承载非公开素材**（合同、发票、顾客上传的个人资料）。
+
+验证：`contracts:generate` 生成成功且 `contracts:check` 生成物一致；根 `tsc` 与 `apps/admin` 类型检查均 0 错误；**Python 契约校验 55 项全 OK**（本机 Python 环境损坏且无网络，改在服务器上用 `python:3.11-slim` 容器执行 `python -m unittest discover -s packages/contracts`）；生产实测 `200/304/404/422` 与契约声明一致。
+
+边界：只补契约与文档，未改运行时代码，因此无需重新发布；前台图片仍按 UUID 直取，**知道 id 即可取图**——所以该路由不得用于任何非公开素材。若将来要收紧，可在 `publicImage()` 增加「必须被已发布商品引用」的约束。
+
+
 ## 2026-11-23：M05 商品批量导入后端（契约已冻结，本次补落地）
 
 范围：`/admin/import-jobs` 六条路由此前只有契约、没有实现（无表、无服务、无 UI）。本批补上后端全链路：建任务 → 校验出预览 → 确认执行 → 取消 / 错误报告。前端导入页与真实客户 CSV 验收留到下一批。

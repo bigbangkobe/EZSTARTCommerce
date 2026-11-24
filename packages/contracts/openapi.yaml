@@ -1716,6 +1716,7 @@ paths:
         '200': { $ref: '#/components/responses/PublicImageSuccess' }
         '304': { $ref: '#/components/responses/NotModified' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/products:
     get:

@@ -8946,6 +8946,7 @@ export interface operations {
             200: components["responses"]["PublicImageSuccess"];
             304: components["responses"]["NotModified"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["UnexpectedError"];
         };
     };
