@@ -1700,6 +1700,23 @@ paths:
         '200': { $ref: '#/components/responses/Success' }
         '422': { $ref: '#/components/responses/ValidationError' }
         default: { $ref: '#/components/responses/UnexpectedError' }
+  /storefront/media/{id}:
+    get:
+      tags: [Storefront]
+      operationId: getStorefrontMedia
+      summary: Get one confirmed media object (product image) by id
+      description: >-
+        前台商品图。按 MediaAsset id 直接返回对象字节，**不是 JSON**：没有 data/meta 信封，
+        也没有 X-Request-Id 之外的包装。只服务 status=ready 的对象；内容按摘要寻址且不可变，
+        因此带长缓存与内容摘要 ETag，请求带 If-None-Match 时返回 304。
+        路径由前台以同源相对地址引用，经 Next 重写到本服务。
+      parameters:
+        - { $ref: '#/components/parameters/UuidId' }
+      responses:
+        '200': { $ref: '#/components/responses/PublicImageSuccess' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/UnexpectedError' }
   /storefront/products:
     get:
       tags: [Storefront]
@@ -4729,6 +4746,21 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ProductListEnvelope' }
+    PublicImageSuccess:
+      description: 已确认媒体对象的原始字节（不是 JSON 信封）
+      headers:
+        ETag:
+          description: 对象内容的 SHA-256，形如 "<64 位十六进制>"
+          schema: { type: string }
+        Cache-Control:
+          description: 内容寻址且不可变，因此是长缓存
+          schema: { type: string }
+      content:
+        image/webp: { schema: { type: string, format: binary } }
+        image/jpeg: { schema: { type: string, format: binary } }
+        image/png: { schema: { type: string, format: binary } }
+    NotModified:
+      description: 请求的 If-None-Match 与当前内容摘要一致，无响应体
     PublicProductSuccess:
       description: Public product object with only published and eligible fields
       content:

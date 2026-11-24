@@ -1205,6 +1205,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storefront/media/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one confirmed media object (product image) by id
+         * @description 前台商品图。按 MediaAsset id 直接返回对象字节，**不是 JSON**：没有 data/meta 信封， 也没有 X-Request-Id 之外的包装。只服务 status=ready 的对象；内容按摘要寻址且不可变， 因此带长缓存与内容摘要 ETag，请求带 If-None-Match 时返回 304。 路径由前台以同源相对地址引用，经 Next 重写到本服务。
+         */
+        get: operations["getStorefrontMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storefront/products": {
         parameters: {
             query?: never;
@@ -6588,6 +6608,28 @@ export interface components {
                 "application/json": components["schemas"]["ProductListEnvelope"];
             };
         };
+        /** @description 已确认媒体对象的原始字节（不是 JSON 信封） */
+        PublicImageSuccess: {
+            headers: {
+                /** @description 对象内容的 SHA-256，形如 "<64 位十六进制>" */
+                ETag?: string;
+                /** @description 内容寻址且不可变，因此是长缓存 */
+                "Cache-Control"?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "image/webp": string;
+                "image/jpeg": string;
+                "image/png": string;
+            };
+        };
+        /** @description 请求的 If-None-Match 与当前内容摘要一致，无响应体 */
+        NotModified: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content?: never;
+        };
         /** @description Public product object with only published and eligible fields */
         PublicProductSuccess: {
             headers: {
@@ -8887,6 +8929,23 @@ export interface operations {
         responses: {
             200: components["responses"]["Success"];
             422: components["responses"]["ValidationError"];
+            default: components["responses"]["UnexpectedError"];
+        };
+    };
+    getStorefrontMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["PublicImageSuccess"];
+            304: components["responses"]["NotModified"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["UnexpectedError"];
         };
     };

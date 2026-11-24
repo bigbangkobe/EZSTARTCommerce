@@ -172,8 +172,11 @@
 | `GET/PUT /admin/merchandising/:pageKey` | 获取/保存页面陈列区块、商品选择、排序规则 | `content.manage`；手动优先级限区块作用域 |
 | `GET /storefront/config`、`GET /storefront/products`、`GET /storefront/products/:slug` | 公开已发布配置/目录 | 无登录；市场、语言、可售状态过滤 |
 | `GET /storefront/categories`、`GET /storefront/pages/:slug`、`GET /storefront/collections/:slug` | 公开目录和陈列 | 仅发布版本；不得返回草稿/预览字段 |
+| `GET /storefront/media/:id` | 公开商品图（按 MediaAsset id 取原始字节） | 无登录；只服务 `status=ready` 的对象；**响应不是 JSON 信封**，带摘要 ETag 与长缓存，支持 If-None-Match → 304 |
 
 媒体字节的收发不经过业务契约：`upload-target` 返回的短时 URL 指向对象存储，或（本地驱动时）指向 `/api/v1/media/objects?key=&expires=&signature=` 这一存储端点。该端点只认 URL 上的单对象、单方法签名，不读后台会话，也不要求 CSRF；签名过期即失效，且只有已确认（`ready`）的媒体才可读取。因此它不属于 OpenAPI 业务接口，也不承担权限判断。
+
+唯一的例外是 `GET /storefront/media/:id`：前台需要稳定、可缓存的图片地址（而不是每次渲染都签发短时 URL），所以它作为公开读接口写进了契约。两条边界必须保持：**只返回 `ready` 对象**、**不接受任何写操作**。任何媒体 id 都是不可猜的 UUID，但仍等于"知道地址就能取图"，因此不得用它承载非公开素材（合同、发票、顾客上传的个人资料）。
 
 游客购物袋的身份只来自 `ez_guest_cart` cookie（HttpOnly、Secure、SameSite=Lax、作用域 `/api/v1`）；写接口同时要求 `ez_cart_csrf` cookie 与 `X-CSRF-Token` 头一致（双提交）。该 cookie 只代表一个购物袋，不能读取订单、顾客或后台资源；这些接口不做 Origin 校验，因为前台与 API 可能不同源。
 
