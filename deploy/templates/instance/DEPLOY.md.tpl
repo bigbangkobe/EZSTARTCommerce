@@ -70,9 +70,28 @@ sudo systemctl daemon-reload && sudo systemctl enable --now ezstart-reconcile.ti
 sudo journalctl -u ezstart-reconcile.service -n 20   # 每轮只打印计数
 ```
 
+## 通知 Worker（SMTP）：会员登录码／邀请／密码重设
+
+前台会员登录不设密码，只发一次性验证码；API 只写 `MemberOtpChallenge` 与一条
+`IdentityNotificationJob`，**真正的 SMTP 投递由 worker 完成**。worker 在 compose 里用
+`profiles: ["smtp"]` 定义，默认 `docker compose up -d` 不会拉起它：
+
+```bash
+# 1) .env 填好 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM（缺一项 worker 会启动失败）
+# 2) 带 profile 启动（deploy.sh 检测到 SMTP_HOST 会自动带上 profile）
+docker compose --profile smtp up -d worker
+docker compose logs -f worker      # 期望看到 {"event":"identity_worker.started"}
+```
+
+没配 SMTP 或 worker 没跑时，客人永远收不到验证码，而页面仍显示「验证码已寄出」（`202` 只代表已排队）。
+验证投递：后台 `/admin/settings` 的「邮件自检」，状态从 `pending` 到 `sent` 即通。
+域名要配 SPF、DKIM、DMARC，`SMTP_FROM` 用供应商验证过的寄件地址，否则会被退信或丢进垃圾箱。
+
 ## 安全基线
 
 - PostgreSQL / API / worker 不暴露公网端口，唯一入口是 Caddy 80/443。
+- API 经 Caddy 反代，compose 里 `TRUSTED_PROXY_HOPS=1`：限流与审计按真实访客 IP 计。不配会让全站共用一个
+  限流桶（每 15 分钟 60 次写操作，加购与会员登录码会一起 429）；前面再加 CDN 时要同步调成 2 层。
 - `.env` 权限 `600`，密钥由工具链生成，禁止跨实例复用。
 - 本实例数据只属于当前商户，不得与其他实例交叉访问。
 

@@ -90,13 +90,31 @@ export async function ensureCart(): Promise<ApiOutcome<CartView>> {
   return existing;
 }
 
+/**
+ * 写操作前的令牌兜底：只有 `POST /storefront/cart` 会种下新的 CSRF cookie。
+ *
+ * 为什么需要这一步：老部署把 `ez_cart_csrf` 的作用域写成了 `/api/v1`，页面上的脚本
+ * 读不到它（cookie path 不匹配当前页面），于是一直「没有令牌」。服务端改成 path=/ 后，
+ * 老访客手上那份旧 cookie 仍要等下一次建袋才会被换掉——这里主动建一次袋把它刷新，
+ * 比让顾客对着「加购失败」重试要干净。
+ *
+ * 代价：这类访客会拿到一个新的空购物袋。加购在修复前从未成功过，旧袋不可能有商品，
+ * 所以这里不丢任何真实数据。
+ */
+async function ensureCsrf(): Promise<boolean> {
+  if (cartCsrf()) return true;
+  const created = await api<CartView>('POST', '/storefront/cart');
+  return created.ok && Boolean(cartCsrf());
+}
+
 export async function api<T>(method: string, path: string, body?: unknown,
   { write = false, idempotencyKey }: { write?: boolean; idempotencyKey?: string } = {}): Promise<ApiOutcome<T>> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['content-type'] = 'application/json';
   if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
   const csrf = cartCsrf();
-  if (write && !csrf) return { ok: false, status: 403, code: 'NO_CSRF', message: '購物袋尚未建立' };
+  // 文案由调用方按 code 决定（'NO_CSRF' 对应「页已过期，刷新」），这里只回稳定标识。
+  if (write && !csrf) return { ok: false, status: 403, code: 'NO_CSRF' };
   if (write && csrf) headers['x-csrf-token'] = csrf;
   let response: Response;
   try {
@@ -130,6 +148,7 @@ export async function addToCart(variantId: string, quantity: number,
   attribution: CartAttribution | null = null): Promise<ApiOutcome<CartView>> {
   const ensured = await ensureCart();
   if (!ensured.ok) return ensured;
+  if (!await ensureCsrf()) return { ok: false, status: 403, code: 'NO_CSRF' };
   return api<CartView>('POST', '/storefront/cart/items', {
     variantId, quantity,
     ...(attribution ? { attribution: { ...attribution, consentState: 'granted' } } : {}),
@@ -137,10 +156,12 @@ export async function addToCart(variantId: string, quantity: number,
 }
 
 export async function updateCartItem(itemId: string, quantity: number): Promise<ApiOutcome<CartView>> {
+  if (!await ensureCsrf()) return { ok: false, status: 403, code: 'NO_CSRF' };
   return api<CartView>('PATCH', `/storefront/cart/items/${itemId}`, { quantity }, { write: true });
 }
 
 export async function removeCartItem(itemId: string): Promise<ApiOutcome<null>> {
+  if (!await ensureCsrf()) return { ok: false, status: 403, code: 'NO_CSRF' };
   return api<null>('DELETE', `/storefront/cart/items/${itemId}`, undefined, { write: true });
 }
 

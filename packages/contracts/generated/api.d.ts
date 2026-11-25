@@ -6771,7 +6771,7 @@ export interface components {
         CartCreatedSuccess: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
-                /** @description ez_guest_cart (HttpOnly session token) and ez_cart_csrf (readable double-submit token); both scoped to /api/v1. */
+                /** @description ez_guest_cart (HttpOnly session token, scoped to /api/v1) and ez_cart_csrf (readable double-submit token, scoped to / so storefront page scripts can read it; a browser only exposes document.cookie for cookies whose path matches the current page). The same response expires any legacy ez_cart_csrf that was scoped to /api/v1. */
                 "Set-Cookie"?: string;
                 [name: string]: unknown;
             };

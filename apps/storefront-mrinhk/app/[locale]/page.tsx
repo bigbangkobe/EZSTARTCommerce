@@ -2,10 +2,10 @@ import type { Metadata } from 'next';
 import { Fragment } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { site } from '../../lib/site';
+import { site, whatsappHref } from '../../lib/site';
 import { altPaths, copyFor, isLocale, localePath, type Locale } from '../../lib/i18n';
 import { fetchProducts, type ProductResult } from '../../lib/products';
-import { fetchContentRelease } from '../../lib/content';
+import { fetchContentRelease, fetchPages, type ContentPageSummary } from '../../lib/content';
 import { fetchCategories, type CategorySummary } from '../../lib/categories';
 import { fetchMerchandising, type MerchResult } from '../../lib/merchandising';
 import { fetchTheme, type ThemeSection } from '../../lib/theme';
@@ -192,12 +192,20 @@ function renderPromises(locale: Locale, num: string) {
   );
 }
 
-function renderAbout(locale: Locale, num: string) {
+/**
+ * 首页「关于」区块：一段引子 + 三张卡 + 全文入口。
+ *
+ * 整段公司简介是长文，放不了首页也不该放首页——正文由后台内容页维护（pageKey=about-us），
+ * 这里只负责把「你是谁、凭什么信你」讲清楚，并把客人送到全文。内容页没发布时整段链接不渲染，
+ * 不留死链。
+ */
+function renderAbout(locale: Locale, num: string, aboutHref: string | null) {
   const t = copyFor[locale];
   return (
     <section className="section" id="about" data-ez-section="home.about" data-ez-section-id="home:about">
       <div className="container">
         <SectionHead num={num} title={t.about.heading} jp={t.about.jp} />
+        <p className="about-intro">{t.about.intro}</p>
         <div className="cards">
           {t.about.cards.map(card => (
             <div className="card" key={card.glyph}>
@@ -207,6 +215,13 @@ function renderAbout(locale: Locale, num: string) {
             </div>
           ))}
         </div>
+        {aboutHref && (
+          <p className="about-more">
+            <Link className="section-more" href={aboutHref} hrefLang={locale}>
+              {t.about.more}<span aria-hidden="true">→</span>
+            </Link>
+          </p>
+        )}
       </div>
     </section>
   );
@@ -216,16 +231,19 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   const { locale: raw } = await params;
   if (!isLocale(raw)) notFound();
   const locale: Locale = raw;
-  const [result, contentRelease, merch, theme, categoryResult] = await Promise.all([
+  const [result, contentRelease, merch, theme, categoryResult, pages] = await Promise.all([
     fetchProducts(locale), fetchContentRelease(locale), fetchMerchandising(locale), fetchTheme(),
-    fetchCategories(locale).catch(() => ({ ok: false, items: [] as CategorySummary[] }))]);
+    fetchCategories(locale).catch(() => ({ ok: false, items: [] as CategorySummary[] })),
+    fetchPages(locale).catch(() => [] as ContentPageSummary[])]);
 
   // 主题配置决定品牌、WhatsApp 与首页区块顺序；未配置时全部回退默认值，行为与改造前一致。
   const brandName = theme?.brand.name ?? site.brand;
   const tagline = theme?.brand.tagline ?? site.tagline;
-  const whatsappNumber = theme?.brand.whatsappNumber ?? site.whatsappNumber;
   const whatsappGreeting = theme?.brand.whatsappGreeting ?? '你好，想向你查詢詳情';
-  const waLink = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappGreeting)}`;
+  // 号码统一走 whatsappHref：主题里填的可能是本地 8 位号码，wa.me 只认 E.164。
+  const waLink = whatsappHref(theme?.brand.whatsappNumber ?? site.whatsappNumber, whatsappGreeting);
+  // 「关于我们」全文页由后台内容页维护；没发布就没有入口，不猜地址。
+  const aboutPage = pages.find(page => page.pageKey === 'about-us') ?? null;
   const sections = theme?.homeSections?.length ? theme.homeSections : DEFAULT_SECTIONS;
   const categories = categoryResult.items.filter(item => item.slug);
   // 首页角标用接口给的真实总数；拿不到时才退回「第一页条数」并标个 +。
@@ -248,7 +266,8 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
           case 'promises':
             return <Fragment key={`promise-${index}`}>{renderPromises(locale, marks.get(index) ?? '')}</Fragment>;
           case 'about':
-            return <Fragment key={`about-${index}`}>{renderAbout(locale, marks.get(index) ?? '')}</Fragment>;
+            return <Fragment key={`about-${index}`}>{renderAbout(locale, marks.get(index) ?? '',
+              aboutPage ? localePath(locale, `/pages/${encodeURIComponent(aboutPage.slug)}`) : null)}</Fragment>;
           case 'product_grid': {
             const limit = typeof section.params?.limit === 'number' ? section.params.limit : 6;
             return <Fragment key={`grid-${index}`}>{renderProductGrid(locale, result, merch, waLink, limit, marks.get(index) ?? '')}</Fragment>;

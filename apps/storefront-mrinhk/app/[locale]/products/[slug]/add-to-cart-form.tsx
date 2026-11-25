@@ -46,9 +46,12 @@ export default function AddToCartForm({ productName, variants, locale }: Props) 
     } : null);
     setBusy(false);
     if (!result.ok) {
-      setError(result.code === 'OUT_OF_STOCK' || result.status === 409
-        ? t.productDetail.outOfStockError
-        : result.message ?? t.productDetail.addError);
+      // NO_CSRF = 页面停留太久/购物袋令牌过期；重新整理就能拿回令牌，别让客人以为商品坏了。
+      setError(result.code === 'NO_CSRF'
+        ? t.common.sessionStale
+        : result.code === 'OUT_OF_STOCK' || result.status === 409
+          ? t.productDetail.outOfStockError
+          : result.message ?? t.productDetail.addError);
       return;
     }
     setAdded(result.data);

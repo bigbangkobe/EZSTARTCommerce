@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { site } from '../../lib/site';
+import { site, whatsappHref } from '../../lib/site';
 import {
   LOCALES, HTML_LANG, OG_LOCALE, altPaths, copyFor, isLocale, localePath, resolveLocale, type Locale,
 } from '../../lib/i18n';
@@ -82,7 +82,8 @@ export default async function LocaleLayout({ children, params }: {
   const brandTagline = theme?.brand.tagline ?? site.tagline;
   const whatsappNumber = theme?.brand.whatsappNumber ?? site.whatsappNumber;
   const whatsappGreeting = theme?.brand.whatsappGreeting ?? site.whatsappGreeting;
-  const waLink = `https://wa.me/${site.whatsappIntl}?text=${encodeURIComponent(whatsappGreeting)}`;
+  // 页脚展示本地号码（客人认的是 8 位），链接必须带区号：wa.me 只认 E.164。
+  const waLink = whatsappHref(whatsappNumber, whatsappGreeting);
   const cssVars = theme ? themeCssVariables(theme) : null;
   // 已发布内容页由后台维护：页脚只列当前语言下真实存在的地址，撤下的页面自动消失。
   const pages = await fetchPages(locale).catch(() => []);

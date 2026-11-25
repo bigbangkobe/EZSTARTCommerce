@@ -1,14 +1,17 @@
 import type { ServerResponse } from 'node:http';
 import { IdentityContracts } from './contracts.js';
 import { header, uuid, type ApiRequest } from './controller.js';
-import { originAllowed } from './config.js';
+import { clientIp, originAllowed } from './config.js';
 import { AuthError, IdentityService } from './service.js';
 
 export class ManagementHttp {
   private readonly contracts = new IdentityContracts();
   constructor(private readonly identity: IdentityService | null) {}
   protected service() { if (!this.identity) throw new AuthError(503, 'SERVICE_NOT_READY'); return this.identity; }
-  protected context(request: ApiRequest) { return { requestId: request.requestId, ip: request.socket.remoteAddress ?? 'unknown' }; }
+  /** 请求来源 IP：只有实例配置了 TRUSTED_PROXY_HOPS 才采信转发头，默认仍取直连对端地址。 */
+  protected context(request: ApiRequest) {
+    return { requestId: request.requestId, ip: clientIp(request, this.identity?.config.trustedProxyHops ?? 0) };
+  }
   /** 无请求体的写操作（如 DELETE）：只做来源与限流，不校验 body。 */
   protected async guardWrite(request: ApiRequest) {
     const service = this.service();

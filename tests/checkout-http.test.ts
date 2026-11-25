@@ -49,9 +49,37 @@ test('checkout: guest cart, immutable quote, idempotent order and stock reservat
   const resetLimits = () => db.identityRateLimit.deleteMany();
 
   let cart = { id: '', csrf: '', token: '' };
+  /**
+   * 建袋响应的 cookie 作用域回归。
+   *
+   * `document.cookie` 只暴露 path 是当前页面路径前缀的 cookie：顾客在 `/zh-HK/products/...`
+   * 点加购时，CSRF 令牌必须能被页面脚本读到，所以它的作用域只能是 `/`。曾经写成
+   * `/api/v1` 的结果是前端在发请求之前就判定「没有令牌」，加购 100% 失败——后端测试
+   * 手拼 Cookie 头，看不出这个问题，所以在这里把作用域钉死。
+   */
+  const assertCartCookies = (response: { headers: { getSetCookie(): string[] } }) => {
+    const values = response.headers.getSetCookie();
+    const attribute = (raw: string, name: string): string | null => {
+      const found = raw.split(';').slice(1).map(part => part.trim())
+        .find(part => part.toLowerCase().startsWith(`${name.toLowerCase()}=`));
+      return found ? found.slice(name.length + 1) : null;
+    };
+    const issued = values.filter(value => !value.startsWith('ez_cart_csrf=;'));
+    const csrf = issued.find(value => value.startsWith('ez_cart_csrf='));
+    assert.ok(csrf, `creating a cart must issue the CSRF cookie: ${values.join(' | ')}`);
+    assert.equal(attribute(csrf!, 'Path'), '/', `the CSRF cookie must be readable on storefront pages: ${csrf}`);
+    const guest = issued.find(value => value.startsWith('ez_guest_cart='));
+    assert.ok(guest, `creating a cart must issue the cart token: ${values.join(' | ')}`);
+    assert.equal(attribute(guest!, 'Path'), '/api/v1', 'the cart token must stay server-scoped');
+    const cleared = values.find(value => value.startsWith('ez_cart_csrf=;'));
+    assert.ok(cleared, 'the legacy /api/v1-scoped CSRF cookie must be expired in the same response');
+    assert.equal(attribute(cleared!, 'Path'), '/api/v1');
+    assert.equal(attribute(cleared!, 'Max-Age'), '0');
+  };
   const newCart = async () => {
     const created = await front('POST', 'storefront/cart', undefined, 'SuccessEnvelope');
     assert.equal(created.status, 201);
+    assertCartCookies(created.response);
     cart = { id: created.body.data.cartId, token: jar.get('ez_guest_cart')!, csrf: jar.get('ez_cart_csrf')! };
     return created;
   };

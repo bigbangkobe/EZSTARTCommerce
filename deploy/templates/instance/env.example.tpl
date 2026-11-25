@@ -15,10 +15,20 @@ IDENTITY_ENCRYPTION_KEY=
 BOOTSTRAP_TOKEN=
 
 # ===== 通知 Worker SMTP =====
+# 五项都填好，Worker 才会启动；缺一项 Worker 会直接以
+# identity_worker.start_failed 退出，会员登录码会永远停在 pending（前台只会显示「已寄出」）。
+# 465 = 隐式 TLS；其他端口必须支持 STARTTLS。SMTP_FROM 必须是供应商已授权、
+# 且域名配好 SPF/DKIM/DMARC 的寄件地址，否则邮件会被退信或丢进垃圾箱。
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USER=
 SMTP_PASSWORD=
+SMTP_FROM=
+
+# ===== 反向代理 =====
+# 前台 → Caddy → API：Caddy 追加 X-Forwarded-For，所以可信代理层数是 1。
+# 不配会让全站共用一个 IP 限流桶（加购与登录码请求会一起 429）；前面再加 CDN 需同步调大。
+TRUSTED_PROXY_HOPS=1
 
 # ===== 承运商状态回传（M09，可选）=====
 # 未配置时所有承运商回调返回 404，不会误收未登记来源。

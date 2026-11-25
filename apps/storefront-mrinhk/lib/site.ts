@@ -18,4 +18,22 @@ export const site = {
   policies: [{ policyKey: 'terms-of-service', version: 'demo-v1' }],
 } as const;
 
-export const whatsappLink = `https://wa.me/${site.whatsappIntl}?text=${encodeURIComponent(site.whatsappGreeting)}`;
+/** 香港本地固话/手机都是 8 位；换成其他市场时改这两个值与默认号码。 */
+const HK_COUNTRY_CODE = '852';
+const HK_LOCAL_DIGITS = 8;
+
+/**
+ * wa.me 只认 E.164（带国家码）的号码。
+ *
+ * 主题配置里的 `whatsappNumber` 可能是本地 8 位写法（60474794），直接拼进 wa.me 会打开
+ * 一个无效对话——前台页头用国际码、首页 Hero 用本地码，两者会指向不同链接。这里统一补齐
+ * 香港区号；已经是国际号码的原样使用，配置坏了也不至于拼出半个号码。
+ */
+export function whatsappHref(number: string | undefined, greeting: string): string {
+  // 号码缺失或写坏时退回实例配置的国际码：宁可指向客服号，也不要给出一个空号码的链接。
+  const digits = (number || site.whatsappIntl).replace(/\D/g, '');
+  const e164 = digits.length === HK_LOCAL_DIGITS ? `${HK_COUNTRY_CODE}${digits}` : digits;
+  return `https://wa.me/${e164}?text=${encodeURIComponent(greeting)}`;
+}
+
+export const whatsappLink = whatsappHref(site.whatsappIntl, site.whatsappGreeting);

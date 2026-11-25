@@ -390,6 +390,11 @@ img { max-width: 100%; }
 .card h3 { font-size: 1.04rem; margin-bottom: 10px; letter-spacing: 0.05em; }
 .card p { color: var(--muted); font-size: 0.87rem; line-height: 1.8; }
 
+/* 关于：一段引子 + 「阅读全文」入口。正文在内容页，首页只说重点。 */
+.about-intro { max-width: 46em; color: var(--ink-2); font-size: 0.95rem; line-height: 1.9; margin-bottom: 22px; }
+.about-more { margin-top: 22px; }
+.about-more .section-more { margin-left: 0; font-size: 0.82rem; color: var(--red); }
+
 /* 空态 / 错误态 */
 .empty-state {
   background: var(--card); border: 1px dashed var(--line-strong); border-radius: var(--radius);

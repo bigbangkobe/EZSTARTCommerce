@@ -22,7 +22,10 @@ trap 'die "第 ${LINENO} 行命令出错，部署中断"' ERR
 # 允许以普通用户执行：没有 docker 权限时自动加 sudo
 DOCKER="docker"
 docker info >/dev/null 2>&1 || DOCKER="sudo docker"
-dc() { $DOCKER compose "$@"; }
+# 通知 Worker 在 compose 里用 smtp profile 定义：不显式带 profile 就永远起不来。
+# 数组留空，等读到 .env 再决定（见「启动服务」前的 SMTP 判断）。
+COMPOSE_PROFILE_ARGS=()
+dc() { $DOCKER compose "${COMPOSE_PROFILE_ARGS[@]}" "$@"; }
 
 MODE="deploy"
 case "${1:-}" in
@@ -33,6 +36,13 @@ case "${1:-}" in
 esac
 
 [ -f .env ] || die "缺少 .env：请先 cp .env.example .env 并填好密钥"
+# 配了 SMTP_HOST 就把通知 Worker 一起拉起：会员登录码、邀请、密码重设邮件全靠它投递，
+# 少了这个 profile，任务会永远停在 pending，而前台只会告诉客人「验证码已寄出」。
+if grep -qE '^SMTP_HOST=.+' .env; then
+  COMPOSE_PROFILE_ARGS=(--profile smtp)
+else
+  log "⚠ .env 未配置 SMTP_HOST：通知 Worker 不启动，会员登录码与邀请邮件不会寄出"
+fi
 dc config -q || die "docker-compose.yml 校验失败"
 
 # ---------------- 回滚 ----------------

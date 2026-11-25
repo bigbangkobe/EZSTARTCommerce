@@ -44,9 +44,22 @@ function optionalMemberToken(request: ApiRequest) {
   return value && /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
 }
 
+/**
+ * 两个 cookie 的作用域不同，这不是笔误：
+ *
+ * - `ez_guest_cart` 是会话令牌，只有服务端用得上，作用域收窄到 `/api/v1`。
+ * - `ez_cart_csrf` 是**双提交**令牌，前端必须自己读出来放进请求头。浏览器的
+ *   `document.cookie` 只返回「cookie-path 是当前页面路径前缀」的 cookie，商品页在
+ *   `/zh-HK/products/...`，path 若写成 `/api/v1` 前端永远读不到，加购在发请求前就 403。
+ *   所以它的 path 必须是 `/`。
+ *
+ * 第三条是过渡清理：老部署发过 path=/api/v1 的同名 cookie，同名不同 path 会同时进入
+ * 请求头，服务端只会取到其中一个，不主动清掉就可能继续拿到旧值。
+ */
 function cartCookies(token: string, csrfToken: string) {
   return [serialize(CART_COOKIE, token, { httpOnly: true, secure: true, sameSite: 'lax', path: '/api/v1', maxAge: CART_MAX_AGE }),
-    serialize(CSRF_COOKIE, csrfToken, { httpOnly: false, secure: true, sameSite: 'lax', path: '/api/v1', maxAge: CART_MAX_AGE })];
+    serialize(CSRF_COOKIE, csrfToken, { httpOnly: false, secure: true, sameSite: 'lax', path: '/', maxAge: CART_MAX_AGE }),
+    serialize(CSRF_COOKIE, '', { httpOnly: false, secure: true, sameSite: 'lax', path: '/api/v1', maxAge: 0 })];
 }
 
 @Controller('storefront/cart')

@@ -178,7 +178,7 @@
 
 唯一的例外是 `GET /storefront/media/:id`：前台需要稳定、可缓存的图片地址（而不是每次渲染都签发短时 URL），所以它作为公开读接口写进了契约。两条边界必须保持：**只返回 `ready` 对象**、**不接受任何写操作**。任何媒体 id 都是不可猜的 UUID，但仍等于"知道地址就能取图"，因此不得用它承载非公开素材（合同、发票、顾客上传的个人资料）。
 
-游客购物袋的身份只来自 `ez_guest_cart` cookie（HttpOnly、Secure、SameSite=Lax、作用域 `/api/v1`）；写接口同时要求 `ez_cart_csrf` cookie 与 `X-CSRF-Token` 头一致（双提交）。该 cookie 只代表一个购物袋，不能读取订单、顾客或后台资源；这些接口不做 Origin 校验，因为前台与 API 可能不同源。
+游客购物袋的身份只来自 `ez_guest_cart` cookie（HttpOnly、Secure、SameSite=Lax、作用域 `/api/v1`）；写接口同时要求 `ez_cart_csrf` cookie 与 `X-CSRF-Token` 头一致（双提交）。**`ez_cart_csrf` 的作用域必须是 `/`**：它由页面脚本读取后放进请求头，而浏览器的 `document.cookie` 只暴露 path 匹配当前页面路径的 cookie——种在 `/api/v1` 时商品页读不到令牌，加购会在发请求前就判失败（建袋响应同时以 `Max-Age=0` 清掉旧作用域的同名 cookie）。该 cookie 只代表一个购物袋，不能读取订单、顾客或后台资源；这些接口不做 Origin 校验，因为前台与 API 可能不同源。
 
 `/storefront/checkout/orders` 的 `paymentMethodCode` 首期只接受配送方式显式开启的 `cod`（货到付款）。没有支付网关时不得接受其他方式，也不得在未收到交易通知前把订单标为已付款。
 

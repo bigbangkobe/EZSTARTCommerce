@@ -44,9 +44,40 @@ docker compose exec postgres pg_dump -U ezstart ezstart | gzip > backup_$(date +
 gunzip -c backup_YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -U ezstart ezstart  # 恢复
 ```
 
+## 通知 Worker（SMTP）：会员登录码／邀请／密码重设
+
+前台「會員登入」不设密码，只发一次性验证码。API 里发码这一步只做两件事：写一条
+`MemberOtpChallenge` 和一个 `IdentityNotificationJob`（`kind=member_otp`），**真正的 SMTP 投递由 worker 完成**。
+所以没配 SMTP 或 worker 没跑，客人永远收不到验证码，而页面仍显示「验证码已寄至」（`202` 只代表已排队）。
+
+compose 里 worker 用 `profiles: ["smtp"]` 定义，默认 `docker compose up -d` 不会拉起它：
+
+```bash
+# 1) 先在 .env 填好五项（缺一项 worker 会以 identity_worker.start_failed 退出）
+#    SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM
+# 2) 带 profile 启动（deploy.sh 检测到 SMTP_HOST 会自动带上 profile）
+docker compose --profile smtp up -d worker
+docker compose logs -f worker      # 期望看到 {"event":"identity_worker.started"}
+```
+
+验证投递：后台 `https://admin.<域名>/admin/settings` 的「邮件自检」，填真实收件地址，
+状态由 `pending` 变 `sent` 即链路通。排查用：
+
+```sql
+SELECT kind, status, attempts, "createdAt" FROM "IdentityNotificationJob"
+ WHERE kind = 'member_otp' ORDER BY "createdAt" DESC LIMIT 10;
+```
+
+`pending` 长期不动 = worker 没启动；`failed` = SMTP 拒投（重试 30/60/120/240 秒，第 5 次失败后终止
+并清除密文，只能请客人重新申请验证码）。另有三条口径要记住：验证码有效期 10 分钟、同邮箱 60 秒冷却、
+每邮箱每小时最多 5 封；重发会作废旧码。域名务必配 SPF、DKIM、DMARC，`SMTP_FROM` 用供应商验证过的寄件地址，
+否则邮件会被退信或丢进垃圾箱。
+
 ## 安全基线
 
 - PostgreSQL / API / worker 不暴露公网端口，唯一入口是 Caddy 80/443。
+- API 经 Caddy 反代，compose 里 `TRUSTED_PROXY_HOPS=1`：限流与审计按真实访客 IP 计。不配会让全站共用一个
+  限流桶（每 15 分钟 60 次写操作，加购与会员登录码会一起 429）；前面再加 CDN 时要同步调成 2 层。
 - `.env` 权限 `chmod 600`，不进 Git。
 - Lightsail 控制台开启每日自动快照；上线前做一次备份恢复演练。
 - 本商户实例数据只属于 IN先生，不得与其他商户实例交叉访问。

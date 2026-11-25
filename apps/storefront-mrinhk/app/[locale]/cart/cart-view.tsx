@@ -37,8 +37,10 @@ export default function CartView({ locale }: { locale: Locale }) {
     const result = await updateCartItem(itemId, quantity);
     setBusyId(null);
     if (!result.ok) {
-      setError(result.code === 'OUT_OF_STOCK' || result.status === 409
-        ? t.cart.outOfStock : result.message ?? t.cart.updateError);
+      setError(result.code === 'NO_CSRF'
+        ? t.common.sessionStale
+        : result.code === 'OUT_OF_STOCK' || result.status === 409
+          ? t.cart.outOfStock : result.message ?? t.cart.updateError);
       return;
     }
     setCart(result.data);
@@ -51,7 +53,7 @@ export default function CartView({ locale }: { locale: Locale }) {
     const result = await removeCartItem(itemId);
     setBusyId(null);
     if (!result.ok) {
-      setError(result.message ?? t.cart.removeError);
+      setError(result.code === 'NO_CSRF' ? t.common.sessionStale : result.message ?? t.cart.removeError);
       return;
     }
     await load();

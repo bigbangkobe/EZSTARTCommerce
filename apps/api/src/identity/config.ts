@@ -16,6 +16,15 @@ export interface IdentityConfig {
    * 省略视为开启：测试与旧调用方不需要改动。
    */
   requireMfa?: boolean;
+  /**
+   * 可信反向代理层数，默认 0。
+   *
+   * 0 = 只认直连对端地址，`X-Forwarded-For` 一律不信（安全默认）。
+   * 生产经 Caddy/ALB 反代时必须显式配 1：否则 API 看到的 remoteAddress 永远是代理容器 IP，
+   * 全站访客共用一个限流桶——每 15 分钟 60 次写操作很快被用完，之后所有人的加购、
+   * 改数量、会员登录码请求一起 429（ID 限流规则见 IDENTITY_SECURITY_POLICY）。
+   */
+  trustedProxyHops?: number;
 }
 
 /** 生产只接受 HTTPS；开发允许 localhost 的 HTTP，形式必须与配置值完全一致（不带路径）。 */
@@ -47,8 +56,38 @@ export function identityConfig(env: NodeJS.ProcessEnv): IdentityConfig {
   if (bootstrapToken && (bootstrapToken.length < 32 || bootstrapToken.length > 512)) throw new Error('Invalid bootstrap token');
   // 默认开启；只有显式写成 false 才关闭，避免拼错变量名把二次验证静默关掉。
   const requireMfa = env['ADMIN_REQUIRE_MFA'] !== 'false';
-  return { instanceId, allowedOrigin: admin ?? storefront, storefrontOrigin: storefront, encryptionKey, requireMfa,
+  // 可信代理层数：留空 = 0（只认直连对端）。上限 5 是防御性约束，配错不该静默放大到任意跳数。
+  const hopsRaw = (env['TRUSTED_PROXY_HOPS'] ?? '').trim();
+  const trustedProxyHops = hopsRaw === '' ? 0 : Number(hopsRaw);
+  if (!Number.isInteger(trustedProxyHops) || trustedProxyHops < 0 || trustedProxyHops > 5) throw new Error('Invalid TRUSTED_PROXY_HOPS');
+  return { instanceId, allowedOrigin: admin ?? storefront, storefrontOrigin: storefront, encryptionKey, requireMfa, trustedProxyHops,
     ...(bootstrapToken ? { bootstrapToken } : {}) };
+}
+
+/** 只接受 IP 字面量：转发头是客户端可写字段，任何别的形状都不能当限流键。 */
+function isIpLiteral(value: string): boolean {
+  if (value.includes(':')) return /^[0-9a-fA-F:]{2,45}$/.test(value) && !value.includes(':::'); // IPv6（含 IPv4 映射写法）
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+/**
+ * 请求来源地址：限流与审计共用的身份维度。
+ *
+ * `hops = 0` 时只认直连对端地址——转发头可以被客户端随意伪造，默认永远不信。
+ * 配了可信代理层数后取转发链「从右往左第 hops 段」：最外层可信代理追加在最后，
+ * 所以 hops=1 就取最后一段，正好是 Caddy 看到的真实访客地址。
+ */
+export function clientIp(request: { socket: { remoteAddress?: string | null | undefined };
+  headers: Record<string, string | string[] | undefined> }, hops = 0): string {
+  const direct = request.socket.remoteAddress ?? 'unknown';
+  if (hops <= 0) return direct;
+  const raw = request.headers['x-forwarded-for'];
+  const header = Array.isArray(raw) ? raw.join(',') : raw;
+  if (typeof header !== 'string' || !header.trim()) return direct;
+  const chain = header.split(',').map(part => part.trim()).filter(Boolean);
+  const candidate = chain[chain.length - hops];
+  return candidate && isIpLiteral(candidate) ? candidate : direct;
 }
 
 /**

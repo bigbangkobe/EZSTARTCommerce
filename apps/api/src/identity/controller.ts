@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parse, serialize } from 'cookie';
 import { securityPolicy as policy } from '../../../../packages/config/src/security-policy.js';
 import { IdentityContracts } from './contracts.js';
-import { originAllowed } from './config.js';
+import { clientIp, originAllowed } from './config.js';
 import { AuthError, IdentityService } from './service.js';
 
 export type ApiRequest = IncomingMessage & { requestId: string };
@@ -36,8 +36,9 @@ export class IdentityController {
     return this.identity;
   }
   private context(request: ApiRequest) {
-    // No trust-proxy by default: untrusted forwarding headers cannot bypass IP limits.
-    return { requestId: request.requestId, ip: request.socket.remoteAddress ?? 'unknown' };
+    // 默认不信任转发头：客户端可以随意伪造，否则 IP 限流形同虚设。
+    // 只有实例显式配置了可信代理层数（生产经 Caddy 反代时必须配 1）才取转发链地址。
+    return { requestId: request.requestId, ip: clientIp(request, this.identity?.config.trustedProxyHops ?? 0) };
   }
   private async write(request: ApiRequest, schema: string, body: unknown) {
     const service = this.service();
