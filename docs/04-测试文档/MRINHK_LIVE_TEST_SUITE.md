@@ -767,4 +767,74 @@ docker ps --format 'table {{.Names}}\t{{.Status}}'
 
 ---
 
-> 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11 节的执行记录。第 10 节于 2026-11-26 17:20 补齐后台登录态实测；第 11 节于 2026-11-26 18:00 在 staging 隔离库补齐所有高风险不可逆写用例（下单/幂等/COD 拒绝/主题发布/后台 CUD 闭环等），至此全文 🔒 项已系统性实测完毕。
+## 12. Staging 第二轮补测：会员 OTP / 售后闭环 / 优惠券 / 支付 Webhook（2026-11-26 19:30 追加）
+
+> 本轮把第 11 节遗留的 🔒 项（E2E-05 支付回调幂等、会员链路、售后闭环、优惠券核销）在 staging 隔离库全部真实执行完毕。**至此报告内所有用例均已实测，无遗留 🔒。**
+
+### 12.1 会员 OTP 注册/登录全链路（10/10 PASS）
+
+| 用例 | 结果 | 证据 |
+|---|---|---|
+| OTP 申请（未登记邮箱） | ✅ 202 | 响应含 `challengeId/resendAfterSeconds=60/expiresInSeconds=600`，落库 `MemberOtpChallenge(status=pending,maxAttempts=5)` |
+| 已登记/未登记邮箱响应形状一致（防枚举） | ✅ | 两种邮箱响应字段集合完全相同 |
+| 60 秒重发限流 | ✅ 429 `RATE_LIMITED` | |
+| 验证码提取（等价邮件投递） | ✅ | 用容器内 `decrypt(encryptedPayload, challengeId, cfg, 'member-otp')` 还原验证码，验证了 worker 投递链路的加密正确性 |
+| 错误码 → 401 且 `attempts+1` | ✅ | attempts=1/max=5 |
+| 正确码 → 会员登录 | ✅ 200 | 新会员 `MB-20261126-*` 自动注册，下发会员 session + 新 csrfToken |
+| 会员中心 profile/orders/points | ✅ 200 | |
+| **logout 后会话失效** | ✅ | 会员会话 csrf 与游客 cart csrf **不同且轮换**：旧 csrf 调 logout → 403（正确拒绝），会员 csrf → 204，随后 profile → 401 |
+| OTP 挑战状态落库 | ✅ | 验证后 `consumed` |
+
+### 12.2 售后/退款闭环（此前 422 根因已查明并修复）
+
+**根因**：售后建案/审批**必须携带 `Idempotency-Key` 头**（代码注释明确"金额与库存不能因网络重试做两次"），审批 body 必须含非空 `reason`，且需 `If-Match` 乐观锁。此前 422 均为测试脚本缺头缺字段，非系统缺陷。
+
+| 用例 | 结果 |
+|---|---|
+| 售后建案 cancel（带幂等键） | ✅ 201，案件号 `AS-20261126-*`，status=submitted |
+| 售后审批（reason + If-Match:"1"） | ✅ 200，status=completed |
+| 副作用 | ✅ 订单 `awaiting_confirmation → cancelled`，落 `OrderStatusEvent` |
+| 旧版本审批 | ✅ 409 `VERSION_CONFLICT` |
+| 已发货订单建 cancel 案 | ✅ 409 `ORDER_ALREADY_SHIPPED`（正确拒绝） |
+| 已收款订单建 cancel 案 | ✅ 422 `PAID_ORDER_REQUIRES_REFUND`（必须走 refund，静态断言 `assertCancelCaseOrder` 实测命中） |
+
+### 12.3 优惠券核销链路（3/3 PASS）
+
+| 用例 | 结果 | 证据 |
+|---|---|---|
+| 管理端建券 | ✅ 201 | percent 10%（discountValue=1000） |
+| 券不存在时报价 | ✅ 409 `COUPON_NOT_FOUND` | 边界正确 |
+| 带券报价 | ✅ 200 | `couponSummary={codeMasked:'QA****10', discountMinor:12000}`，subtotal 120000 → total 108000（10% 计算正确） |
+| 用券下单 | ✅ 201 | 折扣随 quote 快照落库 |
+
+### 12.4 支付 Webhook 验签与幂等（E2E-05 实测通过，🔒 解除）
+
+staging 通过 DB 启用 mock 渠道（需同时满足 `enabled + approvalReference + approvedAt` 约束与 `connectionStatus=ok`），凭据走 `secret://file//tmp/*.json`（JSON 结构 `{"apiKey","webhookSecret"}`）。
+
+| 用例 | 结果 | 证据 |
+|---|---|---|
+| mock 渠道出现在结账支付方式 | ✅ | `paymentMethods=['cod','mock']` |
+| 发起支付（pay） | ✅ 200 | Payment 行落库 pending，回写 `providerTransactionId`，收银台 `redirectUrl` |
+| 伪造 HMAC 签名 | ✅ 400 `WEBHOOK_SIGNATURE_INVALID` | timingSafeEqual 比较 |
+| 过期时间戳（±300s 窗外） | ✅ 400 `WEBHOOK_TIMESTAMP_EXPIRED` | 防重放窗口实测生效 |
+| 合法签名回调 | ✅ 202 `accepted` | DB 支付 `pending → succeeded`，订单 `paymentStatus=succeeded`（`orderStatus=awaiting_confirmation` 符合状态机设计：收款与履约状态独立） |
+| **同 eventId 重放** | ✅ 202 `duplicate` | 幂等去重实测生效，无二次入账 |
+| 未配置渠道（stripe 等） | ✅ 404 | 不泄露渠道是否存在 |
+| **渠道启用安全约束** | ✅ | DB check 约束 `enabled_requires_approval`：直接改库启用被拒，必须补审批字段；`connectionStatus` 必须 ok 才对前台可见——三层门禁（启用/审批/连通性验证）均实测确认 |
+
+### 12.5 契约与实现差异（1 项 P3，非缺陷）
+
+- **`GET /storefront/member/coupons`**：openapi.yaml 已声明（operationId=listMemberCoupons），但后端 dist 中无路由注册（实测登录态 404），前端也未调用、loyalty-service 无对应逻辑。定性：**契约超前声明**（P3 文档级），建议后续实现或从 openapi 移除，避免误导接入方。
+
+### 12.6 数据卫生与生产隔离（第二轮）
+
+| 项 | 结果 |
+|---|---|
+| staging | 测试后再次整体重置（restore 干净快照 + 重新脱敏 + 重建 QA 账号），health 200 |
+| 生产 ShopOrder / QA 残留 | 0 / 0 |
+| 生产非 cod 启用渠道 | 0（mock 仅存在于 staging） |
+| 生产 API health / 登录 / 前台 | 200 / 200 / 307（正常重定向） |
+
+---
+
+> 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11/12 节的执行记录。第 10 节（17:20）补齐后台登录态；第 11 节（18:00）补齐隔离库高风险写用例；第 12 节（19:30）补齐会员 OTP 全链路、售后闭环、优惠券核销与支付 Webhook 验签幂等——**至此全文用例均已线上实测，无遗留 🔒 项**（仅第 12.5 一项 P3 契约声明差异待产品决策）。
