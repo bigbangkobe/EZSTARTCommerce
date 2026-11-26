@@ -131,6 +131,18 @@ const zhHK = {
       { glyph: '速', title: '高效物流', body: '自家車隊配合高效物流系統，送貨安全可靠，貨到付款。' },
     ],
   },
+  aboutPage: {
+    seoTitle: '關於 IN先生｜香港香煙速遞 · 自家車隊 · 正貨保證',
+    seoDescription: 'IN先生成立於香港，專注香煙速遞，提供 IQOS 加熱煙系列、免稅及完稅香煙；自家車隊送貨、貨到付款，堅持貨真價實，絕不售賣假冒香煙。',
+    title: '關於 IN先生',
+    lead: 'IN先生成立於香港，是一家專注於香煙速遞服務的專業團隊，專門提供 IQOS 加熱煙系列、免稅香煙及完稅香煙的香煙送貨服務。',
+    paragraphs: [
+      '我們致力於為客戶提供頂級質素的正牌香煙，涵蓋日本煙、IQOS 加熱煙系列等多個來源的國際香煙品牌。',
+      '憑藉自家車隊和高效物流系統，我們確保每一次送貨都安全可靠，貨到付款，讓客戶無後顧之憂。',
+      '公司秉持誠信可靠的經營理念，堅持貨真價實，絕不售賣假冒香煙產品，贏得廣大客戶的信賴。',
+    ],
+    footnote: '如欲查詢貨品或送貨安排，歡迎透過 WhatsApp 直接聯絡我們。',
+  },
   products: {
     heading: '商品',
     jp: '商品のご案内',
@@ -456,6 +468,18 @@ const zhCN: Copy = {
       { glyph: '速', title: '高效物流', body: '自家车队配合高效物流系统，送货安全可靠，货到付款。' },
     ],
   },
+  aboutPage: {
+    seoTitle: '关于 IN先生｜香港香烟速递 · 自家车队 · 正货保证',
+    seoDescription: 'IN先生成立于香港，专注香烟速递，提供 IQOS 加热烟系列、免税及完税香烟；自家车队送货、货到付款，坚持货真价实，绝不售卖假冒香烟。',
+    title: '关于 IN先生',
+    lead: 'IN先生成立于香港，是一家专注于香烟速递服务的专业团队，专门提供 IQOS 加热烟系列、免税香烟及完税香烟的香烟送货服务。',
+    paragraphs: [
+      '我们致力于为客户提供顶级素质的正牌香烟，涵盖日本烟、IQOS 加热烟系列等多个来源的国际香烟品牌。',
+      '凭借自家车队和高效物流系统，我们确保每一次送货都安全可靠，货到付款，让客户无后顾之忧。',
+      '公司秉持诚信可靠的经营理念，坚持货真价实，绝不售卖假冒香烟产品，赢得广大客户的信赖。',
+    ],
+    footnote: '如需查询货品或送货安排，欢迎通过 WhatsApp 直接联系我们。',
+  },
   products: {
     heading: '商品',
     jp: '商品のご案内',
@@ -778,6 +802,18 @@ const en: Copy = {
       { glyph: '正', title: 'Authentic stock', body: 'Japanese cigarettes and IQOS heated tobacco sourced from established international brands.' },
       { glyph: '速', title: 'Efficient logistics', body: 'Our own fleet plus a lean logistics system: safe delivery, paid on arrival.' },
     ],
+  },
+  aboutPage: {
+    seoTitle: 'About Mr. IN | Hong Kong Cigarette Delivery · Own Fleet',
+    seoDescription: 'Founded in Hong Kong, Mr. IN specialises in cigarette delivery — IQOS heated tobacco, duty-free and duty-paid cigarettes, delivered by our own fleet with cash on delivery. Authentic stock only.',
+    title: 'About Mr. IN',
+    lead: 'Founded in Hong Kong, Mr. IN is a dedicated cigarette-delivery team supplying IQOS heated tobacco, duty-free and duty-paid cigarettes.',
+    paragraphs: [
+      'We are committed to top-quality authentic cigarettes, covering international brands from Japanese cigarettes to the IQOS heated tobacco range.',
+      'With our own fleet and an efficient logistics system, every delivery is safe and reliable — paid for on arrival, so you can order with peace of mind.',
+      'We operate with integrity: genuine goods at honest prices, never counterfeit cigarettes — that is how we earned the trust of our customers.',
+    ],
+    footnote: 'To ask about products or delivery, message us directly on WhatsApp.',
   },
   products: {
     heading: 'Products',

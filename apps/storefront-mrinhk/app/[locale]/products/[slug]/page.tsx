@@ -8,6 +8,7 @@ import { fetchProduct, formatPrice } from '../../../../lib/products';
 import { productHue, productInitial } from '../../../product-cards';
 import AddToCartForm from './add-to-cart-form';
 import AnalyticsTracker from '../../../analytics-tracker';
+import { jsonLdScript, productJsonLd } from '../../../../lib/jsonld';
 
 export const revalidate = 60;
 
@@ -42,10 +43,12 @@ export default async function ProductDetailPage({ params }: {
   const t = copyFor[locale];
   const product = await fetchProduct(slug, locale);
   if (!product) notFound();
+  const canonicalUrl = localePath(locale, `/products/${encodeURIComponent(slug)}`);
 
   return (
     <section className="section">
       <div className="container">
+        <script type="application/ld+json" dangerouslySetInnerHTML={jsonLdScript(productJsonLd(product, canonicalUrl))} />
         <AnalyticsTracker pageKey={`product:${slug}`} locale={locale} variantId={product.variants[0]?.id} />
         <nav className="breadcrumb" aria-label={t.nav.home}>
           <Link href={localePath(locale)} hrefLang={locale}>{t.nav.home}</Link>

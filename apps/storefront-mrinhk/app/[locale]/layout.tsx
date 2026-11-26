@@ -136,6 +136,7 @@ export default async function LocaleLayout({ children, params }: {
             </Link>
 
             <nav className="site-nav" aria-label={t.nav.home}>
+              <Link href={localePath(locale, '/about')} hrefLang={locale}>{t.about.heading}</Link>
               <Link href={localePath(locale, '/products')} hrefLang={locale}>{t.nav.products}</Link>
               <Link href={localePath(locale, '/categories')} hrefLang={locale}>{t.nav.categories}</Link>
               <Link href={localePath(locale, '/collections')} hrefLang={locale}>{t.nav.collections}</Link>
@@ -190,6 +191,7 @@ export default async function LocaleLayout({ children, params }: {
 
             <nav className="footer-col" aria-label={t.shell.footerHelp}>
               <h2>{t.shell.footerHelp}</h2>
+              <Link href={localePath(locale, '/about')} hrefLang={locale}>{t.about.heading}</Link>
               <Link href={localePath(locale, '/contact')} hrefLang={locale}>{t.nav.contact}</Link>
               {pages.length > 0 && (
                 <Link href={localePath(locale, '/pages')} hrefLang={locale}>{t.pagesIndex.back}</Link>

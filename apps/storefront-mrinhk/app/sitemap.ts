@@ -44,7 +44,7 @@ async function allProducts(locale: string): Promise<Product[]> {
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = `https://${site.domain}`;
   const now = new Date();
-  const staticPaths = ['', '/products', '/categories', '/collections', '/contact'];
+  const staticPaths = ['', '/about', '/products', '/categories', '/collections', '/contact'];
 
   // sitemap 的 alternate 必须是绝对地址，相对路径爬虫不会解析。
   const absoluteAlternates = (path: string) => Object.fromEntries(

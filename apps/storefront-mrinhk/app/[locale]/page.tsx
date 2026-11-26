@@ -5,13 +5,14 @@ import { notFound } from 'next/navigation';
 import { site, whatsappHref } from '../../lib/site';
 import { altPaths, copyFor, isLocale, localePath, type Locale } from '../../lib/i18n';
 import { fetchProducts, type ProductResult } from '../../lib/products';
-import { fetchContentRelease, fetchPages, type ContentPageSummary } from '../../lib/content';
+import { fetchContentRelease } from '../../lib/content';
 import { fetchCategories, type CategorySummary } from '../../lib/categories';
 import { fetchMerchandising, type MerchResult } from '../../lib/merchandising';
 import { fetchTheme, type ThemeSection } from '../../lib/theme';
 import { ProductCards } from '../product-cards';
 import AnalyticsTracker from '../analytics-tracker';
 import SectionTracker from '../section-tracker';
+import { jsonLdScript, organizationJsonLd } from '../../lib/jsonld';
 
 function SectionHead({ num, title, jp, action }: {
   num: string; title: string; jp: string; action?: { href: string; label: string };
@@ -231,10 +232,9 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   const { locale: raw } = await params;
   if (!isLocale(raw)) notFound();
   const locale: Locale = raw;
-  const [result, contentRelease, merch, theme, categoryResult, pages] = await Promise.all([
+  const [result, contentRelease, merch, theme, categoryResult] = await Promise.all([
     fetchProducts(locale), fetchContentRelease(locale), fetchMerchandising(locale), fetchTheme(),
-    fetchCategories(locale).catch(() => ({ ok: false, items: [] as CategorySummary[] })),
-    fetchPages(locale).catch(() => [] as ContentPageSummary[])]);
+    fetchCategories(locale).catch(() => ({ ok: false, items: [] as CategorySummary[] }))]);
 
   // 主题配置决定品牌、WhatsApp 与首页区块顺序；未配置时全部回退默认值，行为与改造前一致。
   const brandName = theme?.brand.name ?? site.brand;
@@ -242,8 +242,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   const whatsappGreeting = theme?.brand.whatsappGreeting ?? '你好，想向你查詢詳情';
   // 号码统一走 whatsappHref：主题里填的可能是本地 8 位号码，wa.me 只认 E.164。
   const waLink = whatsappHref(theme?.brand.whatsappNumber ?? site.whatsappNumber, whatsappGreeting);
-  // 「关于我们」全文页由后台内容页维护；没发布就没有入口，不猜地址。
-  const aboutPage = pages.find(page => page.pageKey === 'about-us') ?? null;
   const sections = theme?.homeSections?.length ? theme.homeSections : DEFAULT_SECTIONS;
   const categories = categoryResult.items.filter(item => item.slug);
   // 首页角标用接口给的真实总数；拿不到时才退回「第一页条数」并标个 +。
@@ -254,6 +252,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
   return (
     <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={jsonLdScript(organizationJsonLd(locale))} />
       <AnalyticsTracker pageKey="home" locale={locale} />
       <SectionTracker pageKey="home" publishVersionId={contentRelease} locale={locale} />
       {sections.map((section, index) => {
@@ -267,7 +266,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             return <Fragment key={`promise-${index}`}>{renderPromises(locale, marks.get(index) ?? '')}</Fragment>;
           case 'about':
             return <Fragment key={`about-${index}`}>{renderAbout(locale, marks.get(index) ?? '',
-              aboutPage ? localePath(locale, `/pages/${encodeURIComponent(aboutPage.slug)}`) : null)}</Fragment>;
+              localePath(locale, '/about'))}</Fragment>;
           case 'product_grid': {
             const limit = typeof section.params?.limit === 'number' ? section.params.limit : 6;
             return <Fragment key={`grid-${index}`}>{renderProductGrid(locale, result, merch, waLink, limit, marks.get(index) ?? '')}</Fragment>;
