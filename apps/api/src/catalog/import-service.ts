@@ -251,7 +251,9 @@ export class ImportService {
     return this.identity.withPermission(supplied, csrfValue, 'catalog.import', async (tx, actor) => {
       const job = await this.load(tx, id, true);
       this.stateRule(() => assertTransition(job.status, 'cancelled'));
-      await tx.$executeRaw`UPDATE "ImportJob" SET "status" = 'cancelled', "completedAt" = now() WHERE "id" = ${id}::uuid`;
+      // cancelled 不是 completed：ImportJob_completed_check 只允许 completed/completed_with_errors
+      // 写 completedAt，取消时必须保持 NULL，否则违反约束变 500。
+      await tx.$executeRaw`UPDATE "ImportJob" SET "status" = 'cancelled' WHERE "id" = ${id}::uuid`;
       await this.identity.recordAudit(tx, ctx, actor.id, 'catalog.import.cancelled', id, 'success', reason);
       return { cancelled: true };
     }, true);
