@@ -33,3 +33,6 @@ deploy/instances/*/
 
 # 本机校验用的编译产物（tsc --outDir _verify）：属构建输出，绝不入库
 _verify/
+
+# QA 临时测试脚本：可能含真实凭据/密码，绝不入库
+.qa-tmp/
