@@ -1059,6 +1059,17 @@ staging 通过 DB 启用 mock 渠道（需同时满足 `enabled + approvalRefere
 
 6. **OBSERVE-12（P3，设计权衡）**：execute 会把 `ImportJob.idempotencyKey` 从 `create:<key>` 覆写为 `execute:<key>`（单列 + unique 索引只能存一键）。副作用：任务执行后，**create 的幂等重放不再命中而会新建任务**。当前风险低（create 幂等主要防双击，窗口在执行前），建议后续拆双列或改存复合键。
 
+### 13.9 正式发布记录（2026-11-27 00:45）
+
+| 项 | 内容 |
+|---|---|
+| 发布版本 | 服务器源码 `4fbd4f7`（含 BUG-01/02 修复；`50aaf13` 仅文档差异） |
+| 变更范围 | 2 个纯代码修复，无数据库迁移、无 schema 变更 |
+| 部署步骤 | 回滚备份 `docker tag ezstart-mrinhk-api:latest ezstart-mrinhk-api:rollback-20261127` → compose build api → `up -d api worker`（api 与 worker 共用镜像） |
+| 结果 | api 容器 ~25 秒 healthy；storefront 跟随重定向 200、admin 跟随重定向 200、`/api/v1/storefront/pages` 200 ✅ |
+| 回滚方式 | `docker tag ezstart-mrinhk-api:rollback-20261127 ezstart-mrinhk-api:latest && docker compose -f deploy/merchants/mrinhk/docker-compose.yml up -d api worker` |
+| 备注 | 生产 BUG-01/02 未做写操作复测（避免触碰业主 admin 账号触发连续失败锁定）；生产镜像与 staging 复测通过的镜像由同一提交构建，代码一致。导入修复以 staging 全链路验证为准。 |
+
 ---
 
 > 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11/12/13 节的执行记录。第 10 节（17:20）补齐后台登录态；第 11 节（18:00）补齐隔离库高风险写用例；第 12 节（19:30）补齐会员 OTP 全链路、售后闭环、优惠券核销与支付 Webhook 验签幂等；第 13 节（18:50）以真实 admin 会话解锁第 3.2~3.9 节遗留 🔒 项（生产只读 38 项 + 负路径 9 项 + staging 写闭环 20+ 项）；第 13.8 节（11-27）修复 BUG-01/BUG-02 并完成**导入功能端到端闭环**——**全文用例均已线上实测，无遗留 🔒 项**（仅 4 项 P3 契约级观察待产品决策）。
