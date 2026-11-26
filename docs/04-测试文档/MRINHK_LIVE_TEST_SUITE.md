@@ -1068,7 +1068,7 @@ staging 通过 DB 启用 mock 渠道（需同时满足 `enabled + approvalRefere
 | 部署步骤 | 回滚备份 `docker tag ezstart-mrinhk-api:latest ezstart-mrinhk-api:rollback-20261127` → compose build api → `up -d api worker`（api 与 worker 共用镜像） |
 | 结果 | api 容器 ~25 秒 healthy；storefront 跟随重定向 200、admin 跟随重定向 200、`/api/v1/storefront/pages` 200 ✅ |
 | 回滚方式 | `docker tag ezstart-mrinhk-api:rollback-20261127 ezstart-mrinhk-api:latest && docker compose -f deploy/merchants/mrinhk/docker-compose.yml up -d api worker` |
-| 备注 | 生产 BUG-01/02 未做写操作复测（避免触碰业主 admin 账号触发连续失败锁定）；生产镜像与 staging 复测通过的镜像由同一提交构建，代码一致。导入修复以 staging 全链路验证为准。 |
+| 备注 | 生产 BUG-01/02 未做写操作复测（避免触碰业主 admin 账号触发连续失败锁定）；生产镜像与 staging 复测通过的镜像由同一提交构建，代码一致。导入修复以 staging 全链路验证为准。**补（11-27 00:50）：经业主确认凭据后已在生产完成 BUG-01 复测——`admin`（Owner 角色）登录 200 → import-files 201 → 签名 PUT 上传 204，修复在生产生效 ✅；测试用会话已登出**。 |
 
 ---
 
