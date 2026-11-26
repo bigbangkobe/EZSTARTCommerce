@@ -123,6 +123,71 @@
 > 全局前缀 `/api/v1`；全局中间件注入 `X-Request-Id`、`Cache-Control: no-store`、`X-Content-Type-Options: nosniff`。
 > 错误码映射见 `app.ts` ApiExceptionFilter：400/422 VALIDATION_ERROR、401 UNAUTHORIZED、403 FORBIDDEN、404 NOT_FOUND、409 STATE_CONFLICT、413 PAYLOAD_TOO_LARGE、429 RATE_LIMITED、503 SERVICE_NOT_READY。
 > 说明：公开 GET 已线上探测填实测；受保护写接口标注认证/权限要求（🔒 需会话，未登录基线为 401）。
+> **标记图例（第三轮回填）**：✅（13节）= 已以真实 admin 会话线上实测（生产只读/负路径见 13.1~13.2，staging 写闭环见 13.3，售后/主题/支付配置见第 11/12 节）。
+> 剩余 🔒 项均为**需要专门测试物料**才能实测的项，物料清单见第 13.6 节。
+
+### 3.0 写接口的前置条件链（所有 🔒→✅ 项共同依赖）
+
+以 `POST /admin/categories` 为例，一次合法的写请求必须同时满足 **7 个前置条件**：
+
+```bash
+# 1. 登录：POST /api/v1/admin/auth/login
+#    必须带 Origin: https://admin.mrinhk.com（CSRF Origin 校验）
+#    → 响应 cookie: ez_admin_session + 响应体 data.csrfToken（64 位）
+curl -X POST https://admin.mrinhk.com/api/v1/admin/auth/login \
+  -H 'Content-Type: application/json' \
+  -H 'Origin: https://admin.mrinhk.com' \
+  -d '{"email":"admin","password":"..."}'
+
+# 2~7. 之后每个写请求需要：
+curl -X POST https://admin.mrinhk.com/api/v1/admin/categories \
+  -b 'ez_admin_session=...' \                          # 2. 会话 cookie
+  -H 'Origin: https://admin.mrinhk.com' \              # 3. Origin 必须匹配（否则 403）
+  -H 'x-csrf-token: <登录响应里的 csrfToken>' \        # 4. CSRF 头（否则 403 FORBIDDEN）
+  -H 'Idempotency-Key: qa-cat-10-abc12345' \           # 5. 幂等键 16~128 位（否则 422）
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"translations":[{"locale":"zh-HK","name":"...","slug":"..."}]}'
+#                                                        6. 权限码：角色必须含 catalog.write
+#                                                        7. body 必须符合该端点 schema（闭集校验）
+
+# PATCH 类接口额外需要（乐观锁，否则 409/428）：
+curl -X PATCH .../admin/categories/<id> \
+  -H 'If-Match: "3"'    # 8. 当前版本号，带引号（先 GET 拿 version）
+```
+
+各端点的**业务级**前置条件（schema 之外）：
+
+| 端点类 | 业务前置条件 |
+|---|---|
+| 报表 `GET /admin/reports/:key` | `from`/`to` 完整 ISO 时间戳 + **`timezone` 必填（IANA，如 Asia/Hong_Kong）** |
+| 商品/页面 publish | 翻译必须**覆盖全部启用语言**（缺则 422 CONTENT_LOCALE_INCOMPLETE） |
+| 商品 publish | 变体必须存在且启用（assertPublishable） |
+| 页面 blocks | 类型闭集 `rich_text/faq_list/contact_card/notice`；`rich_text` 必须含 `paragraphs` 数组 |
+| 会话 revoke | body 必须 `{"reason":"..."}`（缺则 422） |
+| 批次券 | `recipientMemberIds` 与 `recipientFilter` 必须**二选一** |
+| 媒体上传 | `contentType` 仅 `image/*`；上传文件魔数必须与申请类型一致（detectContentType） |
+| 员工邀请 | 委托角色不得为 owner 且权限须是操作者权限子集（否则 403） |
+| 导入任务 | 需先 `POST /admin/import-files` 上传 CSV（sha256 校验）再建 job |
+| 订单取消/发货/退款 | 需先有一笔真实状态的订单（生产无测试订单，只能在 staging 造） |
+
+### 3.0.1 剩余 🔒 项与所需测试物料（13.6）
+
+| 接口组 | 数量 | 所需物料 | 现状 |
+|---|---|---|---|
+| API-050~056 导入任务 | 7 | 合法 CSV（含 sha256）+ 错误行 CSV | 未实测 |
+| API-065~070 订单取消/改址/备注/发货/出库/妥投 | 6 | 一笔 staging 真实订单（11 节已造过可复用） | 未实测 |
+| API-076 payment-result | 1 | 已收款订单 | 未实测 |
+| API-090~095 售后 reject/退货物流/收货/质检/close | 6 | 处于不同状态的售后单 | 部分实测（089 approve/094 refund 已测） |
+| API-097/099~101 退款创建/审批/执行 | 4 | 已收款订单 + 退款渠道 | 未实测 |
+| API-105/106 库存阈值/调整 | 2 | 无（可直接造） | 未实测 |
+| API-113/115~117 会员 PATCH/积分设置/等级 | 4 | 无（可直接造） | 未实测 |
+| API-142~144 陈列写 | 3 | 陈列配置 schema | 未实测 |
+| API-148/149 主题 unpublish/rollback | 2 | 两个主题版本 | 未实测 |
+| API-161~163 隐私导出/设置 | 3 | verified 隐私请求 | 未实测 |
+| API-170 mail/test POST | 1 | SMTP 配置 | 未实测 |
+| API-003/005 job token/承运商 webhook | 2 | job token / carrier 密钥 | 未实测 |
+
+> 以上均为 P1/P2 低风险项（多为"造数据后才能触发的状态机后续步骤"），不影响上线结论；需要时可按第 11 节 staging 流程补测。
 
 ### 3.1 健康检查与内部任务 / Webhook（5 条）
 
@@ -138,39 +203,39 @@
 
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
-| API-006 | POST /admin/auth/bootstrap | 公开 + `x-bootstrap-token`（仅未初始化） | 🔒 已初始化应拒绝 |
-| API-007 | POST /admin/auth/login | 公开 + Origin + IP 限流 | ✅ 登录页可达；提交🔒 |
-| API-008 | POST /admin/auth/invitations/accept | 公开 + 邀请 token | 🔒 |
-| API-009 | POST /admin/auth/password | 管理员 + CSRF | 🔒 |
-| API-010 | POST /admin/auth/password-reset | 公开 + resetToken | 🔒 |
+| API-006 | POST /admin/auth/bootstrap | 公开 + `x-bootstrap-token`（仅未初始化） | ✅（13节） 已初始化应拒绝 |
+| API-007 | POST /admin/auth/login | 公开 + Origin + IP 限流 | ✅ 登录页可达；提交✅（13节） |
+| API-008 | POST /admin/auth/invitations/accept | 公开 + 邀请 token | ✅（13节） |
+| API-009 | POST /admin/auth/password | 管理员 + CSRF | ✅（13节） |
+| API-010 | POST /admin/auth/password-reset | 公开 + resetToken | ✅（13节） |
 | API-011 | POST /admin/auth/mfa/enrollments | setup cookie | 🔒 |
 | API-012 | POST /admin/auth/mfa/enrollments/confirm | setup cookie + code | 🔒 |
-| API-013 | POST /admin/auth/mfa/verify | challenge cookie + code | 🔒 |
+| API-013 | POST /admin/auth/mfa/verify | challenge cookie + code | ✅（13节） |
 | API-014 | GET /admin/auth/session | 管理员（可匿名） | ✅ 未登录 UNAUTHORIZED |
-| API-015 | POST /admin/auth/logout | 管理员 + CSRF + Origin + 限流 | 🔒 |
-| API-016 | GET /admin/auth/sessions | 管理员 | 🔒 |
-| API-017 | POST /admin/auth/sessions/:id/revoke | 管理员 + CSRF | 🔒 |
-| API-018 | POST /admin/auth/mfa/enrollment-authorizations | 管理员 + CSRF + 密码/MFA | 🔒 |
+| API-015 | POST /admin/auth/logout | 管理员 + CSRF + Origin + 限流 | ✅（13节） |
+| API-016 | GET /admin/auth/sessions | 管理员 | ✅（13节） |
+| API-017 | POST /admin/auth/sessions/:id/revoke | 管理员 + CSRF | ✅（13节） |
+| API-018 | POST /admin/auth/mfa/enrollment-authorizations | 管理员 + CSRF + 密码/MFA | ✅（13节） |
 | API-019 | GET /admin/users | staff.read | ✅ 未登录 401 |
-| API-020 | GET /admin/users/:id | staff.read | 🔒 |
-| API-021 | PATCH /admin/users/:id | staff.manage + CSRF + If-Match | 🔒 |
-| API-022 | GET /admin/users/:id/sessions | staff.read | 🔒 |
-| API-023 | POST /admin/users/:id/sessions/revoke | staff.manage + CSRF | 🔒 |
-| API-024 | POST /admin/users | staff.manage + CSRF | 🔒 |
-| API-025 | GET /admin/users/:id/invitation | staff.read/manage | 🔒 |
-| API-026 | POST /admin/users/:id/invitation/resend | staff.manage + CSRF | 🔒 |
-| API-027 | POST /admin/users/:id/invitation/revoke | staff.manage + CSRF | 🔒 |
-| API-028 | GET /admin/roles | roles.manage | 🔒 |
-| API-029 | GET /admin/roles/:id | roles.manage | 🔒 |
-| API-030 | POST /admin/roles | roles.manage + CSRF | 🔒 |
-| API-031 | PATCH /admin/roles/:id | roles.manage + CSRF | 🔒 |
-| API-032 | GET /admin/audit-logs | audit.read | 🔒 |
+| API-020 | GET /admin/users/:id | staff.read | ✅（13节） |
+| API-021 | PATCH /admin/users/:id | staff.manage + CSRF + If-Match | ✅（13节） |
+| API-022 | GET /admin/users/:id/sessions | staff.read | ✅（13节） |
+| API-023 | POST /admin/users/:id/sessions/revoke | staff.manage + CSRF | ✅（13节） |
+| API-024 | POST /admin/users | staff.manage + CSRF | ✅（13节） |
+| API-025 | GET /admin/users/:id/invitation | staff.read/manage | ✅（13节） |
+| API-026 | POST /admin/users/:id/invitation/resend | staff.manage + CSRF | ✅（13节） |
+| API-027 | POST /admin/users/:id/invitation/revoke | staff.manage + CSRF | ✅（13节） |
+| API-028 | GET /admin/roles | roles.manage | ✅（13节） |
+| API-029 | GET /admin/roles/:id | roles.manage | ✅（13节） |
+| API-030 | POST /admin/roles | roles.manage + CSRF | ✅（13节） |
+| API-031 | PATCH /admin/roles/:id | roles.manage + CSRF | ✅（13节） |
+| API-032 | GET /admin/audit-logs | audit.read | ✅（13节） |
 
 ### 3.3 店铺设置（3 条）
 
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
-| API-033 | GET /admin/store-config | store.settings.manage | 🔒 |
+| API-033 | GET /admin/store-config | store.settings.manage | ✅（13节） |
 | API-034 | PATCH /admin/store-config | store.settings.manage + CSRF + If-Match | 🔒 |
 | API-035 | POST /admin/store-config/markets/:marketCode/reviews | store.settings.manage + CSRF | 🔒 |
 
@@ -178,20 +243,20 @@
 
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
-| API-036 | GET /admin/categories | catalog.read | 🔒 |
-| API-037 | GET /admin/categories/:id | catalog.read | 🔒 |
-| API-038 | POST /admin/categories | catalog.write + CSRF | 🔒 |
-| API-039 | PATCH /admin/categories/:id | catalog.write + CSRF + If-Match | 🔒 |
-| API-040 | GET /admin/brands | catalog.read | 🔒 |
-| API-041 | GET /admin/brands/:id | catalog.read | 🔒 |
-| API-042 | POST /admin/brands | catalog.write + CSRF | 🔒 |
-| API-043 | PATCH /admin/brands/:id | catalog.write + CSRF + If-Match | 🔒 |
-| API-044 | GET /admin/products | catalog.read | 🔒 |
-| API-045 | GET /admin/products/:id | catalog.read | 🔒 |
-| API-046 | POST /admin/products | catalog.write + CSRF | 🔒 |
-| API-047 | PATCH /admin/products/:id | catalog.write + CSRF + If-Match | 🔒 |
-| API-048 | POST /admin/products/:id/publish | catalog.publish + CSRF | 🔒 |
-| API-049 | POST /admin/products/:id/unpublish | catalog.publish + CSRF | 🔒 |
+| API-036 | GET /admin/categories | catalog.read | ✅（13节） |
+| API-037 | GET /admin/categories/:id | catalog.read | ✅（13节） |
+| API-038 | POST /admin/categories | catalog.write + CSRF | ✅（13节） |
+| API-039 | PATCH /admin/categories/:id | catalog.write + CSRF + If-Match | ✅（13节） |
+| API-040 | GET /admin/brands | catalog.read | ✅（13节） |
+| API-041 | GET /admin/brands/:id | catalog.read | ✅（13节） |
+| API-042 | POST /admin/brands | catalog.write + CSRF | ✅（13节） |
+| API-043 | PATCH /admin/brands/:id | catalog.write + CSRF + If-Match | ✅（13节） |
+| API-044 | GET /admin/products | catalog.read | ✅（13节） |
+| API-045 | GET /admin/products/:id | catalog.read | ✅（13节） |
+| API-046 | POST /admin/products | catalog.write + CSRF | ✅（13节） |
+| API-047 | PATCH /admin/products/:id | catalog.write + CSRF + If-Match | ✅（13节） |
+| API-048 | POST /admin/products/:id/publish | catalog.publish + CSRF | ✅（13节） |
+| API-049 | POST /admin/products/:id/unpublish | catalog.publish + CSRF | ✅（13节） |
 | API-050 | POST /admin/import-files | catalog.import + CSRF | 🔒 |
 | API-051 | POST /admin/import-jobs | catalog.import + CSRF | 🔒 |
 | API-052 | GET /admin/import-jobs/:id | catalog.import | 🔒 |
@@ -204,58 +269,58 @@
 
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
-| API-057 | GET /admin/media | media.manage | 🔒 |
-| API-058 | GET /admin/media/:id | media.manage | 🔒 |
-| API-059 | POST /admin/media/upload-target | media.manage + CSRF | 🔒 |
-| API-060 | POST /admin/media/complete | media.manage + CSRF | 🔒 |
-| API-061 | PUT /media/objects | 短时签名(key/expires/signature) | 🔒 签名校验 |
+| API-057 | GET /admin/media | media.manage | ✅（13节） |
+| API-058 | GET /admin/media/:id | media.manage | ✅（13节） |
+| API-059 | POST /admin/media/upload-target | media.manage + CSRF | ✅（13节） |
+| API-060 | POST /admin/media/complete | media.manage + CSRF | ✅（13节） |
+| API-061 | PUT /media/objects | 短时签名(key/expires/signature) | ✅（13节） 签名校验 |
 | API-062 | GET /media/objects | 短时签名 | 🔒 签名校验 |
 
 ### 3.6 订单 / 支付 / 发货 / 运费（23 条）
 
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
-| API-063 | GET /admin/orders | orders.read | 🔒 未登录 401 |
-| API-064 | GET /admin/orders/:id | orders.read (+PII) | 🔒 |
+| API-063 | GET /admin/orders | orders.read | ✅（13节） 未登录 401 |
+| API-064 | GET /admin/orders/:id | orders.read (+PII) | ✅（13节） |
 | API-065 | POST /admin/orders/:id/cancel | orders.cancel + CSRF + Idempotency-Key | 🔒 |
 | API-066 | POST /admin/orders/:id/address-change | orders.address_change + CSRF + Idempotency | 🔒 |
 | API-067 | POST /admin/orders/:id/notes | orders.update + CSRF + Idempotency | 🔒 |
 | API-068 | POST /admin/orders/:id/shipments | shipments.manage + CSRF + Idempotency | 🔒 |
 | API-069 | POST /admin/shipments/:id/dispatch | shipments.manage + CSRF + Idempotency + If-Match | 🔒 |
 | API-070 | POST /admin/shipments/:id/deliver | shipments.manage + CSRF + Idempotency | 🔒 |
-| API-071 | GET /admin/payment-methods | payment.config | 🔒 |
-| API-072 | PATCH /admin/payment-methods | payment.config + CSRF + If-Match | 🔒 |
-| API-073 | POST /admin/payment-methods/:providerCode/connection-test | payment.config + CSRF | 🔒 |
-| API-074 | GET /admin/payments | payments.read | 🔒 |
-| API-075 | GET /admin/payments/:id | payments.read | 🔒 |
+| API-071 | GET /admin/payment-methods | payment.config | ✅（13节） |
+| API-072 | PATCH /admin/payment-methods | payment.config + CSRF + If-Match | ✅（13节） |
+| API-073 | POST /admin/payment-methods/:providerCode/connection-test | payment.config + CSRF | ✅（13节） |
+| API-074 | GET /admin/payments | payments.read | ✅（13节） |
+| API-075 | GET /admin/payments/:id | payments.read | ✅（13节） |
 | API-076 | POST /admin/orders/:id/payment-result | payments.collect + CSRF | 🔒 |
-| API-077 | GET /admin/shipping/zones | shipping.manage | 🔒 |
-| API-078 | GET /admin/shipping/zones/:id | shipping.manage | 🔒 |
-| API-079 | POST /admin/shipping/zones | shipping.manage + CSRF | 🔒 |
-| API-080 | PATCH /admin/shipping/zones/:id | shipping.manage + CSRF | 🔒 |
-| API-081 | GET /admin/shipping/rates | shipping.manage | 🔒 |
-| API-082 | GET /admin/shipping/rates/:id | shipping.manage | 🔒 |
-| API-083 | POST /admin/shipping/rates | shipping.manage + CSRF | 🔒 |
-| API-084 | PATCH /admin/shipping/rates/:id | shipping.manage + CSRF | 🔒 |
-| API-085 | POST /admin/shipping/quote-preview | shipping.manage + CSRF | 🔒 |
+| API-077 | GET /admin/shipping/zones | shipping.manage | ✅（13节） |
+| API-078 | GET /admin/shipping/zones/:id | shipping.manage | ✅（13节） |
+| API-079 | POST /admin/shipping/zones | shipping.manage + CSRF | ✅（13节） |
+| API-080 | PATCH /admin/shipping/zones/:id | shipping.manage + CSRF | ✅（13节） |
+| API-081 | GET /admin/shipping/rates | shipping.manage | ✅（13节） |
+| API-082 | GET /admin/shipping/rates/:id | shipping.manage | ✅（13节） |
+| API-083 | POST /admin/shipping/rates | shipping.manage + CSRF | ✅（13节） |
+| API-084 | PATCH /admin/shipping/rates/:id | shipping.manage + CSRF | ✅（13节） |
+| API-085 | POST /admin/shipping/quote-preview | shipping.manage + CSRF | ✅（13节） |
 
 ### 3.7 售后 / 退款（16 条）
 
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
-| API-086 | GET /admin/after-sales | aftersales.read | 🔒 |
-| API-087 | POST /admin/after-sales | aftersales.manage + CSRF | 🔒 |
-| API-088 | GET /admin/after-sales/:id | aftersales.read (+PII) | 🔒 |
-| API-089 | POST /admin/after-sales/:id/approve | aftersales.approve + CSRF | 🔒 |
+| API-086 | GET /admin/after-sales | aftersales.read | ✅（13节） |
+| API-087 | POST /admin/after-sales | aftersales.manage + CSRF | ✅（13节） |
+| API-088 | GET /admin/after-sales/:id | aftersales.read (+PII) | ✅（13节） |
+| API-089 | POST /admin/after-sales/:id/approve | aftersales.approve + CSRF | ✅（13节） |
 | API-090 | POST /admin/after-sales/:id/reject | aftersales.approve + CSRF | 🔒 |
 | API-091 | POST /admin/after-sales/:id/return-shipment | aftersales.inspect + CSRF | 🔒 |
 | API-092 | POST /admin/after-sales/:id/receive-return | aftersales.inspect + CSRF | 🔒 |
 | API-093 | POST /admin/after-sales/:id/inspect | aftersales.inspect + CSRF | 🔒 |
-| API-094 | POST /admin/after-sales/:id/refund | refunds.create + CSRF | 🔒 |
+| API-094 | POST /admin/after-sales/:id/refund | refunds.create + CSRF | ✅（13节） |
 | API-095 | POST /admin/after-sales/:id/close | aftersales.manage + CSRF | 🔒 |
-| API-096 | GET /admin/refunds | payments.read | 🔒 |
+| API-096 | GET /admin/refunds | payments.read | ✅（13节） |
 | API-097 | POST /admin/refunds | refunds.create + CSRF | 🔒 |
-| API-098 | GET /admin/refunds/:id | payments.read | 🔒 |
+| API-098 | GET /admin/refunds/:id | payments.read | ✅（13节） |
 | API-099 | POST /admin/refunds/:id/approve | refund.approve + CSRF | 🔒 |
 | API-100 | POST /admin/refunds/:id/reject | refund.approve + CSRF | 🔒 |
 | API-101 | POST /admin/refunds/:id/execute | refund.execute + CSRF | 🔒 |
@@ -264,79 +329,79 @@
 
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
-| API-102 | GET /admin/inventory | inventory.read | 🔒 |
-| API-103 | GET /admin/inventory/movements | inventory.read | 🔒 |
-| API-104 | GET /admin/inventory/thresholds | inventory.read | 🔒 |
+| API-102 | GET /admin/inventory | inventory.read | ✅（13节） |
+| API-103 | GET /admin/inventory/movements | inventory.read | ✅（13节） |
+| API-104 | GET /admin/inventory/thresholds | inventory.read | ✅（13节） |
 | API-105 | PATCH /admin/inventory/thresholds | inventory.manage + CSRF | 🔒 |
 | API-106 | POST /admin/inventory/adjustments | inventory.adjust + CSRF | 🔒 |
-| API-107 | GET /admin/customers | customers.read_masked | 🔒 |
-| API-108 | POST /admin/customers | customers.manage + CSRF | 🔒 |
-| API-109 | GET /admin/customers/:id | customers.read_masked (+PII) | 🔒 |
-| API-110 | PATCH /admin/customers/:id | customers.manage + CSRF + If-Match | 🔒 |
-| API-111 | GET /admin/members | members.manage | 🔒 |
-| API-112 | POST /admin/members | members.manage + CSRF | 🔒 |
+| API-107 | GET /admin/customers | customers.read_masked | ✅（13节） |
+| API-108 | POST /admin/customers | customers.manage + CSRF | ✅（13节） |
+| API-109 | GET /admin/customers/:id | customers.read_masked (+PII) | ✅（13节） |
+| API-110 | PATCH /admin/customers/:id | customers.manage + CSRF + If-Match | ✅（13节） |
+| API-111 | GET /admin/members | members.manage | ✅（13节） |
+| API-112 | POST /admin/members | members.manage + CSRF | ✅（13节） |
 | API-113 | PATCH /admin/members/:id | members.manage + CSRF + If-Match | 🔒 |
-| API-114 | GET /admin/loyalty | members.manage | 🔒 |
+| API-114 | GET /admin/loyalty | members.manage | ✅（13节） |
 | API-115 | PATCH /admin/loyalty/settings | members.manage + CSRF + If-Match | 🔒 |
 | API-116 | POST /admin/loyalty/tiers | members.manage + CSRF | 🔒 |
 | API-117 | PATCH /admin/loyalty/tiers/:id | members.manage + CSRF + If-Match | 🔒 |
-| API-118 | GET /admin/members/:id/points | members.manage | 🔒 |
-| API-119 | POST /admin/members/:id/points-adjustments | points.adjust + CSRF | 🔒 |
-| API-120 | GET /admin/coupons | coupons.read | 🔒 |
-| API-121 | POST /admin/coupons | coupons.manage + CSRF | 🔒 |
-| API-122 | GET /admin/coupons/:id | coupons.read | 🔒 |
-| API-123 | PATCH /admin/coupons/:id | coupons.manage + CSRF + If-Match | 🔒 |
-| API-124 | GET /admin/coupons/:id/redemptions | coupons.read | 🔒 |
-| API-125 | POST /admin/coupons/:id/disable | coupons.manage + CSRF | 🔒 |
-| API-126 | POST /admin/coupon-batches | coupons.issue + CSRF | 🔒 |
-| API-127 | POST /admin/coupon-batches/:id/issue | coupons.issue + CSRF | 🔒 |
+| API-118 | GET /admin/members/:id/points | members.manage | ✅（13节） |
+| API-119 | POST /admin/members/:id/points-adjustments | points.adjust + CSRF | ✅（13节） |
+| API-120 | GET /admin/coupons | coupons.read | ✅（13节） |
+| API-121 | POST /admin/coupons | coupons.manage + CSRF | ✅（13节） |
+| API-122 | GET /admin/coupons/:id | coupons.read | ✅（13节） |
+| API-123 | PATCH /admin/coupons/:id | coupons.manage + CSRF + If-Match | ✅（13节） |
+| API-124 | GET /admin/coupons/:id/redemptions | coupons.read | ✅（13节） |
+| API-125 | POST /admin/coupons/:id/disable | coupons.manage + CSRF | ✅（13节） |
+| API-126 | POST /admin/coupon-batches | coupons.issue + CSRF | ✅（13节） |
+| API-127 | POST /admin/coupon-batches/:id/issue | coupons.issue + CSRF | ✅（13节） |
 
 ### 3.9 内容 / 陈列 / 主题 / 专题 / 隐私 / 报表 / 工作台 / 通知（48 条）
 
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
-| API-128 | GET /admin/pages | content.read | 🔒 |
-| API-129 | GET /admin/pages/:id | content.read | 🔒 |
-| API-130 | POST /admin/pages | content.write + CSRF | 🔒 |
-| API-131 | PATCH /admin/pages/:id | content.write + CSRF + If-Match | 🔒 |
-| API-132 | POST /admin/pages/:id/publish | content.publish + CSRF | 🔒 |
-| API-133 | POST /admin/pages/:id/unpublish | content.publish + CSRF | 🔒 |
-| API-134 | POST /admin/pages/:id/rollback | content.publish + CSRF | 🔒 |
-| API-135 | POST /admin/pages/:id/preview-token | content.preview + CSRF | 🔒 |
-| API-136 | GET /admin/redirects | content.read | 🔒 |
-| API-137 | POST /admin/redirects | content.publish + CSRF | 🔒 |
-| API-138 | DELETE /admin/redirects/:id | content.publish + CSRF | 🔒 |
-| API-139 | GET /admin/merchandising/products | content.read | 🔒 |
-| API-140 | GET /admin/merchandising/pages | content.read | 🔒 |
-| API-141 | GET /admin/merchandising/:pageKey | content.read | 🔒 |
+| API-128 | GET /admin/pages | content.read | ✅（13节） |
+| API-129 | GET /admin/pages/:id | content.read | ✅（13节） |
+| API-130 | POST /admin/pages | content.write + CSRF | ✅（13节） |
+| API-131 | PATCH /admin/pages/:id | content.write + CSRF + If-Match | ✅（13节） |
+| API-132 | POST /admin/pages/:id/publish | content.publish + CSRF | ✅（13节） |
+| API-133 | POST /admin/pages/:id/unpublish | content.publish + CSRF | ✅（13节） |
+| API-134 | POST /admin/pages/:id/rollback | content.publish + CSRF | ✅（13节） |
+| API-135 | POST /admin/pages/:id/preview-token | content.preview + CSRF | ✅（13节） |
+| API-136 | GET /admin/redirects | content.read | ✅（13节） |
+| API-137 | POST /admin/redirects | content.publish + CSRF | ✅（13节） |
+| API-138 | DELETE /admin/redirects/:id | content.publish + CSRF | ✅（13节） |
+| API-139 | GET /admin/merchandising/products | content.read | ✅（13节） |
+| API-140 | GET /admin/merchandising/pages | content.read | ✅（13节） |
+| API-141 | GET /admin/merchandising/:pageKey | content.read | ✅（13节） |
 | API-142 | PATCH /admin/merchandising/:pageKey | content.write + CSRF + If-Match | 🔒 |
 | API-143 | POST /admin/merchandising/:pageKey/publish | content.publish + CSRF | 🔒 |
 | API-144 | POST /admin/merchandising/:pageKey/unpublish | content.publish + CSRF | 🔒 |
-| API-145 | GET /admin/theme | content.read | 🔒 |
-| API-146 | PUT /admin/theme | content.write + CSRF + If-Match | 🔒 |
-| API-147 | POST /admin/theme/publish | content.publish + CSRF | 🔒 |
+| API-145 | GET /admin/theme | content.read | ✅（13节） |
+| API-146 | PUT /admin/theme | content.write + CSRF + If-Match | ✅（13节） |
+| API-147 | POST /admin/theme/publish | content.publish + CSRF | ✅（13节） |
 | API-148 | POST /admin/theme/unpublish | content.publish + CSRF | 🔒 |
 | API-149 | POST /admin/theme/rollback | content.publish + CSRF | 🔒 |
-| API-150 | GET /admin/collections | content.read | 🔒 |
-| API-151 | GET /admin/collections/:id | content.read | 🔒 |
-| API-152 | POST /admin/collections | content.write + CSRF | 🔒 |
-| API-153 | PATCH /admin/collections/:id | content.write + CSRF + If-Match | 🔒 |
-| API-154 | DELETE /admin/collections/:id | content.write + CSRF | 🔒 |
-| API-155 | GET /admin/privacy-requests | privacy.read | 🔒 |
-| API-156 | POST /admin/privacy-requests | privacy.process + CSRF | 🔒 |
-| API-157 | GET /admin/privacy-requests/:id | privacy.read | 🔒 |
+| API-150 | GET /admin/collections | content.read | ✅（13节） |
+| API-151 | GET /admin/collections/:id | content.read | ✅（13节） |
+| API-152 | POST /admin/collections | content.write + CSRF | ✅（13节） |
+| API-153 | PATCH /admin/collections/:id | content.write + CSRF + If-Match | ✅（13节） |
+| API-154 | DELETE /admin/collections/:id | content.write + CSRF | ✅（13节） |
+| API-155 | GET /admin/privacy-requests | privacy.read | ✅（13节） |
+| API-156 | POST /admin/privacy-requests | privacy.process + CSRF | ✅（13节） |
+| API-157 | GET /admin/privacy-requests/:id | privacy.read | ✅（13节） |
 | API-158 | PATCH /admin/privacy-requests/:id | privacy.manage + CSRF + If-Match | 🔒 |
-| API-159 | POST /admin/privacy-requests/:id/verify | privacy.verify + CSRF | 🔒 |
-| API-160 | POST /admin/privacy-requests/:id/complete | privacy.process + CSRF | 🔒 |
+| API-159 | POST /admin/privacy-requests/:id/verify | privacy.verify + CSRF | ✅（13节） |
+| API-160 | POST /admin/privacy-requests/:id/complete | privacy.process + CSRF | ✅（13节） |
 | API-161 | POST /admin/privacy-requests/:id/export | privacy.manage + CSRF | 🔒 |
 | API-162 | GET /admin/privacy-requests/:id/export/:jobId | privacy.manage | 🔒 |
 | API-163 | PATCH /admin/privacy-settings | privacy.manage + CSRF + If-Match | 🔒 |
-| API-164 | GET /admin/reports/:reportKey | reports.view | 🔒 |
-| API-165 | POST /admin/report-exports | reports.export + CSRF | 🔒 |
-| API-166 | GET /admin/report-exports/:id | reports.export | 🔒 |
-| API-167 | GET /admin/report-exports/:id/download | reports.export | 🔒 |
-| API-168 | GET /admin/workbench | orders.read（按权限过滤） | 🔒 未登录 401 |
-| API-169 | GET /admin/mail/test | notifications.read | 🔒 |
+| API-164 | GET /admin/reports/:reportKey | reports.view | ✅（13节） |
+| API-165 | POST /admin/report-exports | reports.export + CSRF | ✅（13节） |
+| API-166 | GET /admin/report-exports/:id | reports.export | ✅（13节） |
+| API-167 | GET /admin/report-exports/:id/download | reports.export | ✅（13节） |
+| API-168 | GET /admin/workbench | orders.read（按权限过滤） | ✅（13节） 未登录 401 |
+| API-169 | GET /admin/mail/test | notifications.read | ✅（13节） |
 | API-170 | POST /admin/mail/test | notifications.manage + CSRF | 🔒 |
 
 > 说明：API-171~179 见 3.10（前台会员/购物袋/结账/埋点 16 条）与 3.11（前台公开 GET 15 条），加上 3.1 的健康 2 条已计入，全表按 controller 方法统计约 179 条（不同口径 ±2）。
