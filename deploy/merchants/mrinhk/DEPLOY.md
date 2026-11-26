@@ -73,6 +73,31 @@ SELECT kind, status, attempts, "createdAt" FROM "IdentityNotificationJob"
 每邮箱每小时最多 5 封；重发会作废旧码。域名务必配 SPF、DKIM、DMARC，`SMTP_FROM` 用供应商验证过的寄件地址，
 否则邮件会被退信或丢进垃圾箱。
 
+## 关键配置决策记录（改前必读）
+
+> 本节记录本实例**有意偏离模板默认值**的配置。每次发布、换机、交接时必须核对，避免被当作"漂移"误改回去。
+
+### ADMIN_REQUIRE_MFA=false（纯密码登录）
+
+| 项 | 内容 |
+|---|---|
+| 当前值 | 生产 `.env` = `false`（关闭强制二次验证，店主用账号+密码登录） |
+| 决策人 / 日期 | 店主明确要求，2026-11-26 |
+| 为什么偏离默认 | 模板与 compose 默认均为 `true`（安全基线）。本实例店主不使用 TOTP，强制 MFA 会导致其无法登录后台 |
+| 历史 | 11-21 按店主设为 false → 11-23 安全收口有意改回 true（见 `ADMIN_RECOVERY_RUNBOOK.md`）→ 店主被锁 → 11-26 恢复 false |
+| ⚠️ 安全代价 | 口令成为后台唯一屏障。密码曾在聊天中明文出现过，**建议店主尽快改为未公开过的新密码** |
+| 改回 true 的前提 | 必须先确认店主手上有可用 TOTP 验证器或恢复码（当前因子 1 个、未用恢复码 10 个），按 `ADMIN_RECOVERY_RUNBOOK.md` 第 2 节执行；否则会再次锁死 |
+| 漂移风险 | `.env` 不入库、`deploy.sh` 不覆盖它；但**换机/重建时若 `cp .env.example .env`，会变回 true**。重建后务必检查此值 |
+
+自检（发布后必做，登录应答 200=纯密码生效，202=MFA 开启）：
+
+```bash
+grep '^ADMIN_REQUIRE_MFA=' /opt/ezstart-mrinhk/deploy/merchants/mrinhk/.env
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://admin.mrinhk.com/api/v1/admin/auth/login \
+  -H 'Origin: https://admin.mrinhk.com' -H 'content-type: application/json' \
+  -d '{"email":"admin","password":"<店主当前密码>"}'   # 期望 200
+```
+
 ## 安全基线
 
 - PostgreSQL / API / worker 不暴露公网端口，唯一入口是 Caddy 80/443。

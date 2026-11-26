@@ -14,6 +14,9 @@ REPO_ROOT="$(cd ../../.. && pwd)"
 BACKUP_DIR="${BACKUP_DIR:-/opt/ezstart-backups}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-14}"
 DOMAIN="$(grep -E '^SITE_DOMAIN=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)"
+# 本实例店主已明确选择关闭强制 MFA（纯密码登录），见 DEPLOY.md「关键配置决策记录」。
+# 这里声明期望值，仅用于发布后自检告警，绝不自动改写 .env——避免部署脚本静默改动安全配置。
+EXPECT_ADMIN_REQUIRE_MFA="false"
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*"; }
 die() { log "✗ $*"; exit 1; }
@@ -132,6 +135,18 @@ if [ -n "$DOMAIN" ]; then
   fi
 else
   log "未读到 SITE_DOMAIN，跳过冒烟"
+fi
+
+# ---------------- 7. 配置决策自检（非阻断，仅告警） ----------------
+# 核对 .env 的 MFA 开关是否符合店主已记录的决策。若被误改（如换机 cp 模板、
+# 或有人按 runbook 恢复 true 而未通知店主），打印醒目告警但不中断发布。
+ACTUAL_MFA="$(grep -E '^ADMIN_REQUIRE_MFA=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)"
+ACTUAL_MFA="${ACTUAL_MFA:-true}"   # 留空等价于 compose 默认 true
+if [ "$ACTUAL_MFA" != "$EXPECT_ADMIN_REQUIRE_MFA" ]; then
+  log "⚠ 配置决策告警：ADMIN_REQUIRE_MFA=$ACTUAL_MFA，与已记录决策($EXPECT_ADMIN_REQUIRE_MFA)不符。"
+  log "  若非有意变更，请改回：sed -i 's/^ADMIN_REQUIRE_MFA=.*/ADMIN_REQUIRE_MFA=$EXPECT_ADMIN_REQUIRE_MFA/' .env"
+  log "  然后重建 api 注入环境变量：docker compose up -d --force-recreate api"
+  log "  详见 DEPLOY.md「关键配置决策记录」。本告警不阻断部署。"
 fi
 
 log "✅ 部署完成：$(cd "$REPO_ROOT" && git log --oneline -1 2>/dev/null || echo '（非 git 目录）')"
