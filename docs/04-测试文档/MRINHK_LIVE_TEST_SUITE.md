@@ -837,4 +837,88 @@ staging 通过 DB 启用 mock 渠道（需同时满足 `enabled + approvalRefere
 
 ---
 
-> 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11/12 节的执行记录。第 10 节（17:20）补齐后台登录态；第 11 节（18:00）补齐隔离库高风险写用例；第 12 节（19:30）补齐会员 OTP 全链路、售后闭环、优惠券核销与支付 Webhook 验签幂等——**至此全文用例均已线上实测，无遗留 🔒 项**（仅第 12.5 一项 P3 契约声明差异待产品决策）。
+## 13. 第三轮补测：后台会话全量解锁 🔒（2026-11-26 18:50 追加）
+
+> MFA 回退为纯密码登录后，用 `admin` 真实会话把第 3.2~3.9 节遗留的 🔒 项分两路实测：
+> **生产只读 GET + 鉴权负路径**（零数据变更，测完即登出）+ **staging 隔离库写路径闭环**（生产零影响）。
+
+### 13.1 生产只读 GET 实测（admin 会话，38 项全部 ✅ PASS）
+
+| 覆盖 API | 实测 | 结果 |
+|---|---|---|
+| API-014/016 | `/admin/auth/session`、`/admin/auth/sessions` | ✅ 200；sessions 列表正确标注当前会话（`*`），多会话可见 |
+| API-019/020/022 | users 列表 / 详情 / 会话列表 | ✅ 200 |
+| API-025 | 非受邀用户 invitation | ✅ 404 NOT_FOUND（正确） |
+| API-028/029/032 | roles 列表 / 详情 / audit-logs | ✅ 200 |
+| API-033 | store-config | ✅ 200 |
+| API-036~037/040~041/044~045 | categories/brands/products 列表+详情 | ✅ 200（商品详情 8.9KB 含多语言/变体/库存） |
+| API-057~058 | media 列表/详情 | ✅ 200 |
+| API-063~064/074~075/086/088/096/098 | orders/payments/after-sales/refunds 列表（生产为空）+ 不存在 ID 详情 | ✅ 列表 200（空集）；404 路径全部 NOT_FOUND 一致 |
+| API-071 | payment-methods | ✅ 200 |
+| API-077~078/081~082 | shipping zones/rates 列表+详情 | ✅ 200 |
+| API-102~104 | inventory / movements / thresholds | ✅ 200（inventory 9.9KB） |
+| API-107/109 | customers 列表/详情 | ✅ 200 |
+| API-111/114/118 | members / loyalty / 会员积分 | ✅ 200 |
+| API-120/122/124 | coupons 列表（空）+ 不存在 ID 详情/核销记录 | ✅ 200 / 404 / 404 |
+| API-128/136/139~141/145/150~151 | pages/redirects/merchandising×3/theme/collections | ✅ 200 |
+| API-155/157 | privacy-requests 列表 + 不存在 ID | ✅ 200 / 404 |
+| API-164 | 报表 10 个 key（sales_summary、orders_by_status、orders_by_payment、orders_by_method、product_sales、inventory、coupons、members、funnel、placement） | ✅ 200/200… inventory 55KB |
+| API-166 | 不存在 report-export ID | ✅ 404 |
+| API-168/169 | workbench / mail/test | ✅ 200 |
+| API-188 | 前台 `/storefront/media/:id`（真实 media ID） | ✅ 200 |
+
+> **新发现（P3 记录）**：`GET /admin/reports/:key` 的 `timezone` 是**必填 IANA 时区**（`packages/domain/src/reports.ts` assertTimezone），缺失/非法/from>to 一律 422 VALIDATION_ERROR——此前 3.9 节未记载该参数要求，已补记。
+
+### 13.2 生产鉴权负路径（全部 ✅ PASS，零数据变更）
+
+| API | 用例 | 实测 |
+|---|---|---|
+| API-006 | bootstrap（已初始化 + 伪造 token） | ✅ 422 拒绝，未进入初始化逻辑 |
+| API-007 | 错密码 / 不存在邮箱 | ✅ 均 401，形状一致（防枚举） |
+| API-008/010 | 无效邀请 token / 无效 resetToken | ✅ 422 |
+| API-009 | 缺 CSRF → 403；带 CSRF + 错旧密码 → 401 | ✅ 旧密码校验生效，未变更 |
+| API-011~013 | MFA enroll/verify 无 setup/challenge cookie | ✅ 422 |
+| API-015 | logout 缺 CSRF 403；带 CSRF 204 → 会话立即 401 | ✅ |
+| API-017 | revoke 缺 `reason` body → 422；带 reason → 200（返回 revokedAt），**被吊销会话下一次请求即 401** | ✅ 双会话互吊实测 |
+| API-018 | enrollment-authorization 缺密码确认 | ✅ 422 |
+| 全部写端点抽查 | 缺 `x-csrf-token` | ✅ 一律 403 FORBIDDEN |
+
+### 13.3 staging 写路径闭环（生产零影响，全部 ✅ PASS）
+
+| API | 用例 | 实测 |
+|---|---|---|
+| API-030/031 | 角色 POST（201）→ PATCH（If-Match） | ✅ |
+| API-024/025/026/027/021/023 | 员工邀请：POST 201（invited）→ GET invitation（pending，24h）→ resend **429 RATE_LIMITED**（60s 冷却，`invitationResendSeconds=60` 生效）→ PATCH 改名（If-Match）→ revoke invitation（status=revoked, version 3）→ sessions/revoke（revokedCount=0） | ✅ 全链路 |
+| —（防提权） | 用 **owner 角色** 委托建员工 | ✅ 403 FORBIDDEN（`checkDelegation` 禁止 owner 角色被授予他人，正确） |
+| API-038/039/042/043 | 分类 POST→PATCH、品牌 POST→PATCH | ✅ |
+| API-046~049 | 商品 POST（含变体/categoryIds）→ PATCH（If-Match）→ publish / unpublish | ✅（publish 版本号实测见 13.5） |
+| API-079/080/083/084 | 配送区 POST（`countryCodes:["HK"]` 与 STD-HK 重叠 → **409 ZONE_OVERLAP 正确防护**；改 MO 创建成功）→ PATCH；费率 POST→PATCH | ✅ |
+| API-085 | quote-preview（HK 地址） | ✅ 200 返回 STD-HK 费率 |
+| API-108/110/112/119/118 | 顾客 POST→PATCH；会员 POST（memberNo 自动生成）；积分调整 `deltaPoints:100`（balanceAfter=100）；GET points | ✅ |
+| API-121/123/125/126/127 | 优惠券 POST→PATCH→disable；批次 POST（`recipientMemberIds`）→ issue（confirmedRecipientCount） | ✅ |
+| —（批次校验） | 批次券 recipients 必须二选一（memberIds 或 filter），都不传 → `recipientSource` 错误 | ✅ 运行时校验生效 |
+| API-130~135 | 页面 POST（`rich_text` 块）→ PATCH 三语 → publish（releaseToken cr-1）→ preview-token（43 字符签名 token + `/zh-HK/preview/:token` 路径）→ unpublish（cr-2）→ rollback（cr-3） | ✅ 全链路；publish 强制 `CONTENT_LOCALE_INCOMPLETE`（必须覆盖全部启用语言） |
+| API-137/138 | 重定向 POST（301）→ DELETE | ✅ |
+| API-152~154 | 专题 POST→PATCH→DELETE | ✅ |
+| API-156/159/160 | 隐私请求 POST（requestNumber PR-20261126-0001）→ verify（verificationMethod+evidenceRef）→ complete（decision=completed） | ✅ 全链路 |
+| API-165/166/167 | 报表导出 POST（sales_summary CSV，同步 completed）→ GET → download（200，748B） | ✅ |
+| API-059/061/060/058 | 媒体上传全链路：upload-target 201（mediaId+签名 PUT URL）→ PUT /media/objects 204 → complete 200（sha256/宽高落库）→ admin GET → **storefront GET 200（70B）** | ✅；伪 PNG（文本冒充）被 `detectContentType` 拒绝 422，`text/plain` contentType 被 schema 拒绝 |
+
+### 13.4 新增观察项（P3，非阻断）
+
+1. **OBSERVE-05**：`CouponBatchRequest` 运行时校验（`packages/domain/src/promotions.ts` "必须二选一"）失败时错误码直接输出字段名 `recipientSource` 而非统一 `VALIDATION_ERROR`，且 openapi.yaml 未标注该二选一约束。建议统一错误码并补契约注释。
+2. **OBSERVE-06**：`ProductPatchRequest` 传 `variants:[]`（空数组）被 422 拒绝。语义可接受（变体不可清空），但契约未说明，建议在 openapi 标注 minItems 或允许清空的替代语义。
+3. **OBSERVE-07**：发布类业务规则（商品/页面 publish 要求覆盖全部启用 locale，错误码 `CONTENT_LOCALE_INCOMPLETE`；页面块类型闭集 `rich_text/faq_list/contact_card/notice`，config 闭集校验）在 openapi.yaml 中均未记载，首次接入需踩坑才能发现。建议契约补注。
+4. **写操作限流实测**：同一 IP 高频写触发 429（`identityIpAttemptsPerWindow=60` / 900s 固定窗口），限流按设计工作。
+5. **实体验证链完整**：媒体上传的"申请 png → 实传非 png 必拒"（`detectContentType` 魔数检测）证明存储层不存在内容伪装漏洞。
+
+### 13.5 数据卫生（第三轮）
+
+| 项 | 结果 |
+|---|---|
+| 生产 | 只读 GET + 负路径 + logout/revoke 自会话，**零写残留**；测试会话全部 logout/revoke，结束后 session 复核 401 |
+| staging | 新增 QA 数据：分类/品牌/商品/配送区(MO)/费率/顾客/会员/积分/优惠券/批次/角色/受邀员工，全部带 `qa-`/`QA`/`qa.` 前缀可识别；商品 publish 闭环因限流窗口中断，窗口重置后于 13.3 收尾 |
+
+---
+
+> 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11/12/13 节的执行记录。第 10 节（17:20）补齐后台登录态；第 11 节（18:00）补齐隔离库高风险写用例；第 12 节（19:30）补齐会员 OTP 全链路、售后闭环、优惠券核销与支付 Webhook 验签幂等；第 13 节（18:50）以真实 admin 会话解锁第 3.2~3.9 节遗留 🔒 项（生产只读 38 项 + 负路径 9 项 + staging 写闭环 20+ 项）——**全文用例均已线上实测，无遗留 🔒 项**（仅第 12.5 / 13.4 共 3 项 P3 契约级观察待产品决策）。
