@@ -84,7 +84,8 @@ export class LocalMediaStorage implements MediaStorage {
 
   /** 存储端点自己校验签名：拿到 URL 也不等于可以长期写入。 */
   authorize(method: 'PUT' | 'GET', key: string, expires: string, value: string, now: Date): void {
-    if (!isMediaObjectKey(key) || !/^\d{1,12}$/.test(expires) || !/^[0-9a-f]{64}$/.test(value)) throw new Error('Invalid signature');
+    // 导入对象键与媒体键共用同一签名上传通道，这里必须同时放行两种键（与 path() 口径一致）。
+    if ((!isMediaObjectKey(key) && !isImportObjectKey(key)) || !/^\d{1,12}$/.test(expires) || !/^[0-9a-f]{64}$/.test(value)) throw new Error('Invalid signature');
     if (Number(expires) * 1000 <= now.getTime()) throw new Error('Expired signature');
     if (!safeEqual(signature(this.config.signingKey, method, key, Number(expires)), value)) throw new Error('Invalid signature');
   }
