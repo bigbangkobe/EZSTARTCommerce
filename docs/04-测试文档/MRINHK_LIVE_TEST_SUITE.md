@@ -174,7 +174,7 @@ curl -X PATCH .../admin/categories/<id> \
 
 | 接口组 | 数量 | 所需物料 | 现状 |
 |---|---|---|---|
-| API-050~056 导入任务 | 7 | 合法 CSV（含 sha256）+ 错误行 CSV | ⚠️ 部分（13.7）：import-files/job 创建/validate/error-report 已测；execute 被 BUG-01 阻断 |
+| API-050~056 导入任务 | 7 | 合法 CSV（含 sha256）+ 错误行 CSV | ✅（13.8） BUG-01 修复后全链路闭环：上传 204→validate→execute completed→落库验证；含 4 条负路径与 execute 幂等重放 |
 | API-065~070 订单取消/改址/备注/发货/出库/妥投 | 6 | 一笔 staging 真实订单 | ✅（13.7） 全部实测通过，订单 completed/delivered |
 | API-076 payment-result | 1 | 已收款订单 | ✅（13.7） collected 全链路 + expectedVersion/金额负路径 |
 | API-090~095 售后 reject/退货物流/收货/质检/close | 6 | 处于不同状态的售后单 | ✅（13.7） reject/return-shipment/receive-return/inspect/refund 全过；close 被 REFUND_IN_PROGRESS 正确拦截（退款未完成不可关单） |
@@ -1014,12 +1014,12 @@ staging 通过 DB 启用 mock 渠道（需同时满足 `enabled + approvalRefere
 | API-170 mail/test | ✅ 202 pending + GET 脱敏列表（q***@staging.test） |
 | API-050~056 导入 | ⚠️ import-files 201（签名上传目标）、import-jobs 201（**localeSet 必填**）、validate IMPORT_FILE_NOT_FOUND（文件未上传，合理）、error-report 200；**execute 链路被 BUG-01 阻断**（见下） |
 
-**BUG-01（P2，真实缺陷）：商品导入上传通道 403，端到端不可用**
+**BUG-01（P2，真实缺陷）→ ✅ 已修复并复测通过（13.8）**
 
 - 现象：`POST /admin/import-files` 返回的 `imports/...csv` 签名上传 URL，PUT 到 `/api/v1/media/objects` 一律 403 FORBIDDEN。
 - 根因：`apps/api/src/media/storage.ts` 的 `authorize()` 只校验 `isMediaObjectKey(key)`，未包含 `isImportObjectKey`（`path()` 两个都认，注释也写明"共用一套签名上传通道"，但 authorize 漏改）。媒体键（`media/...png`）不受影响。
-- 修复建议（一行）：`authorize()` 的键校验改为 `if ((!isMediaObjectKey(key) && !isImportObjectKey(key)) || ...)`。
-- 影响：商品/库存 CSV 导入功能完全不可用（导入流程第一步即被拦）。staging 复现 100%，生产同代码版本必然一致。
+- 修复：commit `75bf287`——`authorize()` 的键校验改为 `if ((!isMediaObjectKey(key) && !isImportObjectKey(key)) || ...)`，与 `path()` 口径对齐。
+- 复测（13.8）：PUT 上传 204；导入全链路（上传→建任务→validate 2 行合法→execute completed createdCount=1→库内 QAP1-BLK/QAP1-WHT draft）全部通过。
 
 **新增观察项（P3，契约/文档级）**
 
@@ -1029,6 +1029,36 @@ staging 通过 DB 启用 mock 渠道（需同时满足 `enabled + approvalRefere
 4. **OBSERVE-11**：COD `payment-result` 的 `amountMinor` 必须等于订单总额，`collected` 必须在发货后（`assertCodRequiresDispatch`）；契约描述已有但错误码表现为通用 VALIDATION_ERROR，定位成本高。
 5. **安全亮点（非缺陷）**：资金操作全部强制双人复核（退款审批 SELF_APPROVAL_FORBIDDEN）；售后关单依赖退款闭环（REFUND_IN_PROGRESS）；乐观锁在所有状态机端点生效。
 
+### 13.8 第五轮：BUG-01 修复部署 + 导入全链路闭环 + 新发现 BUG-02（11-27 凌晨）
+
+**修复与部署**
+
+| 项 | 内容 | 结果 |
+|---|---|---|
+| BUG-01 修复 | `75bf287` authorize() 放行导入对象键；staging 镜像从生产源码重建并重启 | ✅ PUT 上传从恒 403 → 204 |
+| BUG-02（新发现，P1→已修复） | **取消导入任务恒 500**：cancel 的 UPDATE 同时写 `completedAt=now()`，违反 `ImportJob_completed_check` 约束（completedAt 非空当且仅当 completed/completed_with_errors）。commit `4fbd4f7` 只更新 status | ✅ 取消 uploaded 任务 200；重复取消 409 IMPORT_STATE_CONFLICT |
+
+**导入全链路实测（staging，qa.admin 会话）**
+
+| 步骤 | 实测结果 |
+|---|---|
+| API-050 import-files | 201，签发 `imports/2026/11/<uuid>.csv` 签名 URL（15 分钟有效，10 MiB 上限） |
+| 签名 PUT 上传 | 204（BUG-01 修复前恒 403） |
+| API-051 import-jobs | 201（columnMapping 必填、localeSet 必填）；**CSV 列要求**：`market_codes` 必填（staging 市场码 `HK`）、`price_hkd` 以元为单位最多两位小数（128.00，非 12800） |
+| API-053 validate | 200 预览：2 行合法 action=create（同 product_key 聚合为 1 商品 2 规格）、warning STOCK_NOT_IMPORTED（库存需经 inventory.adjust） |
+| API-054 execute | 202→completed，createdCount=1；库内验证 QAP1-BLK / QAP1-WHT 均为 draft ✅ |
+| execute 幂等重放 | 同 Idempotency-Key 重放 → 202 回放同一结果（createdCount 不变，无重复执行）✅ |
+| API-056 error-report | 200 逐行错误（INVALID_AMOUNT「价格必须是元，最多两位小数」、REQUIRED），含定位行列号 |
+| 负路径：未 validate 执行 | 409 IMPORT_NOT_VALIDATED ✅ |
+| 负路径：digest 不匹配 | 409 IMPORT_FILE_DIGEST_MISMATCH ✅ |
+| 负路径：validate 前取消 | 200（BUG-02 修复后；修复前 500）✅ |
+| 负路径：重复取消 | 409 IMPORT_STATE_CONFLICT ✅ |
+| 建任务幂等（执行前） | 同 Idempotency-Key 重建 → 返回同一任务 id ✅ |
+
+**新增观察项**
+
+6. **OBSERVE-12（P3，设计权衡）**：execute 会把 `ImportJob.idempotencyKey` 从 `create:<key>` 覆写为 `execute:<key>`（单列 + unique 索引只能存一键）。副作用：任务执行后，**create 的幂等重放不再命中而会新建任务**。当前风险低（create 幂等主要防双击，窗口在执行前），建议后续拆双列或改存复合键。
+
 ---
 
-> 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11/12/13 节的执行记录。第 10 节（17:20）补齐后台登录态；第 11 节（18:00）补齐隔离库高风险写用例；第 12 节（19:30）补齐会员 OTP 全链路、售后闭环、优惠券核销与支付 Webhook 验签幂等；第 13 节（18:50）以真实 admin 会话解锁第 3.2~3.9 节遗留 🔒 项（生产只读 38 项 + 负路径 9 项 + staging 写闭环 20+ 项）——**全文用例均已线上实测，无遗留 🔒 项**（仅第 12.5 / 13.4 共 3 项 P3 契约级观察待产品决策）。
+> 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11/12/13 节的执行记录。第 10 节（17:20）补齐后台登录态；第 11 节（18:00）补齐隔离库高风险写用例；第 12 节（19:30）补齐会员 OTP 全链路、售后闭环、优惠券核销与支付 Webhook 验签幂等；第 13 节（18:50）以真实 admin 会话解锁第 3.2~3.9 节遗留 🔒 项（生产只读 38 项 + 负路径 9 项 + staging 写闭环 20+ 项）；第 13.8 节（11-27）修复 BUG-01/BUG-02 并完成**导入功能端到端闭环**——**全文用例均已线上实测，无遗留 🔒 项**（仅 4 项 P3 契约级观察待产品决策）。
