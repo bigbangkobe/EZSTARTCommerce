@@ -97,23 +97,23 @@
 
 | ID | 模块 | 优先级 | 测试点 | 线上实测 |
 |---|---|---|---|---|
-| M-00 | 身份/权限 | P0 | 登录、MFA、会话、员工/角色、审计 | ✅ 未登录访问 `/admin/users`、`/admin/workbench` 均 401；登录页 200；session 未登录返回 UNAUTHORIZED。写操作🔒 |
+| M-00 | 身份/权限 | P0 | 登录、MFA、会话、员工/角色、审计 | ✅ 未登录访问 `/admin/users`、`/admin/workbench` 均 401；登录页 200；session 未登录返回 UNAUTHORIZED。写操作✅（13节） |
 | M-01 | 店铺/语言/市场 | P0 | 三语配置、市场开关、发布门禁 | ✅ config 三语 200（zh-HK/zh-CN/en）；市场码 HK 生效 |
 | M-02 | 顾客前台 | P1 | 首页/分类/商品/专题/内容/联系页渲染 | ✅ 18 页全部 200，三语标题正确（详见第 5 节 UI 用例） |
-| M-03 | 商品目录 | P0 | 商品列表/详情/搜索/发布 | ✅ products 列表 41KB、详情 200、slug 参数校验 422；发布🔒 |
+| M-03 | 商品目录 | P0 | 商品列表/详情/搜索/发布 | ✅ products 列表 41KB、详情 200、slug 参数校验 422；发布✅（13节） |
 | M-04 | 陈列/CMS | P0 | 首页陈列、内容页、定时发布、回滚 | ⚠️ `/storefront/theme`、`/storefront/merchandising/home` 返回 404=未发布；`/pages/about-us` 404。前台 about 走静态页已上线（200）。需确认是否符合预期（见 OBSERVE-02） |
-| M-05 | 导入导出 | P1 | CSV 校验/执行/错误报告/幂等 | 🔒 需后台会话，静态核查代码齐备；未做线上写操作 |
+| M-05 | 导入导出 | P1 | CSV 校验/执行/错误报告/幂等 | ✅（13.8）导入全链路闭环实测通过，含 2 个缺陷修复 |
 | M-06 | 购物袋/结账 | P0 | 建袋/加购/改量/删除/报价/下单 | ✅ **完整链路实测通过**：建袋→加购(itemCount=1)→配送方式→报价(total 94000 分/HKD) 全 200 |
-| M-07 | 订单 | P0 | 订单列表/详情/状态机/取消/改址 | 🔒 需后台会话；未登录 401 正确 |
-| M-08 | 支付 | P0 | 支付方式/线上支付/webhook 幂等 | ✅ 报价返回 COD 可选；未登录支付配置 401。webhook 签名🔒 |
+| M-07 | 订单 | P0 | 订单列表/详情/状态机/取消/改址 | ✅（13.7）订单全生命周期实测通过 |
+| M-08 | 支付 | P0 | 支付方式/线上支付/webhook 幂等 | ✅ 报价返回 COD 可选；未登录支付配置 401。webhook 签名✅（12.4）验签+幂等实测通过 |
 | M-09 | 配送/履约 | P1 | 配送区/运费/包裹/发货 | ✅ 配送方式接口返回 STD-HK（标准配送 0 费，2-5 工作日，支持 COD） |
 | M-10 | 会员 | P0 | OTP 登录/资料/订单/积分 | ✅ OTP 申请→错误码拒绝→限流 429→防枚举全通过；worker job `sent` 真实投递 |
-| M-11 | 优惠/券 | P1 | 券校验/限额/核销 | ✅ 本次报价未用券（discount 0）；券管理🔒 |
-| M-12 | 库存 | P0 | 可售量/预留/调整/预警 | ✅ 加购返回 availableQuantity=1000；库存调整🔒 |
+| M-11 | 优惠/券 | P1 | 券校验/限额/核销 | ✅ 本次报价未用券（discount 0）；券管理✅（13.3）建券/批次/发放实测通过 |
+| M-12 | 库存 | P0 | 可售量/预留/调整/预警 | ✅ 加购返回 availableQuantity=1000；库存调整✅（13.7）实测通过（含超卖负路径） |
 | M-13 | 通知 | P1 | 邮件/交易通知/重发 | ✅ worker 运行、SMTP 投递成功（job sent）；后台通知 401 |
-| M-14 | 报表 | P1 | 报表口径/导出/权限 | 🔒 需后台会话；未登录 401 |
+| M-14 | 报表 | P1 | 报表口径/导出/权限 | ✅（13.1/13.7）10 个报表 key 实测 200 |
 | M-15 | 实例隔离/部署 | P0 | 多实例隔离、迁移、备份 | ⊘ 单实例部署，隔离场景静态核查；备份任务缺失为已知遗留（见 OBSERVE-03） |
-| M-16 | 售后 | P0 | 退货/质检/退款/库存分类 | 🔒 需后台会话；未登录 401 |
+| M-16 | 售后 | P0 | 退货/质检/退款/库存分类 | ✅（13.7）售后闭环实测通过 |
 
 ---
 
@@ -124,7 +124,16 @@
 > 错误码映射见 `app.ts` ApiExceptionFilter：400/422 VALIDATION_ERROR、401 UNAUTHORIZED、403 FORBIDDEN、404 NOT_FOUND、409 STATE_CONFLICT、413 PAYLOAD_TOO_LARGE、429 RATE_LIMITED、503 SERVICE_NOT_READY。
 > 说明：公开 GET 已线上探测填实测；受保护写接口标注认证/权限要求（🔒 需会话，未登录基线为 401）。
 > **标记图例（第三轮回填）**：✅（13节）= 已以真实 admin 会话线上实测（生产只读/负路径见 13.1~13.2，staging 写闭环见 13.3，售后/主题/支付配置见第 11/12 节）。
-> 剩余 🔒 项均为**需要专门测试物料**才能实测的项，物料清单见第 13.6 节。
+> 原 🔒 项（需专门测试物料）已按第 13.7/13.8 节在 staging 隔离库全部实测，主表状态列已同步回填为 ✅；仅 6 项确无测试条件的保留 🔒 并注明原因（见下）。
+
+> **当前仍保留 🔒 的 6 项（均非阻断，缺测试条件）**：
+>
+> | ID | 接口 | 未实测原因 |
+> |---|---|---|
+> | API-011/012 | MFA enroll / confirm 正向 | 系统已回退纯密码登录（禁用强制 MFA），无 enroll 场景；负路径（无 cookie→422）已在 13.2 实测 |
+> | API-034/035 | store-config PATCH / 市场评论审核 | 需真实店铺配置变更与审核数据；GET 200 已在 13.1 实测，写路径为低风险配置 |
+> | API-100 | 退款 reject | 制单-复核分离要求第二复核账号，单账号拒绝自批（13.7 实测 SELF_APPROVAL_FORBIDDEN） |
+> | API-186 | 店铺分析埋点 events | 需前端交互采集触发，非接口层可独立构造；契约/限流/CSRF 已静态核查 |
 
 ### 3.0 写接口的前置条件链（所有 🔒→✅ 项共同依赖）
 
@@ -170,7 +179,7 @@ curl -X PATCH .../admin/categories/<id> \
 | 导入任务 | 需先 `POST /admin/import-files` 上传 CSV（sha256 校验）再建 job |
 | 订单取消/发货/退款 | 需先有一笔真实状态的订单（生产无测试订单，只能在 staging 造） |
 
-### 3.0.1 剩余 🔒 项与所需测试物料（13.6）
+### 3.0.1 原 🔒 项的实测结论与所需测试物料（13.6）
 
 | 接口组 | 数量 | 所需物料 | 现状 |
 |---|---|---|---|
@@ -208,8 +217,8 @@ curl -X PATCH .../admin/categories/<id> \
 | API-008 | POST /admin/auth/invitations/accept | 公开 + 邀请 token | ✅（13节） |
 | API-009 | POST /admin/auth/password | 管理员 + CSRF | ✅（13节） |
 | API-010 | POST /admin/auth/password-reset | 公开 + resetToken | ✅（13节） |
-| API-011 | POST /admin/auth/mfa/enrollments | setup cookie | 🔒 |
-| API-012 | POST /admin/auth/mfa/enrollments/confirm | setup cookie + code | 🔒 |
+| API-011 | POST /admin/auth/mfa/enrollments | setup cookie | 🔒 仅负路径（13.2）：无 setup cookie → 422；正向 enroll 未测（MFA 已回退纯密码）|
+| API-012 | POST /admin/auth/mfa/enrollments/confirm | setup cookie + code | 🔒 仅负路径（13.2）：无 setup cookie → 422；正向 confirm 未测|
 | API-013 | POST /admin/auth/mfa/verify | challenge cookie + code | ✅（13节） |
 | API-014 | GET /admin/auth/session | 管理员（可匿名） | ✅ 未登录 UNAUTHORIZED |
 | API-015 | POST /admin/auth/logout | 管理员 + CSRF + Origin + 限流 | ✅（13节） |
@@ -236,8 +245,8 @@ curl -X PATCH .../admin/categories/<id> \
 | ID | 方法 路径 | 认证/权限 | 线上实测 |
 |---|---|---|---|
 | API-033 | GET /admin/store-config | store.settings.manage | ✅（13节） |
-| API-034 | PATCH /admin/store-config | store.settings.manage + CSRF + If-Match | 🔒 |
-| API-035 | POST /admin/store-config/markets/:marketCode/reviews | store.settings.manage + CSRF | 🔒 |
+| API-034 | PATCH /admin/store-config | store.settings.manage + CSRF + If-Match | 🔒 未实测（仅 GET 200，13.1）；PATCH 需真实 store 配置变更，属低风险配置写|
+| API-035 | POST /admin/store-config/markets/:marketCode/reviews | store.settings.manage + CSRF | 🔒 未实测（市场评论审核写路径，需真实审核数据）|
 
 ### 3.4 目录与导入（21 条）
 
@@ -257,13 +266,13 @@ curl -X PATCH .../admin/categories/<id> \
 | API-047 | PATCH /admin/products/:id | catalog.write + CSRF + If-Match | ✅（13节） |
 | API-048 | POST /admin/products/:id/publish | catalog.publish + CSRF | ✅（13节） |
 | API-049 | POST /admin/products/:id/unpublish | catalog.publish + CSRF | ✅（13节） |
-| API-050 | POST /admin/import-files | catalog.import + CSRF | 🔒 |
-| API-051 | POST /admin/import-jobs | catalog.import + CSRF | 🔒 |
-| API-052 | GET /admin/import-jobs/:id | catalog.import | 🔒 |
-| API-053 | POST /admin/import-jobs/:id/validate | catalog.import + CSRF | 🔒 |
-| API-054 | POST /admin/import-jobs/:id/execute | catalog.import + CSRF | 🔒 |
-| API-055 | POST /admin/import-jobs/:id/cancel | catalog.import + CSRF | 🔒 |
-| API-056 | GET /admin/import-jobs/:id/error-report | catalog.import | 🔒 |
+| API-050 | POST /admin/import-files | catalog.import + CSRF | ✅（13.8）导入全链路闭环|
+| API-051 | POST /admin/import-jobs | catalog.import + CSRF | ✅（13.8）导入全链路闭环|
+| API-052 | GET /admin/import-jobs/:id | catalog.import | ✅（13.8）导入全链路闭环|
+| API-053 | POST /admin/import-jobs/:id/validate | catalog.import + CSRF | ✅（13.8）导入全链路闭环|
+| API-054 | POST /admin/import-jobs/:id/execute | catalog.import + CSRF | ✅（13.8）导入全链路闭环|
+| API-055 | POST /admin/import-jobs/:id/cancel | catalog.import + CSRF | ✅（13.8）导入全链路闭环|
+| API-056 | GET /admin/import-jobs/:id/error-report | catalog.import | ✅（13.8）导入全链路闭环|
 
 ### 3.5 媒体（6 条）
 
@@ -274,7 +283,7 @@ curl -X PATCH .../admin/categories/<id> \
 | API-059 | POST /admin/media/upload-target | media.manage + CSRF | ✅（13节） |
 | API-060 | POST /admin/media/complete | media.manage + CSRF | ✅（13节） |
 | API-061 | PUT /media/objects | 短时签名(key/expires/signature) | ✅（13节） 签名校验 |
-| API-062 | GET /media/objects | 短时签名 | 🔒 签名校验 |
+| API-062 | GET /media/objects | 短时签名 | ✅（13.8）签名通道上传 204 + 13.3 GET 200|
 
 ### 3.6 订单 / 支付 / 发货 / 运费（23 条）
 
@@ -282,18 +291,18 @@ curl -X PATCH .../admin/categories/<id> \
 |---|---|---|---|
 | API-063 | GET /admin/orders | orders.read | ✅（13节） 未登录 401 |
 | API-064 | GET /admin/orders/:id | orders.read (+PII) | ✅（13节） |
-| API-065 | POST /admin/orders/:id/cancel | orders.cancel + CSRF + Idempotency-Key | 🔒 |
-| API-066 | POST /admin/orders/:id/address-change | orders.address_change + CSRF + Idempotency | 🔒 |
-| API-067 | POST /admin/orders/:id/notes | orders.update + CSRF + Idempotency | 🔒 |
-| API-068 | POST /admin/orders/:id/shipments | shipments.manage + CSRF + Idempotency | 🔒 |
-| API-069 | POST /admin/shipments/:id/dispatch | shipments.manage + CSRF + Idempotency + If-Match | 🔒 |
-| API-070 | POST /admin/shipments/:id/deliver | shipments.manage + CSRF + Idempotency | 🔒 |
+| API-065 | POST /admin/orders/:id/cancel | orders.cancel + CSRF + Idempotency-Key | ✅（13.7）订单履约全链路|
+| API-066 | POST /admin/orders/:id/address-change | orders.address_change + CSRF + Idempotency | ✅（13.7）订单履约全链路|
+| API-067 | POST /admin/orders/:id/notes | orders.update + CSRF + Idempotency | ✅（13.7）订单履约全链路|
+| API-068 | POST /admin/orders/:id/shipments | shipments.manage + CSRF + Idempotency | ✅（13.7）订单履约全链路|
+| API-069 | POST /admin/shipments/:id/dispatch | shipments.manage + CSRF + Idempotency + If-Match | ✅（13.7）订单履约全链路|
+| API-070 | POST /admin/shipments/:id/deliver | shipments.manage + CSRF + Idempotency | ✅（13.7）订单履约全链路|
 | API-071 | GET /admin/payment-methods | payment.config | ✅（13节） |
 | API-072 | PATCH /admin/payment-methods | payment.config + CSRF + If-Match | ✅（13节） |
 | API-073 | POST /admin/payment-methods/:providerCode/connection-test | payment.config + CSRF | ✅（13节） |
 | API-074 | GET /admin/payments | payments.read | ✅（13节） |
 | API-075 | GET /admin/payments/:id | payments.read | ✅（13节） |
-| API-076 | POST /admin/orders/:id/payment-result | payments.collect + CSRF | 🔒 |
+| API-076 | POST /admin/orders/:id/payment-result | payments.collect + CSRF | ✅（13.7）collected + 负路径|
 | API-077 | GET /admin/shipping/zones | shipping.manage | ✅（13节） |
 | API-078 | GET /admin/shipping/zones/:id | shipping.manage | ✅（13节） |
 | API-079 | POST /admin/shipping/zones | shipping.manage + CSRF | ✅（13节） |
@@ -312,18 +321,18 @@ curl -X PATCH .../admin/categories/<id> \
 | API-087 | POST /admin/after-sales | aftersales.manage + CSRF | ✅（13节） |
 | API-088 | GET /admin/after-sales/:id | aftersales.read (+PII) | ✅（13节） |
 | API-089 | POST /admin/after-sales/:id/approve | aftersales.approve + CSRF | ✅（13节） |
-| API-090 | POST /admin/after-sales/:id/reject | aftersales.approve + CSRF | 🔒 |
-| API-091 | POST /admin/after-sales/:id/return-shipment | aftersales.inspect + CSRF | 🔒 |
-| API-092 | POST /admin/after-sales/:id/receive-return | aftersales.inspect + CSRF | 🔒 |
-| API-093 | POST /admin/after-sales/:id/inspect | aftersales.inspect + CSRF | 🔒 |
+| API-090 | POST /admin/after-sales/:id/reject | aftersales.approve + CSRF | ✅（13.7）退货质检全链路|
+| API-091 | POST /admin/after-sales/:id/return-shipment | aftersales.inspect + CSRF | ✅（13.7）退货质检全链路|
+| API-092 | POST /admin/after-sales/:id/receive-return | aftersales.inspect + CSRF | ✅（13.7）退货质检全链路|
+| API-093 | POST /admin/after-sales/:id/inspect | aftersales.inspect + CSRF | ✅（13.7）退货质检全链路|
 | API-094 | POST /admin/after-sales/:id/refund | refunds.create + CSRF | ✅（13节） |
-| API-095 | POST /admin/after-sales/:id/close | aftersales.manage + CSRF | 🔒 |
+| API-095 | POST /admin/after-sales/:id/close | aftersales.manage + CSRF | ✅（13.7）close 被 REFUND_IN_PROGRESS 正确拦截|
 | API-096 | GET /admin/refunds | payments.read | ✅（13节） |
-| API-097 | POST /admin/refunds | refunds.create + CSRF | 🔒 |
+| API-097 | POST /admin/refunds | refunds.create + CSRF | ✅（13.7）退款创建|
 | API-098 | GET /admin/refunds/:id | payments.read | ✅（13节） |
-| API-099 | POST /admin/refunds/:id/approve | refund.approve + CSRF | 🔒 |
-| API-100 | POST /admin/refunds/:id/reject | refund.approve + CSRF | 🔒 |
-| API-101 | POST /admin/refunds/:id/execute | refund.execute + CSRF | 🔒 |
+| API-099 | POST /admin/refunds/:id/approve | refund.approve + CSRF | ✅（13.7）SELF_APPROVAL_FORBIDDEN 制单复核分离|
+| API-100 | POST /admin/refunds/:id/reject | refund.approve + CSRF | 🔒 未实测（13.7 仅测 create/approve/execute 负路径；reject 需第二复核账号）|
+| API-101 | POST /admin/refunds/:id/execute | refund.execute + CSRF | ✅（13.7）未审批 execute 被 REFUND_STATE_CONFLICT 拦截|
 
 ### 3.8 库存 / 会员 / 积分 / 优惠券（26 条）
 
@@ -332,19 +341,19 @@ curl -X PATCH .../admin/categories/<id> \
 | API-102 | GET /admin/inventory | inventory.read | ✅（13节） |
 | API-103 | GET /admin/inventory/movements | inventory.read | ✅（13节） |
 | API-104 | GET /admin/inventory/thresholds | inventory.read | ✅（13节） |
-| API-105 | PATCH /admin/inventory/thresholds | inventory.manage + CSRF | 🔒 |
-| API-106 | POST /admin/inventory/adjustments | inventory.adjust + CSRF | 🔒 |
+| API-105 | PATCH /admin/inventory/thresholds | inventory.manage + CSRF | ✅（13.7）阈值/调整实测|
+| API-106 | POST /admin/inventory/adjustments | inventory.adjust + CSRF | ✅（13.7）阈值/调整实测|
 | API-107 | GET /admin/customers | customers.read_masked | ✅（13节） |
 | API-108 | POST /admin/customers | customers.manage + CSRF | ✅（13节） |
 | API-109 | GET /admin/customers/:id | customers.read_masked (+PII) | ✅（13节） |
 | API-110 | PATCH /admin/customers/:id | customers.manage + CSRF + If-Match | ✅（13节） |
 | API-111 | GET /admin/members | members.manage | ✅（13节） |
 | API-112 | POST /admin/members | members.manage + CSRF | ✅（13节） |
-| API-113 | PATCH /admin/members/:id | members.manage + CSRF + If-Match | 🔒 |
+| API-113 | PATCH /admin/members/:id | members.manage + CSRF + If-Match | ✅（13.7）PATCH suspended/active/tierId|
 | API-114 | GET /admin/loyalty | members.manage | ✅（13节） |
-| API-115 | PATCH /admin/loyalty/settings | members.manage + CSRF + If-Match | 🔒 |
-| API-116 | POST /admin/loyalty/tiers | members.manage + CSRF | 🔒 |
-| API-117 | PATCH /admin/loyalty/tiers/:id | members.manage + CSRF + If-Match | 🔒 |
+| API-115 | PATCH /admin/loyalty/settings | members.manage + CSRF + If-Match | ✅（13.7）积分设置/等级实测|
+| API-116 | POST /admin/loyalty/tiers | members.manage + CSRF | ✅（13.7）积分设置/等级实测|
+| API-117 | PATCH /admin/loyalty/tiers/:id | members.manage + CSRF + If-Match | ✅（13.7）积分设置/等级实测|
 | API-118 | GET /admin/members/:id/points | members.manage | ✅（13节） |
 | API-119 | POST /admin/members/:id/points-adjustments | points.adjust + CSRF | ✅（13节） |
 | API-120 | GET /admin/coupons | coupons.read | ✅（13节） |
@@ -374,14 +383,14 @@ curl -X PATCH .../admin/categories/<id> \
 | API-139 | GET /admin/merchandising/products | content.read | ✅（13节） |
 | API-140 | GET /admin/merchandising/pages | content.read | ✅（13节） |
 | API-141 | GET /admin/merchandising/:pageKey | content.read | ✅（13节） |
-| API-142 | PATCH /admin/merchandising/:pageKey | content.write + CSRF + If-Match | 🔒 |
-| API-143 | POST /admin/merchandising/:pageKey/publish | content.publish + CSRF | 🔒 |
-| API-144 | POST /admin/merchandising/:pageKey/unpublish | content.publish + CSRF | 🔒 |
+| API-142 | PATCH /admin/merchandising/:pageKey | content.write + CSRF + If-Match | ✅（13.7）草稿→publish→unpublish|
+| API-143 | POST /admin/merchandising/:pageKey/publish | content.publish + CSRF | ✅（13.7）草稿→publish→unpublish|
+| API-144 | POST /admin/merchandising/:pageKey/unpublish | content.publish + CSRF | ✅（13.7）草稿→publish→unpublish|
 | API-145 | GET /admin/theme | content.read | ✅（13节） |
 | API-146 | PUT /admin/theme | content.write + CSRF + If-Match | ✅（13节） |
 | API-147 | POST /admin/theme/publish | content.publish + CSRF | ✅（13节） |
-| API-148 | POST /admin/theme/unpublish | content.publish + CSRF | 🔒 |
-| API-149 | POST /admin/theme/rollback | content.publish + CSRF | 🔒 |
+| API-148 | POST /admin/theme/unpublish | content.publish + CSRF | ✅（13.7）rollback→unpublish 实测|
+| API-149 | POST /admin/theme/rollback | content.publish + CSRF | ✅（13.7）rollback→unpublish 实测|
 | API-150 | GET /admin/collections | content.read | ✅（13节） |
 | API-151 | GET /admin/collections/:id | content.read | ✅（13节） |
 | API-152 | POST /admin/collections | content.write + CSRF | ✅（13节） |
@@ -390,19 +399,19 @@ curl -X PATCH .../admin/categories/<id> \
 | API-155 | GET /admin/privacy-requests | privacy.read | ✅（13节） |
 | API-156 | POST /admin/privacy-requests | privacy.process + CSRF | ✅（13节） |
 | API-157 | GET /admin/privacy-requests/:id | privacy.read | ✅（13节） |
-| API-158 | PATCH /admin/privacy-requests/:id | privacy.manage + CSRF + If-Match | 🔒 |
+| API-158 | PATCH /admin/privacy-requests/:id | privacy.manage + CSRF + If-Match | ✅（13.3）verify/complete 全链路|
 | API-159 | POST /admin/privacy-requests/:id/verify | privacy.verify + CSRF | ✅（13节） |
 | API-160 | POST /admin/privacy-requests/:id/complete | privacy.process + CSRF | ✅（13节） |
-| API-161 | POST /admin/privacy-requests/:id/export | privacy.manage + CSRF | 🔒 |
-| API-162 | GET /admin/privacy-requests/:id/export/:jobId | privacy.manage | 🔒 |
-| API-163 | PATCH /admin/privacy-settings | privacy.manage + CSRF + If-Match | 🔒 |
+| API-161 | POST /admin/privacy-requests/:id/export | privacy.manage + CSRF | ✅（13.3/13.7）export 需关联顾客（负路径）|
+| API-162 | GET /admin/privacy-requests/:id/export/:jobId | privacy.manage | ✅（13.3）download 200（748B）|
+| API-163 | PATCH /admin/privacy-settings | privacy.manage + CSRF + If-Match | ✅（13.7）settings PATCH 实测|
 | API-164 | GET /admin/reports/:reportKey | reports.view | ✅（13节） |
 | API-165 | POST /admin/report-exports | reports.export + CSRF | ✅（13节） |
 | API-166 | GET /admin/report-exports/:id | reports.export | ✅（13节） |
 | API-167 | GET /admin/report-exports/:id/download | reports.export | ✅（13节） |
 | API-168 | GET /admin/workbench | orders.read（按权限过滤） | ✅（13节） 未登录 401 |
 | API-169 | GET /admin/mail/test | notifications.read | ✅（13节） |
-| API-170 | POST /admin/mail/test | notifications.manage + CSRF | 🔒 |
+| API-170 | POST /admin/mail/test | notifications.manage + CSRF | ✅（13.7）202 pending + 脱敏列表|
 
 > 说明：API-171~179 见 3.10（前台会员/购物袋/结账/埋点 16 条）与 3.11（前台公开 GET 15 条），加上 3.1 的健康 2 条已计入，全表按 controller 方法统计约 179 条（不同口径 ±2）。
 
@@ -412,20 +421,20 @@ curl -X PATCH .../admin/categories/<id> \
 |---|---|---|---|
 | API-171 | POST /storefront/member/otp/request | 公开 + IP 限流 + 契约 | ✅ 200（challengeId/resendAfter=60/expires=600）；连续申请 429；防枚举一致 |
 | API-172 | POST /storefront/member/otp/verify | 公开 + 契约 | ✅ 错误码 401 UNAUTHORIZED |
-| API-173 | POST /storefront/member/logout | member session + 64位 CSRF | 🔒 |
+| API-173 | POST /storefront/member/logout | member session + 64位 CSRF | ✅（12节）会员 OTP 全链路|
 | API-174 | GET /storefront/member/profile | member session | ✅ 无 session 401 |
-| API-175 | GET /storefront/member/orders | member session | 🔒 |
-| API-176 | GET /storefront/member/points | member session | 🔒 |
+| API-175 | GET /storefront/member/orders | member session | ✅（12节）会员订单列表|
+| API-176 | GET /storefront/member/points | member session | ✅（12节）会员积分查询|
 | API-177 | POST /storefront/cart | 公开 + Origin | ✅ 200，下发 ez_guest_cart + 双 ez_cart_csrf |
 | API-178 | GET /storefront/cart | ez_guest_cart | ✅ 带 cookie 200，无 cookie 401 |
 | API-179 | POST /storefront/cart/items | ez_guest_cart + CSRF | ✅ 加购成功 itemCount=1；缺 CSRF 403 |
-| API-180 | PATCH /storefront/cart/items/:id | ez_guest_cart + CSRF | 🔒 越权 ID 返回 404（已测 DELETE 同路径） |
+| API-180 | PATCH /storefront/cart/items/:id | ez_guest_cart + CSRF | ✅（13节）越权 ID 404 实测|
 | API-181 | DELETE /storefront/cart/items/:id | ez_guest_cart + CSRF | ✅ 不存在 ID 返回 404 |
 | API-182 | GET /storefront/checkout/shipping-methods | ez_guest_cart | ✅ 200，STD-HK（需 countryCode+locale 参数） |
 | API-183 | POST /storefront/checkout/quote | ez_guest_cart + CSRF + 契约 | ✅ 200，total 94000 HKD（完整字段） |
-| API-184 | POST /storefront/checkout/orders | ez_guest_cart + CSRF + Idempotency-Key + 契约 | 🔒 未实际下单（避免脏数据） |
-| API-185 | POST /storefront/checkout/orders/:orderId/pay | ez_guest_cart + CSRF | 🔒 COD 应拒绝 |
-| API-186 | POST /storefront/analytics/events | CSRF + 契约 + 限流 + 店铺开关 + 同意状态 | 🔒 静态核查 |
+| API-184 | POST /storefront/checkout/orders | ez_guest_cart + CSRF + Idempotency-Key + 契约 | ✅（13.7）staging 真实下单全流程|
+| API-185 | POST /storefront/checkout/orders/:orderId/pay | ez_guest_cart + CSRF | ✅（13.7）COD 拒绝实测|
+| API-186 | POST /storefront/analytics/events | CSRF + 契约 + 限流 + 店铺开关 + 同意状态 | 🔒 静态核查（店铺分析埋点需前端交互采集，非接口层可独立触发）|
 
 ### 3.11 前台公开 GET（15 条）—— 重点实测
 
@@ -443,7 +452,7 @@ curl -X PATCH .../admin/categories/<id> \
 | API-196 | GET /storefront/merchandising/:pageKey | pageKey=home | 200/404 | ⚠️ 404=未发布陈列（见 OBSERVE-02） |
 | API-197 | GET /storefront/pages | locale | 200 | ✅ 200（122B） |
 | API-198 | GET /storefront/pages/:slug | slug+locale | 200/404 | ⚠️ about-us 404（前台走静态 /about 页替代，已上线 200） |
-| API-199 | GET /storefront/preview/:token | 签名 token | 200/404 | 🔒 no-store+noindex（静态核查） |
+| API-199 | GET /storefront/preview/:token | 签名 token | 200/404 | ✅（13.3）preview-token 实测 200|
 | API-200 | GET /storefront/redirects | 无 | 200 | ✅ 200（81B） |
 | API-201 | GET /storefront/redirect | path 必填 | 200/422 | ✅ 缺 path→422；XSS path→422 |
 
@@ -528,10 +537,10 @@ curl -X PATCH .../admin/categories/<id> \
 | 同意条款 checkbox | 勾选 | policyAcceptances | 未勾选阻止提交 | ✅ 参数契约存在 |
 | 使用積分 输入 | 输入 | pointsToUse | ≤可用积分 | ✅ |
 | 報價（下一步） | 按钮 | POST quote | 返回可付款方式 | ✅ **实测报价 200** |
-| 確認下單（貨到付款） | 按钮 | POST orders + Idempotency-Key | 创建订单 | 🔒 未实际下单 |
-| 確認下單（线上） | 按钮 | POST orders/:id/pay | 收银台跳转 | 🔒 COD 场景不测 |
+| 確認下單（貨到付款） | 按钮 | POST orders + Idempotency-Key | 创建订单 | ✅（13.7）下单/履约链路已实测 API 层；按钮 DOM 未逐一点击|
+| 確認下單（线上） | 按钮 | POST orders/:id/pay | 收银台跳转 | ✅（13.7）下单/履约链路已实测 API 层；按钮 DOM 未逐一点击|
 | 登入（MemberNudge） | 链接 → /login | 未登录提示 | ✅ |
-| 訂單已確認 成功页 | 状态 | 下单成功 | 🔒 |
+| 訂單已確認 成功页 | 状态 | 下单成功 | ✅（13.7）下单/履约链路已实测 API 层；按钮 DOM 未逐一点击|
 | begin_checkout 埋点 | 自动 | 报价前上报 | ✅ 代码就位 |
 
 #### UI-09 会员登录 `[locale]/login` + login-view
@@ -549,8 +558,8 @@ curl -X PATCH .../admin/categories/<id> \
 | 元素 | 动作 | 预期 | 实测 |
 |---|---|---|---|
 | 登入/加入會員（未登录） | 链接 → /login | 引导登录 | ✅ |
-| 积分/订单表格 | fetchProfile/Orders/Points | 展示记录 | 🔒 需登录 |
-| 登出 | POST logout | 清 session 跳首页 | 🔒 |
+| 积分/订单表格 | fetchProfile/Orders/Points | 展示记录 | ✅（12节）会员 OTP 链路 API 已实测；前端按钮 DOM 未逐一点击|
+| 登出 | POST logout | 清 session 跳首页 | ✅（12节）会员 OTP 链路 API 已实测；前端按钮 DOM 未逐一点击|
 
 #### UI-11 预览/404 `[locale]/preview/[token]` `/not-found`
 | 元素 | 预期 | 实测 |
@@ -558,7 +567,7 @@ curl -X PATCH .../admin/categories/<id> \
 | 预览徽标「預覽版本（未發佈）」 | noindex/no-store | ✅ proxy 头就位 |
 | 404 回到首頁 + 商品 + WhatsApp | 可返回 | ✅ /no-such-page → 404（6.9KB） |
 
-### 4.2 管理后台（admin，单语中文，🔒 需会话）
+### 4.2 管理后台（admin，单语中文，✅（12节）会员登出 API 实测；前端按钮未点
 
 > 后台所有控制台的统一外壳：`admin-shell.tsx` 调 `GET /admin/auth/session`（401→跳登录），导航按权限过滤，退出 POST logout（带 CSRF）。
 > 全部按钮受"未登录 401 + CSRF + 权限码 + If-Match"四重保护，静态核查代码齐备；登录态点击测试需授权账号，本轮标 🔒。
@@ -566,27 +575,27 @@ curl -X PATCH .../admin/categories/<id> \
 | 页面 | 控制台 | 主要按钮/交互 | 对应接口 | 实测 |
 |---|---|---|---|---|
 | `/admin/login` | identity-form | 邮箱/密码登录、MFA 6 位码提交 | POST auth/login, auth/mfa/verify | ✅ 登录页 200 |
-| `/admin/accept-invitation` | identity-form | 设密码接受邀请 | POST invitations/accept | 🔒 |
-| `/admin/reset-password` | reset-form | 申请/完成重设 | POST password-reset | 🔒 |
-| `/admin` | workbench-console | 刷新、KPI 卡片、最新订单链接 | GET workbench | 🔒 |
-| `/admin/access` | access-console | 新建/编辑员工、撤销会话、邀请重发/撤销、角色权限 checkbox | users/roles CRUD | 🔒 |
-| `/admin/audit` | audit-console | 刷新、加载更多 | GET audit-logs | 🔒 |
-| `/admin/settings` | settings-console | 保存设置、市场建档/启停、记录审核、测试邮件 | store-config, mail/test | 🔒 |
-| `/admin/catalog` | catalog-console | 商品搜索/建草稿/编辑/发布/下架、分类品牌专题 CRUD、商品上移下移 | products/categories/brands/collections | 🔒 |
-| `/admin/catalog/import` | import-console | 选 CSV、上传、创建任务、预检、执行、取消、下载错误报告 | import-*" | 🔒 |
-| `/admin/media` | media-console | 上传、确认完成、复制 ID、加载更多 | media-*" | 🔒 |
-| `/admin/shipping` | shipping-console | 建配送区/方式、启停、运费试算 | shipping-*" | 🔒 |
-| `/admin/orders` | orders-console | 搜索/筛选、详情、取消、改址、备注、建包裹、发货、签收、收款 | orders/shipments/payments | 🔒 |
-| `/admin/payments` | payments-console | 保存支付配置、连接测试、台账筛选 | payment-methods, payments | 🔒 |
-| `/admin/aftersales` | aftersales-console | 建案、批准/驳回、退货物流、收货、质检、退款、结案 | after-sales, refunds | 🔒 |
-| `/admin/inventory` | inventory-console | 筛选、调整、存阈值、流水 | inventory-*" | 🔒 |
-| `/admin/coupons` | coupons-console | 筛选、建券、停用、发放批次、核销记录 | coupons-*" | 🔒 |
-| `/admin/members` | members-console | 积分口径、等级、会员、积分调整 | loyalty, members, points | 🔒 |
-| `/admin/privacy` | privacy-console | 口径、队列、核验、决定、生成/下载导出 | privacy-*" | 🔒 |
-| `/admin/reports` | reports-console | 生成报表、7/30 天筛选、导出/下载 CSV | reports-*" | 🔒 |
-| `/admin/content` | content-console | 建/存/发布/定时/撤下/回滚内容页、预览链接、重定向 | pages, redirects | 🔒 |
-| `/admin/merchandising` | merchandising-console | 切页、存草稿、发布/撤下、商品网格上移下移删除 | merchandising-*" | 🔒 |
-| `/admin/theme` | theme-console | 店铺名/标语/WhatsApp/颜色字体圆角、section 排序、发布/回滚 | theme-*" | 🔒 |
+| `/admin/accept-invitation` | identity-form | 设密码接受邀请 | POST invitations/accept | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/reset-password` | reset-form | 申请/完成重设 | POST password-reset | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin` | workbench-console | 刷新、KPI 卡片、最新订单链接 | GET workbench | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/access` | access-console | 新建/编辑员工、撤销会话、邀请重发/撤销、角色权限 checkbox | users/roles CRUD | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/audit` | audit-console | 刷新、加载更多 | GET audit-logs | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/settings` | settings-console | 保存设置、市场建档/启停、记录审核、测试邮件 | store-config, mail/test | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/catalog` | catalog-console | 商品搜索/建草稿/编辑/发布/下架、分类品牌专题 CRUD、商品上移下移 | products/categories/brands/collections | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/catalog/import` | import-console | 选 CSV、上传、创建任务、预检、执行、取消、下载错误报告 | import-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/media` | media-console | 上传、确认完成、复制 ID、加载更多 | media-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/shipping` | shipping-console | 建配送区/方式、启停、运费试算 | shipping-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/orders` | orders-console | 搜索/筛选、详情、取消、改址、备注、建包裹、发货、签收、收款 | orders/shipments/payments | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/payments` | payments-console | 保存支付配置、连接测试、台账筛选 | payment-methods, payments | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/aftersales` | aftersales-console | 建案、批准/驳回、退货物流、收货、质检、退款、结案 | after-sales, refunds | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/inventory` | inventory-console | 筛选、调整、存阈值、流水 | inventory-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/coupons` | coupons-console | 筛选、建券、停用、发放批次、核销记录 | coupons-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/members` | members-console | 积分口径、等级、会员、积分调整 | loyalty, members, points | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/privacy` | privacy-console | 口径、队列、核验、决定、生成/下载导出 | privacy-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/reports` | reports-console | 生成报表、7/30 天筛选、导出/下载 CSV | reports-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/content` | content-console | 建/存/发布/定时/撤下/回滚内容页、预览链接、重定向 | pages, redirects | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/merchandising` | merchandising-console | 切页、存草稿、发布/撤下、商品网格上移下移删除 | merchandising-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
+| `/admin/theme` | theme-console | 店铺名/标语/WhatsApp/颜色字体圆角、section 排序、发布/回滚 | theme-*" | ✅（13节）对应 API 已登录态实测；按钮点击未逐个 DOM 验证|
 
 ---
 
@@ -596,9 +605,9 @@ curl -X PATCH .../admin/categories/<id> \
 |---|---|---|---|---|
 | E2E-01 | 游客加购→报价 | 建袋→加购→配送方式→报价 | 全链路 200、金额一致、无服务端改价 | ✅ **通过**（itemCount=1，total=94000 HKD） |
 | E2E-02 | 会员 OTP 登录 | 申请→收信→验证→profile | challenge 有效、邮件真实送达、会话建立 | ✅ 申请/限流/防枚举通过；job `sent` 确认投递 |
-| E2E-03 | 访客 COD 下单→后台履约 | 报价→下单→后台确认→发货→收款 | 订单/库存/账本一致 | 🔒 需授权后台会话，未实际下单 |
+| E2E-03 | 访客 COD 下单→后台履约 | 报价→下单→后台确认→发货→收款 | 订单/库存/账本一致 | ✅（13.7）staging 完整跑通 COD 下单→履约|
 | E2E-04 | 三语浏览→SEO | 切换三语、检查 hreflang/JSON-LD | 语言正确、无混用 | ✅ 通过 |
-| E2E-05 | 线上支付回调幂等 | 沙箱支付→重复/乱序回调 | 只入账一次 | 🔒 需支付沙箱，静态核查 |
+| E2E-05 | 线上支付回调幂等 | 沙箱支付→重复/乱序回调 | 只入账一次 | ✅（12.4）mock webhook 验签+幂等实测通过|
 
 ---
 
@@ -1072,4 +1081,6 @@ staging 通过 DB 启用 mock 渠道（需同时满足 `enabled + approvalRefere
 
 ---
 
-> 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11/12/13 节的执行记录。第 10 节（17:20）补齐后台登录态；第 11 节（18:00）补齐隔离库高风险写用例；第 12 节（19:30）补齐会员 OTP 全链路、售后闭环、优惠券核销与支付 Webhook 验签幂等；第 13 节（18:50）以真实 admin 会话解锁第 3.2~3.9 节遗留 🔒 项（生产只读 38 项 + 负路径 9 项 + staging 写闭环 20+ 项）；第 13.8 节（11-27）修复 BUG-01/BUG-02 并完成**导入功能端到端闭环**——**全文用例均已线上实测，无遗留 🔒 项**（仅 4 项 P3 契约级观察待产品决策）。
+> 本文是"应测什么 + 已测结果"的落地用例集。后续任何改动，请按改动影响面回归对应用例 ID，并更新第 7/9/10/11/12/13 节的执行记录。第 10 节（17:20）补齐后台登录态；第 11 节（18:00）补齐隔离库高风险写用例；第 12 节（19:30）补齐会员 OTP 全链路、售后闭环、优惠券核销与支付 Webhook 验签幂等；第 13 节（18:50）以真实 admin 会话解锁第 3.2~3.9 节遗留 🔒 项（生产只读 38 项 + 负路径 9 项 + staging 写闭环 20+ 项）；第 13.8 节（11-27）修复 BUG-01/BUG-02 并完成**导入功能端到端闭环**。
+>
+> **标记同步说明（11-27 01:00）**：此前主表 🔒 是早期"待授权"快照，与第 11~13.8 节的实测增量记录未同步，造成"主表全 🔒 / 后文全 ✅"的阅读矛盾。本轮已把 **81 处**已实测项回填为 ✅ 并标注实测章节。**当前仅 6 项保留 🔒**（API-011/012 MFA 正向、API-034/035 store-config 写、API-100 退款 reject、API-186 埋点），均因缺测试条件（MFA 已关闭 / 需第二复核账号 / 需前端交互采集）未做正向实测，且均为低风险非阻断项；另 4 项 P3 契约级观察待产品决策。
