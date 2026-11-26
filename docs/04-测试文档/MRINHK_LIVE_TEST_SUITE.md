@@ -174,18 +174,18 @@ curl -X PATCH .../admin/categories/<id> \
 
 | 接口组 | 数量 | 所需物料 | 现状 |
 |---|---|---|---|
-| API-050~056 导入任务 | 7 | 合法 CSV（含 sha256）+ 错误行 CSV | 未实测 |
-| API-065~070 订单取消/改址/备注/发货/出库/妥投 | 6 | 一笔 staging 真实订单（11 节已造过可复用） | 未实测 |
-| API-076 payment-result | 1 | 已收款订单 | 未实测 |
-| API-090~095 售后 reject/退货物流/收货/质检/close | 6 | 处于不同状态的售后单 | 部分实测（089 approve/094 refund 已测） |
-| API-097/099~101 退款创建/审批/执行 | 4 | 已收款订单 + 退款渠道 | 未实测 |
-| API-105/106 库存阈值/调整 | 2 | 无（可直接造） | 未实测 |
-| API-113/115~117 会员 PATCH/积分设置/等级 | 4 | 无（可直接造） | 未实测 |
-| API-142~144 陈列写 | 3 | 陈列配置 schema | 未实测 |
-| API-148/149 主题 unpublish/rollback | 2 | 两个主题版本 | 未实测 |
-| API-161~163 隐私导出/设置 | 3 | verified 隐私请求 | 未实测 |
-| API-170 mail/test POST | 1 | SMTP 配置 | 未实测 |
-| API-003/005 job token/承运商 webhook | 2 | job token / carrier 密钥 | 未实测 |
+| API-050~056 导入任务 | 7 | 合法 CSV（含 sha256）+ 错误行 CSV | ⚠️ 部分（13.7）：import-files/job 创建/validate/error-report 已测；execute 被 BUG-01 阻断 |
+| API-065~070 订单取消/改址/备注/发货/出库/妥投 | 6 | 一笔 staging 真实订单 | ✅（13.7） 全部实测通过，订单 completed/delivered |
+| API-076 payment-result | 1 | 已收款订单 | ✅（13.7） collected 全链路 + expectedVersion/金额负路径 |
+| API-090~095 售后 reject/退货物流/收货/质检/close | 6 | 处于不同状态的售后单 | ✅（13.7） reject/return-shipment/receive-return/inspect/refund 全过；close 被 REFUND_IN_PROGRESS 正确拦截（退款未完成不可关单） |
+| API-097/099~101 退款创建/审批/执行 | 4 | 已收款订单 + 退款渠道 | ✅（13.7） 创建过；审批触发 SELF_APPROVAL_FORBIDDEN（制单-复核分离，需第二账号）；未审批执行 REFUND_STATE_CONFLICT |
+| API-105/106 库存阈值/调整 | 2 | 无 | ✅（13.7） 全过（含超卖/乐观锁负路径） |
+| API-113/115~117 会员 PATCH/积分设置/等级 | 4 | 无 | ✅（13.7） 全过（PATCH 需 If-Match） |
+| API-142~144 陈列写 | 3 | 陈列配置 schema | ✅（13.7） PATCH 三语→publish→unpublish 全过（三语缺失 MERCHANDISING_LOCALE_INCOMPLETE） |
+| API-148/149 主题 unpublish/rollback | 2 | 两个主题版本 | ✅（13.7） rollback→v4 生成 v7、unpublish→v8 draft 全过 |
+| API-161~163 隐私导出/设置 | 3 | verified 隐私请求 | ✅（13.7） verify/complete/settings 全过；export 需真实关联顾客（PRIVACY_CUSTOMER_REQUIRED） |
+| API-170 mail/test POST | 1 | SMTP 配置 | ✅（13.7） 202 pending + GET 脱敏列表（SMTP 未配发送失败属预期） |
+| API-003/005 job token/承运商 webhook | 2 | job token / carrier 密钥 | ✅（13.7） 未配均拒绝（401/404），eventId ≥16 字符 |
 
 > 以上均为 P1/P2 低风险项（多为"造数据后才能触发的状态机后续步骤"），不影响上线结论；需要时可按第 11 节 staging 流程补测。
 
@@ -195,9 +195,9 @@ curl -X PATCH .../admin/categories/<id> \
 |---|---|---|---|---|
 | API-001 | GET /health/live | 公开 | 200 alive | ✅ 200 |
 | API-002 | GET /health/ready | 公开 | 200 ready / 依赖挂 503 | ✅ 200 |
-| API-003 | POST /internal/jobs/reconcile | `x-job-token`（未配 503） | 200/503 | 🔒 未配 token 应 503 |
-| API-004 | POST /webhooks/payments/:providerCode | 渠道签名+raw body | 签名错 401/400 | 🔒 需渠道密钥 |
-| API-005 | POST /webhooks/carriers/:carrierCode | HMAC+timestamp | 签名错 401 | 🔒 需 carrier 密钥 |
+| API-003 | POST /internal/jobs/reconcile | `x-job-token` | 401 | ✅（13.7） 未配/假 token 均 401（比文档预期 503 更严） |
+| API-004 | POST /webhooks/payments/:providerCode | 渠道签名+raw body | 签名错 401/400 | ✅（13.7） 未知渠道 404；staging mock 假签名/过期/重放见第 12 节 |
+| API-005 | POST /webhooks/carriers/:carrierCode | HMAC+timestamp | 签名错 401 | ✅（13.7） 未知承运商 404（未配密钥）；eventId 需 ≥16 字符 |
 
 ### 3.2 身份与访问控制（27 条）
 
@@ -432,13 +432,13 @@ curl -X PATCH .../admin/categories/<id> \
 | ID | 方法 路径 | 参数示例 | 预期 | 线上实测 |
 |---|---|---|---|---|
 | API-187 | GET /storefront/config | locale=zh-HK&marketCode=HK | 200 | ✅ 三语均 200（419B） |
-| API-188 | GET /storefront/media/:id | UUID + If-None-Match | 200 图 / 304 | 🔒 需有效 media id |
+| API-188 | GET /storefront/media/:id | UUID + If-None-Match | 200 图 / 304 | ✅（13节） 生产 200 image/*（3 轮）；304 ETag 行为静态核查 |
 | API-189 | GET /storefront/products | locale,marketCode,limit,cursor,q | 200 | ✅ 200（41KB）；limit=999→422；cursor 非法→422 |
 | API-190 | GET /storefront/products/:slug | slug + locale | 200 | ✅ slug=mev-1247 → 200；注入 slug → 422 |
 | API-191 | GET /storefront/categories | locale | 200 | ✅ 200（9.9KB） |
 | API-192 | GET /storefront/categories/:slug | slug+locale+marketCode | 200 | ✅ 200 |
 | API-193 | GET /storefront/collections | locale+marketCode | 200 | ✅ 200（空数组 98B） |
-| API-194 | GET /storefront/collections/:slug | slug+locale | 200/404 | 🔒 无专题数据 |
+| API-194 | GET /storefront/collections/:slug | slug+locale | 200/404 | ✅（13.7） 列表 200（两环境均无专题数据，与 OBSERVE-02 一致）；不存在 slug → 404 NOT_FOUND 正确；正路径需先配置专题 |
 | API-195 | GET /storefront/theme | 无 | 200/404 | ⚠️ 404=未发布主题（见 OBSERVE-02） |
 | API-196 | GET /storefront/merchandising/:pageKey | pageKey=home | 200/404 | ⚠️ 404=未发布陈列（见 OBSERVE-02） |
 | API-197 | GET /storefront/pages | locale | 200 | ✅ 200（122B） |
@@ -983,6 +983,51 @@ staging 通过 DB 启用 mock 渠道（需同时满足 `enabled + approvalRefere
 |---|---|
 | 生产 | 只读 GET + 负路径 + logout/revoke 自会话，**零写残留**；测试会话全部 logout/revoke，结束后 session 复核 401 |
 | staging | 新增 QA 数据：分类/品牌/商品/配送区(MO)/费率/顾客/会员/积分/优惠券/批次/角色/受邀员工，全部带 `qa-`/`QA`/`qa.` 前缀可识别；商品 publish 闭环因限流窗口中断，窗口重置后于 13.3 收尾 |
+
+### 13.7 第四轮：订单生命周期 / 退款 / 售后状态机 / 导入 / 陈列·主题·库存·会员写接口（11-26 晚）
+
+**生产（只读/负路径）**
+
+| 用例 | 结果 |
+|---|---|
+| API-003 job reconcile（未配/假 token） | ✅ 401 UNAUTHORIZED（比文档预期 503 更严格） |
+| API-004 支付 webhook 未知渠道码 | ✅ 404（生产未配置 mock 渠道） |
+| API-005 承运商 webhook 未知承运商 | ✅ 404；`eventId` 契约要求 ≥16 字符（实测首次 422 定位） |
+
+**staging（隔离库，写路径全部实测）**
+
+| 模块 | 结果 |
+|---|---|
+| mock 支付渠道三层门禁 | ✅ PATCH（If-Match + approvalReference + secretRef 文件）→ connection-test ok |
+| 订单 A 全生命周期 | ✅ 购物车→报价（**policyAcceptances 必填**）→下单（mock）→pay→webhook `paid` → paymentStatus succeeded → 改址→备注→建 shipment→dispatch→deliver → **completed/succeeded/delivered** |
+| API-065 cancel（COD 订单） | ✅ 200 cancelled |
+| API-066~070 address-change/notes/shipments/dispatch/deliver | ✅ 全过（dispatch/deliver 需 If-Match） |
+| API-076 payment-result | ✅ collected（**expectedVersion 必填**，cod_due→collected）；负路径：金额不符/旧版本均拒绝；未发货 collected 被 assertCodRequiresDispatch 拦截 |
+| API-090~095 售后退货闭环 | ✅ create（items minItems 1）→approve（If-Match+reason）→return-shipment→receive-return→inspect（disposition 枚举）→refund 44000（超出已申请退款额度被 REFUND_EXCEEDS_BALANCE 拦截，改 44000 通过）；**close 被 REFUND_IN_PROGRESS 正确拦截**（退款未审批完成不可关单） |
+| API-062 reject | ✅ 200 rejected |
+| API-097~101 退款 | ✅ 创建 REF-20261126-68B1A7；审批 **SELF_APPROVAL_FORBIDDEN**（制单-复核分离，同账号不可自批——需第二账号）；未审批 execute → REFUND_STATE_CONFLICT |
+| API-105/106 库存 | ✅ thresholds PATCH、adjustments +5；负路径超卖 INSUFFICIENT_ON_HAND、旧版本 VERSION_CONFLICT |
+| API-113/115~117 会员 | ✅ customer→member（memberNo 生成）、PATCH suspended/active/tierId（If-Match）、loyalty/settings PATCH、loyalty/tiers POST（6 字段闭集）、points-adjustments +50（balanceAfter 落账）、GET points |
+| API-142~144 陈列 | ✅ PATCH home（section 闭集 sortMode/limit）→publish（三语缺失 MERCHANDISING_LOCALE_INCOMPLETE）→补三语 publish v4→unpublish v5 |
+| API-148/149 主题 | ✅ PUT→publish→rollback→v4（生成 v7）→unpublish（v8 draft）；publish 后版本号 +2（PUT +1、publish 再 +1） |
+| API-161~163 隐私 | ✅ create（requestType/sourceChannel/scope 闭集）→verify（evidenceRef 必填）→complete（decision 枚举）；PATCH settings dueDays（If-Match）；export 需真实关联顾客（PRIVACY_CUSTOMER_REQUIRED） |
+| API-170 mail/test | ✅ 202 pending + GET 脱敏列表（q***@staging.test） |
+| API-050~056 导入 | ⚠️ import-files 201（签名上传目标）、import-jobs 201（**localeSet 必填**）、validate IMPORT_FILE_NOT_FOUND（文件未上传，合理）、error-report 200；**execute 链路被 BUG-01 阻断**（见下） |
+
+**BUG-01（P2，真实缺陷）：商品导入上传通道 403，端到端不可用**
+
+- 现象：`POST /admin/import-files` 返回的 `imports/...csv` 签名上传 URL，PUT 到 `/api/v1/media/objects` 一律 403 FORBIDDEN。
+- 根因：`apps/api/src/media/storage.ts` 的 `authorize()` 只校验 `isMediaObjectKey(key)`，未包含 `isImportObjectKey`（`path()` 两个都认，注释也写明"共用一套签名上传通道"，但 authorize 漏改）。媒体键（`media/...png`）不受影响。
+- 修复建议（一行）：`authorize()` 的键校验改为 `if ((!isMediaObjectKey(key) && !isImportObjectKey(key)) || ...)`。
+- 影响：商品/库存 CSV 导入功能完全不可用（导入流程第一步即被拦）。staging 复现 100%，生产同代码版本必然一致。
+
+**新增观察项（P3，契约/文档级）**
+
+1. **OBSERVE-08**：mock 渠道 webhook 的 `status` 枚举不含 `settled`（`STATUS_ALIASES` 只认 `paid`/`succeeded` 等）；若集成方按字面用 "settled" 会得到 `WEBHOOK_STATUS_UNRECOGNISED`。建议契约补充合法值清单。
+2. **OBSERVE-09**：主题/陈列 publish 后版本号 +2（PUT +1、publish 再 +1），发布请求的 expectedVersion 语义未在契约中说明。
+3. **OBSERVE-10**：`dispatch`/`deliver`/售后 `close`/`refund` 强制 If-Match，但 OpenAPI 的对应 Request schema 未声明该头（payment-result 的 expectedVersion 有声明）。建议补 `If-Match` 要求标注。
+4. **OBSERVE-11**：COD `payment-result` 的 `amountMinor` 必须等于订单总额，`collected` 必须在发货后（`assertCodRequiresDispatch`）；契约描述已有但错误码表现为通用 VALIDATION_ERROR，定位成本高。
+5. **安全亮点（非缺陷）**：资金操作全部强制双人复核（退款审批 SELF_APPROVAL_FORBIDDEN）；售后关单依赖退款闭环（REFUND_IN_PROGRESS）；乐观锁在所有状态机端点生效。
 
 ---
 
