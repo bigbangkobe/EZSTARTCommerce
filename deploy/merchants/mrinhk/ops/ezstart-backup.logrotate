@@ -1,0 +1,12 @@
+# /etc/logrotate.d/ezstart-backup
+# 备份日志按月轮转，保留 6 个月，压缩归档；权限保持 ec2-user 可读
+/opt/ezstart-backups/backup.log {
+    monthly
+    rotate 6
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 ec2-user ec2-user
+}

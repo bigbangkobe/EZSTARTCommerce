@@ -50,7 +50,7 @@
 - **回滚**：服务器保留回滚镜像 `ezstart-mrinhk-api:rollback-20261127`，异常时可秒级回退。
 - **上线前测试**：所有高风险变更先在 `/opt/ezstart-staging` 隔离环境验证（详见《STAGING_ISOLATED_TESTING.md》），通过后再发布生产。
 - **管理员账号找回**：若忘记密码或 MFA 丢失，按《ADMIN_RECOVERY_RUNBOOK.md》流程处理（需服务器 SSH 权限）。
-- **备份（已验证可用）**：`ezstart-backup.timer` 每日 03:14 UTC 自动执行——pg_dump 全库 + 媒体指纹增量快照，自动保留 14 份数据库/4 份媒体；已实测恢复到临时库验证数据一致（Product 268/268、MediaAsset 543/543）。**待补**：异机副本（当前 EC2 无 AWS 凭证，仅本机存储；建议绑定 S3 IAM 角色后配置 `BACKUP_BUCKET`，脚本已内置上传逻辑）。
+- **备份（已验证可用）**：`ezstart-backup.timer` 每日 03:14 UTC 自动执行——pg_dump 全库 + 媒体指纹增量快照，自动保留 14 份数据库/4 份媒体；已实测恢复到临时库验证数据一致（Product 268/268、MediaAsset 543/543）。**待补**：异机副本（当前 EC2 无 AWS 凭证，仅本机存储；建议绑定 S3 IAM 角色后配置 `BACKUP_BUCKET`，脚本已内置上传逻辑）。**资源加固（11-27）**：service 已加 `TimeoutStartSec=10min` + `MemoryMax=1G`（防卡死/防内存失控），backup.log 已配 logrotate 按月轮转保留 6 份；配置模板见 `deploy/merchants/mrinhk/ops/`，手动触发实测 Result=success。
 
 ## 5. 交付包含的文档
 

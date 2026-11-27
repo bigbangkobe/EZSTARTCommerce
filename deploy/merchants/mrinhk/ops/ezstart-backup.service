@@ -1,0 +1,14 @@
+[Unit]
+Description=EZSTART mrinhk daily database + media backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=ec2-user
+EnvironmentFile=-/etc/ezstart-backup.env
+ExecStart=/opt/ezstart-mrinhk/scripts/backup-instance.sh
+# 加固：单次备份最长 10 分钟，超时自动终止，防止 pg_dump/tar 异常卡死无限占用资源
+TimeoutStartSec=10min
+# 加固：内存硬上限 1G，异常时由 cgroup 拦截，避免拖垮整机（正常峰值仅几 MB）
+MemoryMax=1G
